@@ -20,20 +20,28 @@ import javax.net.ssl.X509TrustManager;
  * ATM Host Connection
  *
  * Manages TCP/TLS socket connections to ATM processors.
- * Handles the Hyosung STD1 protocol handshake (request → response → ACK → EOT).
+ * Supports both Triton Standard (ENQ/ACK → Request → Response → ACK → EOT)
+ * and Hyosung STD1 (Request → Response → ACK → EOT) handshake protocols.
+ *
+ * Protocol selection is determined by ProcessorConfig.getProtocolType().
  */
 public class AtmHostConnection {
 
     private static final String TAG = "AtmHostConnection";
 
     private final ProcessorConfig config;
+    private final AtmProtocol protocol;
     private final HyosungMessageBuilder builder;
     private final HyosungMessageParser parser;
 
     private Socket socket;
-    private InputStream inputStream;
-    private OutputStream outputStream;
-    private boolean connected;
+    private volatile InputStream inputStream;
+    private volatile OutputStream outputStream;
+    private volatile boolean connected;
+
+    // Single-thread executor for socket close operations (W7 fix)
+    private final java.util.concurrent.ExecutorService socketCloseExecutor =
+            java.util.concurrent.Executors.newSingleThreadExecutor();
 
     // Connection listener for status updates
     private ConnectionListener listener;
@@ -45,6 +53,7 @@ public class AtmHostConnection {
      */
     public AtmHostConnection(ProcessorConfig config) {
         this.config = config;
+        this.protocol = config.createProtocol();
         this.builder = config.createMessageBuilder();
         this.parser = config.createMessageParser();
         this.connected = false;
@@ -179,16 +188,16 @@ public class AtmHostConnection {
         outputStream = null;
         connected = false;
 
-        // Close socket on background thread to avoid NetworkOnMainThreadException
-        // (TLS socket close involves network I/O for shutdown handshake)
+        // Close socket via executor to avoid NetworkOnMainThreadException
+        // Uses single-thread executor instead of spawning new threads (W7 fix)
         if (socketToClose != null) {
-            new Thread(() -> {
+            socketCloseExecutor.submit(() -> {
                 try {
                     socketToClose.close();
                 } catch (IOException e) {
                     // Ignore close errors
                 }
-            }, "SocketClose").start();
+            });
         }
 
         notifyDisconnected();
@@ -200,6 +209,20 @@ public class AtmHostConnection {
      */
     public boolean isConnected() {
         return connected && socket != null && socket.isConnected() && !socket.isClosed();
+    }
+
+    /**
+     * Returns the protocol implementation for this connection.
+     */
+    public AtmProtocol getProtocol() {
+        return protocol;
+    }
+
+    /**
+     * Returns the processor configuration.
+     */
+    public ProcessorConfig getConfig() {
+        return config;
     }
 
     // =========================================================================
@@ -374,7 +397,54 @@ public class AtmHostConnection {
     // =========================================================================
 
     /**
+     * Performs the Triton ENQ/ACK handshake before sending a request.
+     * Triton Standard requires: Terminal sends ENQ → Host responds ACK → Then send message.
+     *
+     * @throws ConnectionException if handshake fails
+     */
+    private void performEnqHandshake() throws ConnectionException {
+        if (protocol == null || !protocol.requiresEnqHandshake()) {
+            return; // Hyosung doesn't need ENQ
+        }
+
+        try {
+            // Capture local references (W6 fix — prevent race with disconnect)
+            OutputStream out = outputStream;
+            InputStream in = inputStream;
+            if (out == null || in == null) {
+                throw new ConnectionException("Connection not established - streams are null");
+            }
+
+            log("ENQ handshake: sending ENQ...");
+            out.write(protocol.buildEnq());
+            out.flush();
+
+            // Wait for ACK with timeout
+            int savedTimeout = socket.getSoTimeout();
+            socket.setSoTimeout(config.getAckTimeout());
+            try {
+                int response = in.read();
+                if (response == 0x06) { // ACK
+                    log("ENQ handshake: received ACK");
+                } else if (response == 0x15) { // NAK
+                    throw new ConnectionException("ENQ handshake: host sent NAK — busy or error");
+                } else if (response == -1) {
+                    throw new ConnectionException("ENQ handshake: connection closed by host");
+                } else {
+                    throw new ConnectionException("ENQ handshake: unexpected response 0x" +
+                            String.format("%02X", response));
+                }
+            } finally {
+                socket.setSoTimeout(savedTimeout);
+            }
+        } catch (IOException e) {
+            throw new ConnectionException("ENQ handshake failed: " + e.getMessage(), e);
+        }
+    }
+
+    /**
      * Sends a message and waits for response.
+     * For Triton protocol, performs ENQ/ACK handshake before sending.
      *
      * @param message The message to send
      * @return The response message
@@ -382,8 +452,13 @@ public class AtmHostConnection {
      */
     private byte[] sendAndReceive(byte[] message) throws ConnectionException {
         try {
-            // Verify streams are available
-            if (outputStream == null || inputStream == null) {
+            // Triton: ENQ/ACK handshake before sending request
+            performEnqHandshake();
+
+            // Capture local references to prevent race condition (W6 fix)
+            OutputStream out = outputStream;
+            InputStream in = inputStream;
+            if (out == null || in == null) {
                 throw new ConnectionException("Connection not established - streams are null");
             }
 
@@ -391,8 +466,8 @@ public class AtmHostConnection {
             logMessage("TX", message);
 
             // Send the message
-            outputStream.write(message);
-            outputStream.flush();
+            out.write(message);
+            out.flush();
 
             // Read response
             byte[] response = readResponse();
@@ -585,9 +660,16 @@ public class AtmHostConnection {
      */
     private void completeHandshake() throws ConnectionException {
         try {
-            // Send ACK
-            outputStream.write(builder.buildAck());
-            outputStream.flush();
+            // Capture local references (W6 fix)
+            OutputStream out = outputStream;
+            if (out == null) {
+                throw new ConnectionException("Output stream null during handshake");
+            }
+
+            // Send ACK — use protocol if available, fallback to builder
+            byte[] ack = (protocol != null) ? protocol.buildAck() : builder.buildAck();
+            out.write(ack);
+            out.flush();
             log("Sent ACK");
 
             // Wait for EOT
@@ -595,7 +677,7 @@ public class AtmHostConnection {
             byte[] eotResponse = readResponse();
 
             if (!parser.isEot(eotResponse)) {
-                log("Warning: Expected EOT, got: " + HyosungMessageBuilder.toHexString(eotResponse));
+                log("Warning: Expected EOT, got other response");
             } else {
                 log("Received EOT - handshake complete");
             }
@@ -607,7 +689,8 @@ public class AtmHostConnection {
             // EOT timeout is not critical
             log("EOT timeout (non-critical)");
         } catch (IOException e) {
-            log("Handshake completion error: " + e.getMessage());
+            // W9 fix: propagate ACK send failure as ConnectionException
+            throw new ConnectionException("Handshake completion error: " + e.getMessage(), e);
         }
     }
 

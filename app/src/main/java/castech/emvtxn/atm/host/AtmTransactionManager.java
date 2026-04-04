@@ -40,7 +40,7 @@ public class AtmTransactionManager {
     private final AtomicInteger sequenceNumber;
     private TransactionRequest currentRequest;
     private TransactionResponse currentResponse;
-    private boolean transactionInProgress;
+    private final java.util.concurrent.atomic.AtomicBoolean transactionInProgress = new java.util.concurrent.atomic.AtomicBoolean(false);
 
     // Reversal tracking state
     private volatile boolean requestSentToHost;      // True after request sent, before response
@@ -76,7 +76,7 @@ public class AtmTransactionManager {
         this.sequenceNumber = new AtomicInteger(1);
         this.executor = Executors.newSingleThreadExecutor();
         this.mainHandler = new Handler(Looper.getMainLooper());
-        this.transactionInProgress = false;
+        this.transactionInProgress.set(false);
 
         // Set up connection listener
         connection.setConnectionListener(new AtmHostConnection.ConnectionListener() {
@@ -172,12 +172,8 @@ public class AtmTransactionManager {
      * Gets the next sequence number (1-9999, wraps).
      */
     private int getNextSequenceNumber() {
-        int seq = sequenceNumber.getAndIncrement();
-        if (seq > 9999) {
-            sequenceNumber.set(1);
-            seq = 1;
-        }
-        return seq;
+        // W3 fix: atomic wrap-around using getAndUpdate
+        return sequenceNumber.getAndUpdate(n -> n >= 9999 ? 1 : n + 1);
     }
 
     // =========================================================================
@@ -195,12 +191,12 @@ public class AtmTransactionManager {
     public void performCashWithdrawal(final CastleCardData cardData, final long amountCents,
             final long surchargeCents, final String accountType) {
 
-        if (transactionInProgress) {
+        if (!transactionInProgress.compareAndSet(false, true)) {
             notifyError("Transaction already in progress");
             return;
         }
 
-        transactionInProgress = true;
+        // transactionInProgress already set by compareAndSet above
         resetReversalState();
         currentAmountCents = amountCents;
         currentSurchargeCents = surchargeCents;
@@ -320,7 +316,7 @@ public class AtmTransactionManager {
                     // Always disconnect - server closes connection after each transaction
                     connection.disconnect();
                     Log.d(TAG, "Disconnected after cash withdrawal");
-                    transactionInProgress = false;
+                    transactionInProgress.set(false);
                 }
             }
         });
@@ -338,12 +334,12 @@ public class AtmTransactionManager {
      */
     public void performBalanceInquiry(final CastleCardData cardData, final String accountType) {
 
-        if (transactionInProgress) {
+        if (!transactionInProgress.compareAndSet(false, true)) {
             notifyError("Transaction already in progress");
             return;
         }
 
-        transactionInProgress = true;
+        // transactionInProgress already set by compareAndSet above
         notifyProgress("Checking balance...");
 
         executor.execute(new Runnable() {
@@ -430,7 +426,7 @@ public class AtmTransactionManager {
                     // Always disconnect - server closes connection after each transaction
                     connection.disconnect();
                     Log.d(TAG, "Disconnected after balance inquiry");
-                    transactionInProgress = false;
+                    transactionInProgress.set(false);
                 }
             }
         });
@@ -1075,7 +1071,7 @@ public class AtmTransactionManager {
      * Checks if a transaction is in progress.
      */
     public boolean isTransactionInProgress() {
-        return transactionInProgress;
+        return transactionInProgress.get();
     }
 
     /**
