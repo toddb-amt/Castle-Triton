@@ -15,7 +15,14 @@ public class ProcessorConfig {
     private boolean useTls;
     private String tlsVersion;
 
+    // Protocol type
+    public enum ProtocolType {
+        TRITON_STANDARD,
+        HYOSUNG_STD1
+    }
+
     // Protocol settings
+    private ProtocolType protocolType;
     private HyosungProtocol.FramingType framingType;
     private String routingId;
     private String communicationHeader;  // Processor-specific header (if required)
@@ -50,6 +57,7 @@ public class ProcessorConfig {
     public ProcessorConfig() {
         this.useTls = true;
         this.tlsVersion = "TLSv1.2";
+        this.protocolType = ProtocolType.TRITON_STANDARD;  // Default to Triton
         this.framingType = HyosungProtocol.FramingType.STANDARD;
         this.routingId = HyosungProtocol.DEFAULT_ROUTING_ID;
         this.connectionTimeout = 30000;     // 30 seconds
@@ -201,14 +209,33 @@ public class ProcessorConfig {
     // =========================================================================
 
     /**
-     * Creates a message builder configured for this processor.
+     * Creates a protocol implementation for this processor configuration.
+     * Returns either Triton or Hyosung based on protocolType.
+     */
+    public AtmProtocol createProtocol() {
+        if (protocolType == ProtocolType.TRITON_STANDARD) {
+            return new castech.emvtxn.atm.host.triton.TritonProtocolImpl(
+                communicationHeader, // Use as Communications Identifier
+                castech.emvtxn.atm.host.triton.TritonProtocol.TERMINAL_TYPE_TRITON,
+                "00",  // Software version
+                castech.emvtxn.atm.host.triton.TritonProtocol.ENCRYPTION_TRIPLE_DES,
+                communicationHeader != null && !communicationHeader.isEmpty()
+            );
+        } else {
+            // Legacy Hyosung protocol — return wrapper (to be implemented)
+            return null; // TODO: HyosungProtocolImpl
+        }
+    }
+
+    /**
+     * Creates a message builder configured for this processor (legacy Hyosung).
      */
     public HyosungMessageBuilder createMessageBuilder() {
         return new HyosungMessageBuilder(framingType);
     }
 
     /**
-     * Creates a message parser configured for this processor.
+     * Creates a message parser configured for this processor (legacy Hyosung).
      */
     public HyosungMessageParser createMessageParser() {
         return new HyosungMessageParser(framingType);
@@ -379,6 +406,18 @@ public class ProcessorConfig {
 
     public void setRetryDelayMs(int retryDelayMs) {
         this.retryDelayMs = retryDelayMs;
+    }
+
+    public ProtocolType getProtocolType() {
+        return protocolType;
+    }
+
+    public void setProtocolType(ProtocolType protocolType) {
+        this.protocolType = protocolType;
+    }
+
+    public boolean isTritonProtocol() {
+        return protocolType == ProtocolType.TRITON_STANDARD;
     }
 
     public boolean isDevMode() {
