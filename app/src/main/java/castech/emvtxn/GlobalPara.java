@@ -5,7 +5,7 @@ import android.widget.EditText;
 
 import androidx.appcompat.app.AlertDialog;
 
-class GlobalPara
+public class GlobalPara
 {
 	public static MainActivity mainActivity;
 	public static boolean appListOK = false;

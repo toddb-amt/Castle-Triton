@@ -12,10 +12,10 @@ import CTOS.CtEMV;
 
 public class ClsScreenBroadcastReceiver extends BroadcastReceiver
 {
-	static final boolean d_VPIN_IS_PERFORMING = true;
-	static final boolean d_VPIN_IS_NOT_PERFORMING = false;
+	public static final boolean d_VPIN_IS_PERFORMING = true;
+	public static final boolean d_VPIN_IS_NOT_PERFORMING = false;
 
-	boolean vPINStatus = d_VPIN_IS_NOT_PERFORMING;
+	public boolean vPINStatus = d_VPIN_IS_NOT_PERFORMING;
 	long lastMilliSec = 0;
 	CtEMV emv = null;
 
