@@ -1,0 +1,173 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/atmPinpadLayout"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="#FFFFFF"
+    android:padding="16dp"
+    android:gravity="center">
+
+    <!-- PIN Display -->
+    <TextView
+        android:id="@+id/txtPinPrompt"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Enter PIN"
+        android:textSize="24sp"
+        android:textStyle="bold"
+        android:textColor="#000000"
+        android:gravity="center"
+        android:layout_marginBottom="8dp"/>
+
+    <TextView
+        android:id="@+id/txtPinDigits"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text=""
+        android:textSize="32sp"
+        android:textStyle="bold"
+        android:textColor="#000000"
+        android:gravity="center"
+        android:layout_marginBottom="16dp"/>
+
+    <!-- Number Pad Row 1: 1 2 3 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center"
+        android:layout_marginBottom="8dp">
+
+        <Button
+            android:id="@+id/KBD1"
+            android:layout_width="80dp"
+            android:layout_height="60dp"
+            android:text="1"
+            android:textSize="24sp"
+            android:layout_marginEnd="8dp"/>
+
+        <Button
+            android:id="@+id/KBD2"
+            android:layout_width="80dp"
+            android:layout_height="60dp"
+            android:text="2"
+            android:textSize="24sp"
+            android:layout_marginEnd="8dp"/>
+
+        <Button
+            android:id="@+id/KBD3"
+            android:layout_width="80dp"
+            android:layout_height="60dp"
+            android:text="3"
+            android:textSize="24sp"/>
+    </LinearLayout>
+
+    <!-- Number Pad Row 2: 4 5 6 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center"
+        android:layout_marginBottom="8dp">
+
+        <Button
+            android:id="@+id/KBD4"
+            android:layout_width="80dp"
+            android:layout_height="60dp"
+            android:text="4"
+            android:textSize="24sp"
+            android:layout_marginEnd="8dp"/>
+
+        <Button
+            android:id="@+id/KBD5"
+            android:layout_width="80dp"
+            android:layout_height="60dp"
+            android:text="5"
+            android:textSize="24sp"
+            android:layout_marginEnd="8dp"/>
+
+        <Button
+            android:id="@+id/KBD6"
+            android:layout_width="80dp"
+            android:layout_height="60dp"
+            android:text="6"
+            android:textSize="24sp"/>
+    </LinearLayout>
+
+    <!-- Number Pad Row 3: 7 8 9 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center"
+        android:layout_marginBottom="8dp">
+
+        <Button
+            android:id="@+id/KBD7"
+            android:layout_width="80dp"
+            android:layout_height="60dp"
+            android:text="7"
+            android:textSize="24sp"
+            android:layout_marginEnd="8dp"/>
+
+        <Button
+            android:id="@+id/KBD8"
+            android:layout_width="80dp"
+            android:layout_height="60dp"
+            android:text="8"
+            android:textSize="24sp"
+            android:layout_marginEnd="8dp"/>
+
+        <Button
+            android:id="@+id/KBD9"
+            android:layout_width="80dp"
+            android:layout_height="60dp"
+            android:text="9"
+            android:textSize="24sp"/>
+    </LinearLayout>
+
+    <!-- Number Pad Row 4: Cancel 0 Enter -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center"
+        android:layout_marginBottom="8dp">
+
+        <Button
+            android:id="@+id/KBD_Cancel"
+            android:layout_width="80dp"
+            android:layout_height="60dp"
+            android:text="X"
+            android:textSize="20sp"
+            android:textColor="#FF0000"
+            android:layout_marginEnd="8dp"/>
+
+        <Button
+            android:id="@+id/KBD0"
+            android:layout_width="80dp"
+            android:layout_height="60dp"
+            android:text="0"
+            android:textSize="24sp"
+            android:layout_marginEnd="8dp"/>
+
+        <Button
+            android:id="@+id/KBD_Enter"
+            android:layout_width="80dp"
+            android:layout_height="60dp"
+            android:text="OK"
+            android:textSize="20sp"
+            android:textColor="#00AA00"/>
+    </LinearLayout>
+
+    <!-- Clear button -->
+    <Button
+        android:id="@+id/KBD_Clear"
+        android:layout_width="200dp"
+        android:layout_height="50dp"
+        android:text="Clear"
+        android:textSize="18sp"
+        android:layout_marginTop="8dp"/>
+
+</LinearLayout>

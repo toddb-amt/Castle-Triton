@@ -1,0 +1,393 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:gravity="center_horizontal"
+    android:orientation="vertical"
+    tools:context=".Fragment_page_setting">
+
+    <!-- TODO: Update blank fragment layout -->
+
+    <LinearLayout
+        android:id="@+id/linearLayout"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:gravity="center_horizontal"
+        android:orientation="vertical"
+        android:paddingBottom="16dp"
+        android:paddingLeft="32dp"
+        android:paddingRight="32dp"
+        android:paddingTop="16dp"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent">
+
+        <TextView
+            android:id="@+id/txvMinRtn"
+            android:layout_width="match_parent"
+            android:layout_height="45dp"
+            android:background="@drawable/gray"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="bottom|center_horizontal"
+            android:padding="5dp"
+            android:scrollbars="vertical"
+            android:textColor="#000000"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/txvCT"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Contact"
+            android:textColor="#000000" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@drawable/gray"
+            android:orientation="vertical">
+
+            <Button
+                android:id="@+id/btnAPListSet"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:onClick="btnAPListSet_Click"
+                android:text="applicationListSet"
+                android:textAllCaps="false" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="horizontal">
+
+                <Button
+                    android:id="@+id/btnTermConfigSet"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:onClick="btnTermConfigSet_Click"
+                    android:text="terminalConfigSet"
+                    android:textAllCaps="false" />
+
+                <Button
+                    android:id="@+id/btnTermConfigDel"
+                    android:layout_width="70dp"
+                    android:layout_height="wrap_content"
+                    android:onClick="btnTermConfigDel_Click"
+                    android:text="Delete"
+                    android:textAllCaps="false" />
+
+                <Button
+                    android:id="@+id/btnTermConfigDelAll"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:onClick="btnTermConfigDelAll_Click"
+                    android:text="DeleteAll"
+                    android:textAllCaps="false" />
+
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:orientation="horizontal">
+
+                <Button
+                    android:id="@+id/btnAppConfigSet"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:onClick="btnAppConfigSet_Click"
+                    android:text="appConfigSet"
+                    android:textAllCaps="false" />
+
+                <Button
+                    android:id="@+id/btnAppConfigDel"
+                    android:layout_width="70dp"
+                    android:layout_height="wrap_content"
+                    android:onClick="btnAppConfigDel_Click"
+                    android:text="Delete"
+                    android:textAllCaps="false" />
+
+                <Button
+                    android:id="@+id/btnAppConfigDelAll"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:onClick="btnAppConfigDelAll_Click"
+                    android:text="DeleteAll"
+                    android:textAllCaps="false" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:orientation="horizontal">
+
+                <Button
+                    android:id="@+id/btnCapkSet"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:onClick="btnAppConfigSet_Click"
+                    android:text="capkSet"
+                    android:textAllCaps="false" />
+
+                <Button
+                    android:id="@+id/btnCapkDel"
+                    android:layout_width="70dp"
+                    android:layout_height="wrap_content"
+                    android:onClick="btnAppConfigDel_Click"
+                    android:text="Delete"
+                    android:textAllCaps="false" />
+
+                <Button
+                    android:id="@+id/btnCapkDelAll"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:onClick="btnAppConfigDelAll_Click"
+                    android:text="DeleteAll"
+                    android:textAllCaps="false" />
+            </LinearLayout>
+
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/txvCL"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Contactless"
+            android:textColor="#000000" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@drawable/gray"
+            android:orientation="vertical">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+
+                <Button
+                    android:id="@+id/btnParamSet"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:onClick="btnParamSet_Click"
+                    android:text="parameterSet"
+                    android:textAllCaps="false" />
+
+                <Button
+                    android:id="@+id/btnParamGet"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:onClick="btnParamGet_Click"
+                    android:text="parameterGet"
+                    android:textAllCaps="false" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+
+                <Button
+                    android:id="@+id/btnAIDSet"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="aidSet"
+                    android:textAllCaps="false" />
+
+                <Button
+                    android:id="@+id/btnAIDGet"
+                    android:layout_width="60dp"
+                    android:layout_height="wrap_content"
+                    android:text="Get"
+                    android:textAllCaps="false" />
+
+                <Button
+                    android:id="@+id/btnAIDDel"
+                    android:layout_width="70dp"
+                    android:layout_height="wrap_content"
+                    android:text="Delete"
+                    android:textAllCaps="false" />
+
+                <Button
+                    android:id="@+id/btnAIDDelAll"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="DeleteAll"
+                    android:textAllCaps="false" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:orientation="horizontal">
+
+                <Button
+                    android:id="@+id/btnCLCapkSet"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="capkSet"
+                    android:textAllCaps="false" />
+                <Button
+                    android:id="@+id/btnCLCapkGet"
+                    android:layout_width="60dp"
+                    android:layout_height="wrap_content"
+                    android:text="Get"
+                    android:textAllCaps="false" />
+
+                <Button
+                    android:id="@+id/btnCLCapkDel"
+                    android:layout_width="70dp"
+                    android:layout_height="wrap_content"
+                    android:text="Delete"
+                    android:textAllCaps="false" />
+
+                <Button
+                    android:id="@+id/btnCLCapkDelAll"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="DeleteAll"
+                    android:textAllCaps="false" />
+            </LinearLayout>
+
+        </LinearLayout>
+
+        <Space
+            android:layout_width="match_parent"
+            android:layout_height="10dp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@drawable/gray"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/btnJsonwlSet"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="jsonWhiteListSet"
+                android:textAllCaps="false" />
+
+            <Button
+                android:id="@+id/btnJsonwlDel"
+                android:layout_width="70dp"
+                android:layout_height="wrap_content"
+                android:text="Delete"
+                android:textAllCaps="false" />
+
+            <Button
+                android:id="@+id/btnHome"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:backgroundTint="@color/colorPrimary"
+                android:text="Home ↵"
+                android:textAllCaps="false" />
+
+        </LinearLayout>
+
+        <Space
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:layout_weight="1" />
+
+
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/layoutBackground"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#000000"
+        android:clickable="true"
+        android:focusable="true"
+        android:orientation="horizontal"
+        android:visibility="gone"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent"></LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/layoutRtn"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="60dp"
+        android:layout_marginEnd="32dp"
+        android:layout_marginStart="32dp"
+        android:layout_weight="1"
+        android:background="@drawable/blue"
+        android:clickable="true"
+        android:focusable="true"
+        android:orientation="vertical"
+        android:visibility="invisible"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="@+id/linearLayout"
+        app:layout_constraintTop_toTopOf="parent">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:layout_margin="1dp"
+            android:background="@color/colorPrimary"
+            android:orientation="horizontal">
+
+            <Space
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_weight="1" />
+
+            <Button
+                android:id="@+id/btnMinRtn"
+                android:layout_width="35dp"
+                android:layout_height="40dp"
+                android:layout_marginBottom="5dp"
+                android:layout_marginLeft="5dp"
+                android:layout_marginTop="5dp"
+                android:text="—" />
+
+            <Button
+                android:id="@+id/btnCloseRtn"
+                android:layout_width="35dp"
+                android:layout_height="40dp"
+                android:layout_marginBottom="5dp"
+                android:layout_marginRight="5dp"
+                android:layout_marginTop="5dp"
+                android:text="X"
+                android:textAllCaps="false" />
+
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/txvRtn"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="bottom"
+            android:maxHeight="430dp"
+            android:padding="10dp"
+            android:scrollbars="vertical"
+            android:textColor="#000000"
+            android:textStyle="bold" />
+
+    </LinearLayout>
+
+
+</androidx.constraintlayout.widget.ConstraintLayout>

@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Legacy PIN pad IDs - kept for SDK compatibility -->
+    <!-- These views no longer exist but IDs needed for compilation -->
+    <item name="textViewPinDigit" type="id" />
+    <item name="textViewPinDigitEx" type="id" />
+    <item name="textViewKeyInfo" type="id" />
+    <item name="KBD0" type="id" />
+    <item name="KBD1" type="id" />
+    <item name="KBD2" type="id" />
+    <item name="KBD3" type="id" />
+    <item name="KBD4" type="id" />
+    <item name="KBD5" type="id" />
+    <item name="KBD6" type="id" />
+    <item name="KBD7" type="id" />
+    <item name="KBD8" type="id" />
+    <item name="KBD9" type="id" />
+    <item name="KBD_Enter" type="id" />
+    <item name="KBD_Clear" type="id" />
+    <item name="KBD_Cancel" type="id" />
+
+    <!-- Legacy Manual Entry IDs - kept for SDK compatibility -->
+    <item name="textViewME_PAN" type="id" />
+    <item name="textViewME_EXP" type="id" />
+    <item name="textViewME_CSC" type="id" />
+    <item name="textViewME_ZIP" type="id" />
+</resources>

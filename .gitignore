@@ -1,0 +1,19 @@
+# Build outputs
+build/
+app/build/
+.gradle/
+
+# IDE
+.idea/
+*.iml
+local.properties
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Sensitive
+*.jks
+*.keystore
+google-vision-key.json
+*.env

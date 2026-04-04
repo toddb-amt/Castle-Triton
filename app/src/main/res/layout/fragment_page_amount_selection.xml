@@ -1,0 +1,276 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.constraintlayout.widget.ConstraintLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/id_page_amount_selection"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:paddingBottom="@dimen/activity_vertical_margin"
+    android:paddingLeft="@dimen/activity_horizontal_margin"
+    android:paddingRight="@dimen/activity_horizontal_margin"
+    android:paddingTop="@dimen/activity_vertical_margin"
+    android:background="#FFFFFF">
+
+    <!-- Header Title -->
+    <TextView
+        android:id="@+id/txvTitle"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:text="Select Withdrawal Amount"
+        android:textSize="28sp"
+        android:textStyle="bold"
+        android:textColor="#000000"
+        android:gravity="center"
+        android:paddingBottom="16dp"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        android:layout_marginTop="8dp"/>
+
+    <!-- Amount Buttons Grid Container -->
+    <androidx.constraintlayout.widget.ConstraintLayout
+        android:id="@+id/layoutAmountButtons"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="24dp"
+        app:layout_constraintTop_toBottomOf="@+id/txvTitle"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent">
+
+        <!-- Row 1: $20, $40, $60 -->
+        <Button
+            android:id="@+id/btn20"
+            android:layout_width="0dp"
+            android:layout_height="80dp"
+            android:text="$20"
+            android:textSize="24sp"
+            android:textStyle="bold"
+            android:layout_marginEnd="8dp"
+            app:layout_constraintTop_toTopOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintEnd_toStartOf="@+id/btn40"
+            app:layout_constraintHorizontal_weight="1"/>
+
+        <Button
+            android:id="@+id/btn40"
+            android:layout_width="0dp"
+            android:layout_height="80dp"
+            android:text="$40"
+            android:textSize="24sp"
+            android:textStyle="bold"
+            android:layout_marginEnd="8dp"
+            android:layout_marginStart="8dp"
+            app:layout_constraintTop_toTopOf="parent"
+            app:layout_constraintStart_toEndOf="@+id/btn20"
+            app:layout_constraintEnd_toStartOf="@+id/btn60"
+            app:layout_constraintHorizontal_weight="1"/>
+
+        <Button
+            android:id="@+id/btn60"
+            android:layout_width="0dp"
+            android:layout_height="80dp"
+            android:text="$60"
+            android:textSize="24sp"
+            android:textStyle="bold"
+            android:layout_marginStart="8dp"
+            app:layout_constraintTop_toTopOf="parent"
+            app:layout_constraintStart_toEndOf="@+id/btn40"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintHorizontal_weight="1"/>
+
+        <!-- Row 2: $100, $200, $500 -->
+        <Button
+            android:id="@+id/btn100"
+            android:layout_width="0dp"
+            android:layout_height="80dp"
+            android:text="$100"
+            android:textSize="24sp"
+            android:textStyle="bold"
+            android:layout_marginEnd="8dp"
+            android:layout_marginTop="12dp"
+            app:layout_constraintTop_toBottomOf="@+id/btn20"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintEnd_toStartOf="@+id/btn200"
+            app:layout_constraintHorizontal_weight="1"/>
+
+        <Button
+            android:id="@+id/btn200"
+            android:layout_width="0dp"
+            android:layout_height="80dp"
+            android:text="$200"
+            android:textSize="24sp"
+            android:textStyle="bold"
+            android:layout_marginEnd="8dp"
+            android:layout_marginStart="8dp"
+            android:layout_marginTop="12dp"
+            app:layout_constraintTop_toBottomOf="@+id/btn40"
+            app:layout_constraintStart_toEndOf="@+id/btn100"
+            app:layout_constraintEnd_toStartOf="@+id/btn500"
+            app:layout_constraintHorizontal_weight="1"/>
+
+        <Button
+            android:id="@+id/btn500"
+            android:layout_width="0dp"
+            android:layout_height="80dp"
+            android:text="$500"
+            android:textSize="24sp"
+            android:textStyle="bold"
+            android:layout_marginStart="8dp"
+            android:layout_marginTop="12dp"
+            app:layout_constraintTop_toBottomOf="@+id/btn60"
+            app:layout_constraintStart_toEndOf="@+id/btn200"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintHorizontal_weight="1"/>
+
+        <!-- Custom Amount Button -->
+        <Button
+            android:id="@+id/btnCustomAmount"
+            android:layout_width="0dp"
+            android:layout_height="70dp"
+            android:text="Custom Amount"
+            android:textSize="20sp"
+            android:textStyle="bold"
+            android:layout_marginTop="12dp"
+            android:layout_marginEnd="8dp"
+            app:layout_constraintTop_toBottomOf="@+id/btn100"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintEnd_toStartOf="@+id/btnCheckBalance"
+            app:layout_constraintHorizontal_weight="1"/>
+
+        <!-- Check Balance Button -->
+        <Button
+            android:id="@+id/btnCheckBalance"
+            android:layout_width="0dp"
+            android:layout_height="70dp"
+            android:text="Check\nBalance"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:layout_marginTop="12dp"
+            android:layout_marginStart="8dp"
+            android:backgroundTint="#4CAF50"
+            app:layout_constraintTop_toBottomOf="@+id/btn500"
+            app:layout_constraintStart_toEndOf="@+id/btnCustomAmount"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintHorizontal_weight="1"/>
+
+    </androidx.constraintlayout.widget.ConstraintLayout>
+
+    <!-- Selected Amount Display -->
+    <TextView
+        android:id="@+id/txvSelectedAmountLabel"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Withdrawal Amount:"
+        android:textSize="18sp"
+        android:textColor="#000000"
+        android:layout_marginTop="32dp"
+        app:layout_constraintTop_toBottomOf="@+id/layoutAmountButtons"
+        app:layout_constraintStart_toStartOf="parent"/>
+
+    <TextView
+        android:id="@+id/txvSelectedAmount"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="$0.00"
+        android:textSize="24sp"
+        android:textStyle="bold"
+        android:textColor="@color/colorPrimary"
+        android:layout_marginStart="16dp"
+        app:layout_constraintTop_toTopOf="@+id/txvSelectedAmountLabel"
+        app:layout_constraintBottom_toBottomOf="@+id/txvSelectedAmountLabel"
+        app:layout_constraintStart_toEndOf="@+id/txvSelectedAmountLabel"/>
+
+    <!-- Fee Display -->
+    <TextView
+        android:id="@+id/txvFeeLabel"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Service Fee:"
+        android:textSize="18sp"
+        android:textColor="#000000"
+        android:layout_marginTop="12dp"
+        app:layout_constraintTop_toBottomOf="@+id/txvSelectedAmountLabel"
+        app:layout_constraintStart_toStartOf="parent"/>
+
+    <TextView
+        android:id="@+id/txvFee"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="$0.00"
+        android:textSize="20sp"
+        android:textStyle="bold"
+        android:textColor="#666666"
+        android:layout_marginStart="16dp"
+        app:layout_constraintTop_toTopOf="@+id/txvFeeLabel"
+        app:layout_constraintBottom_toBottomOf="@+id/txvFeeLabel"
+        app:layout_constraintStart_toEndOf="@+id/txvFeeLabel"/>
+
+    <!-- Total Display -->
+    <TextView
+        android:id="@+id/txvTotalLabel"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Total Amount:"
+        android:textSize="20sp"
+        android:textStyle="bold"
+        android:textColor="#000000"
+        android:layout_marginTop="16dp"
+        app:layout_constraintTop_toBottomOf="@+id/txvFeeLabel"
+        app:layout_constraintStart_toStartOf="parent"/>
+
+    <TextView
+        android:id="@+id/txvTotal"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="$0.00"
+        android:textSize="28sp"
+        android:textStyle="bold"
+        android:textColor="@color/colorPrimary"
+        android:layout_marginStart="16dp"
+        app:layout_constraintTop_toTopOf="@+id/txvTotalLabel"
+        app:layout_constraintBottom_toBottomOf="@+id/txvTotalLabel"
+        app:layout_constraintStart_toEndOf="@+id/txvTotalLabel"/>
+
+    <!-- Divider Line -->
+    <View
+        android:id="@+id/divider"
+        android:layout_width="0dp"
+        android:layout_height="2dp"
+        android:background="#CCCCCC"
+        android:layout_marginTop="24dp"
+        app:layout_constraintTop_toBottomOf="@+id/txvTotalLabel"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"/>
+
+    <!-- Bottom Buttons -->
+    <Button
+        android:id="@+id/btnCancel"
+        android:layout_width="0dp"
+        android:layout_height="70dp"
+        android:text="Cancel"
+        android:textSize="20sp"
+        android:textStyle="bold"
+        android:layout_marginEnd="8dp"
+        android:layout_marginBottom="16dp"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toStartOf="@+id/btnContinue"
+        app:layout_constraintHorizontal_weight="1"/>
+
+    <Button
+        android:id="@+id/btnContinue"
+        android:layout_width="0dp"
+        android:layout_height="70dp"
+        android:text="Continue"
+        android:textSize="20sp"
+        android:textStyle="bold"
+        android:enabled="false"
+        android:layout_marginStart="8dp"
+        android:layout_marginBottom="16dp"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toEndOf="@+id/btnCancel"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintHorizontal_weight="1"/>
+
+</androidx.constraintlayout.widget.ConstraintLayout>

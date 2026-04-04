@@ -1,0 +1,198 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/id_page_transaction_atm"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="#FFFFFF"
+    android:padding="16dp">
+
+    <!-- LED Indicator Row -->
+    <LinearLayout
+        android:id="@+id/layoutLEDs"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center"
+        android:paddingBottom="16dp">
+
+        <ImageView
+            android:id="@+id/imageView1"
+            android:layout_width="60dp"
+            android:layout_height="40dp"
+            android:src="@drawable/ledoff"
+            android:layout_marginEnd="8dp"/>
+
+        <ImageView
+            android:id="@+id/imageView2"
+            android:layout_width="60dp"
+            android:layout_height="40dp"
+            android:src="@drawable/ledoff"
+            android:layout_marginEnd="8dp"/>
+
+        <ImageView
+            android:id="@+id/imageView3"
+            android:layout_width="60dp"
+            android:layout_height="40dp"
+            android:src="@drawable/ledoff"
+            android:layout_marginEnd="8dp"/>
+
+        <ImageView
+            android:id="@+id/imageView4"
+            android:layout_width="60dp"
+            android:layout_height="40dp"
+            android:src="@drawable/ledoff"/>
+    </LinearLayout>
+
+    <!-- Spacer -->
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="0.5"/>
+
+    <!-- Transaction Type Label -->
+    <TextView
+        android:id="@+id/txvTransactionType"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="WITHDRAWAL"
+        android:textSize="20sp"
+        android:textStyle="bold"
+        android:textColor="#666666"
+        android:gravity="center"
+        android:paddingBottom="8dp"/>
+
+    <!-- Amount Display -->
+    <TextView
+        android:id="@+id/txvAmount"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="\$0.00"
+        android:textSize="48sp"
+        android:textStyle="bold"
+        android:textColor="#000000"
+        android:gravity="center"
+        android:paddingBottom="8dp"/>
+
+    <!-- Fee Display -->
+    <TextView
+        android:id="@+id/txvFee"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Fee: \$0.00"
+        android:textSize="16sp"
+        android:textColor="#666666"
+        android:gravity="center"
+        android:paddingBottom="24dp"/>
+
+    <!-- Spacer -->
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="0.3"/>
+
+    <!-- Main Instruction -->
+    <TextView
+        android:id="@+id/txvInstruction"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Insert, Tap, or Swipe Card"
+        android:textSize="24sp"
+        android:textStyle="bold"
+        android:textColor="#1565C0"
+        android:gravity="center"
+        android:paddingBottom="16dp"/>
+
+    <!-- Status Message -->
+    <TextView
+        android:id="@+id/txvStatus"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Waiting for card..."
+        android:textSize="16sp"
+        android:textColor="#666666"
+        android:gravity="center"
+        android:paddingBottom="24dp"/>
+
+    <!-- Progress Indicator (hidden by default) -->
+    <ProgressBar
+        android:id="@+id/progressBar"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:visibility="gone"
+        android:paddingBottom="16dp"/>
+
+
+    <!-- Spacer -->
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"/>
+
+    <!-- Button Row -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center"
+        android:paddingBottom="16dp">
+
+        <!-- Cancel Button -->
+        <Button
+            android:id="@+id/btnCancel"
+            android:layout_width="150dp"
+            android:layout_height="60dp"
+            android:text="CANCEL"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:backgroundTint="#F44336"
+            android:textColor="#FFFFFF"
+            android:layout_marginEnd="16dp"/>
+
+        <!-- Simulate Card Button (for testing) -->
+        <Button
+            android:id="@+id/btnSimulateCard"
+            android:layout_width="150dp"
+            android:layout_height="60dp"
+            android:text="SIMULATE"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:backgroundTint="#4CAF50"
+            android:textColor="#FFFFFF"/>
+    </LinearLayout>
+
+    <!-- Hidden elements needed for SDK compatibility -->
+    <EditText
+        android:id="@+id/edtAmt"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:visibility="gone"
+        android:text="1000"/>
+
+    <EditText
+        android:id="@+id/edtAmtOth"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:visibility="gone"/>
+
+    <EditText
+        android:id="@+id/edtTxnType"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:visibility="gone"
+        android:text="00"/>
+
+    <Button
+        android:id="@+id/btnTransaction"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:visibility="gone"/>
+
+    <EditText
+        android:id="@+id/edtLog"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:visibility="gone"/>
+
+</LinearLayout>
