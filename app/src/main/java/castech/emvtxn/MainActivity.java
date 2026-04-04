@@ -4952,7 +4952,7 @@ public class MainActivity extends AppCompatActivity {
                             intRtn = tlvUtility_ct.TLVDataGet(TLVData);
                             if (intRtn == 0) {
                                 String tag5aHex = Converter.byteArray2HexString(TLVData.value, TLVData.len);
-                                Log.d(TAG, "TagData(5A):" + tag5aHex);
+                                Log.d(TAG, "TagData(5A):" + castech.emvtxn.util.PanMasker.maskHex(tag5aHex));
                                 // ATM MODE: Store CLEAR PAN from Tag 5A for PIN block Format 0
                                 // Tag 5A is BCD-encoded PAN, may have trailing F padding
                                 if (GlobalPara.atmMode) {
@@ -5009,7 +5009,7 @@ public class MainActivity extends AppCompatActivity {
                             TLVData.len = 256;
                             intRtn = tlvUtility_ct.TLVDataGet(TLVData);
                             if (intRtn == 0) {
-                                Log.d(TAG, "TagData(57):" + Converter.byteArray2HexString(TLVData.value, TLVData.len));
+                                Log.d(TAG, "TagData(57): [masked]");
                             } else {
                                 Log.d(TAG, "NoTag(57)");
                             }
@@ -5038,18 +5038,18 @@ public class MainActivity extends AppCompatActivity {
                                     // Convert BCD-encoded Track 2 to ASCII string
                                     // Format: BCD bytes where D=separator, F=padding
                                     String hexTrack2 = Converter.byteArray2HexString(df35Data.value, df35Data.len);
-                                    Log.d(TAG, "ATM: DF35 raw hex: " + hexTrack2);
+                                    Log.d(TAG, "ATM: DF35 raw hex: [masked]");
                                     // Convert to ISO 7813 format: ;PAN=YYMM...?
                                     String clearTrack2 = ";" + hexTrack2.toUpperCase()
                                             .replace("D", "=")
                                             .replaceAll("F+$", "") + "?";
-                                    Log.d(TAG, "ATM: CLEAR Track2 from DF35: " + clearTrack2);
+                                    Log.d(TAG, "ATM: Track2 from DF35: [masked]");
                                     GlobalPara.atmTrack2Data = clearTrack2;
                                     // Extract clear PAN for PIN translation
                                     if (clearTrack2.contains("=")) {
                                         String clearPan = clearTrack2.replace(";", "").split("=")[0];
                                         GlobalPara.atmClearPan = clearPan;
-                                        Log.d(TAG, "ATM: CLEAR PAN extracted: " + clearPan);
+                                        Log.d(TAG, "ATM: PAN extracted: " + castech.emvtxn.util.PanMasker.maskPan(clearPan));
                                     }
                                 } else {
                                     Log.w(TAG, "ATM: DF35 not available via direct dataGet, falling back to DF33/DF32");
@@ -5855,7 +5855,7 @@ public class MainActivity extends AppCompatActivity {
                         TLVData.len = 256;
                         TLVData.value = new byte[256];
                         intRtn = tlvUtility.TLVDataGet(TLVData);
-                        Log.d(TAG, "TagData(57):" + Converter.byteArray2HexString(TLVData.value, TLVData.len));
+                        Log.d(TAG, "TagData(57): [masked]");
 
                         TLVData.tag = 0x84;
                         TLVData.len = 256;
@@ -8111,7 +8111,7 @@ public class MainActivity extends AppCompatActivity {
 
             // Summary for processor
             result.append("=== FOR PROCESSOR ===\n");
-            result.append("IPEK: 6AC292FAA1315B4D858AB3A3D7D5933A\n");
+            result.append("IPEK: [removed - see key ceremony docs]\n");
             result.append("Clear: " + clearBlock + "\n\n");
             result.append("DATA variant (" + ksn1Hex + "): " + enc1Hex + "\n");
             result.append("PIN variant  (" + ksn2Hex + "): " + enc2Hex + "\n\n");

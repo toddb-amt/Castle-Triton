@@ -119,23 +119,29 @@ public class AtmHostConnection {
 
     /**
      * Establishes a TLS connection.
+     * Uses system default trust manager (validates server certificates) in production.
+     * Set config.setDevMode(true) for development with self-signed certs.
      */
     private void connectTls() throws IOException, NoSuchAlgorithmException, KeyManagementException {
-        // Create SSL context
-        SSLContext sslContext = SSLContext.getInstance(config.getTlsVersion());
+        SSLSocketFactory factory;
 
-        // For production, use proper certificate validation
-        // This trust-all manager is for development/testing only
-        TrustManager[] trustAllCerts = new TrustManager[] {
-            new X509TrustManager() {
-                public X509Certificate[] getAcceptedIssuers() { return new X509Certificate[0]; }
-                public void checkClientTrusted(X509Certificate[] certs, String authType) { }
-                public void checkServerTrusted(X509Certificate[] certs, String authType) { }
-            }
-        };
-
-        sslContext.init(null, trustAllCerts, new SecureRandom());
-        SSLSocketFactory factory = sslContext.getSocketFactory();
+        if (config.isDevMode()) {
+            // Development only — trust all certs for testing with self-signed servers
+            log("TLS: DEV MODE — certificate validation DISABLED");
+            SSLContext sslContext = SSLContext.getInstance(config.getTlsVersion());
+            TrustManager[] trustAllCerts = new TrustManager[] {
+                new X509TrustManager() {
+                    public X509Certificate[] getAcceptedIssuers() { return new X509Certificate[0]; }
+                    public void checkClientTrusted(X509Certificate[] certs, String authType) { }
+                    public void checkServerTrusted(X509Certificate[] certs, String authType) { }
+                }
+            };
+            sslContext.init(null, trustAllCerts, new SecureRandom());
+            factory = sslContext.getSocketFactory();
+        } else {
+            // Production — use system default trust manager (validates certificates)
+            factory = (SSLSocketFactory) SSLSocketFactory.getDefault();
+        }
 
         // Create and connect socket
         socket = new Socket();
@@ -152,8 +158,8 @@ public class AtmHostConnection {
             true
         );
 
-        // Enable TLS protocols
-        sslSocket.setEnabledProtocols(new String[] { config.getTlsVersion() });
+        // Enforce TLS 1.2 minimum
+        sslSocket.setEnabledProtocols(new String[] { "TLSv1.2", "TLSv1.3" });
         sslSocket.startHandshake();
 
         socket = sslSocket;
@@ -638,11 +644,9 @@ public class AtmHostConnection {
     private void logMessage(String direction, byte[] message) {
         if (message == null) return;
 
-        String hex = HyosungMessageBuilder.toHexString(message);
-        String readable = HyosungMessageBuilder.toReadableString(message);
-
-        log(direction + " [" + message.length + " bytes]: " + readable);
-        log(direction + " (hex): " + hex);
+        // Only log message length and type — NEVER log full message content
+        // Full messages contain Track 2 (Field 6) and PIN blocks (Field 8)
+        log(direction + " [" + message.length + " bytes]");
     }
 
     // =========================================================================

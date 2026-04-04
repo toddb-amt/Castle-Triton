@@ -41,6 +41,9 @@ public class ProcessorConfig {
     private int maxRetries;
     private int retryDelayMs;
 
+    // Development mode — disables TLS certificate validation
+    private boolean devMode = false;
+
     /**
      * Creates a new ProcessorConfig with default values.
      */
@@ -376,6 +379,14 @@ public class ProcessorConfig {
 
     public void setRetryDelayMs(int retryDelayMs) {
         this.retryDelayMs = retryDelayMs;
+    }
+
+    public boolean isDevMode() {
+        return devMode;
+    }
+
+    public void setDevMode(boolean devMode) {
+        this.devMode = devMode;
     }
 
     @Override

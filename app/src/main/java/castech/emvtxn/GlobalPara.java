@@ -138,13 +138,8 @@ class GlobalPara
 	public static String atmPinBlockFormat = "FORMAT0";  // Format 0 with DUKPT
 
 	// DUKPT settings - ENABLED for PIN encryption
-	// Processor must have BDK matching the injected key to decrypt PIN blocks
-	// -------------------------------------------------------------------------
-	// PRODUCTION KEYS (Terminal GH111001):
-	//   BDK Combined:  1546E5DC159D573E62F80D0201C4C70E
-	//   IPEK Combined: B38195E85C40AAAB79F8D9E005563203 (KCV: CA8B26)
-	//   KSN:           3E5B8E08533633200000
-	// -------------------------------------------------------------------------
+	// Key material is managed via Key Injection Tool / KeyBRIDGE HSM
+	// See DUKPT_KEY_REFERENCE.md for key ceremony documentation
 	public static boolean atmDukptEnabled = true;  // DUKPT ENABLED for PIN
 	public static int atmDukptKeySet = 0x0000C000;    // DUKPT key set - C000 has PIN attribute, C001 only has DECRYPT
 	public static int atmDukptKeyIndex = 0x00000000;  // DUKPT key index

@@ -95,8 +95,10 @@ public class ReversalPersistenceManager {
         reversal.setTerminalId(terminalId);
         reversal.setSequenceNumber(sequenceNumber);
         reversal.setAuthData(authData != null ? authData : "");
-        reversal.setTrack2Data(track2Data);
-        reversal.setPinBlock(pinBlock);
+        // PCI: Do NOT store Track 2 or PIN block in SharedPreferences
+        // Reversal messages use sequence number + auth data to identify the original transaction
+        reversal.setTrack2Data("");
+        reversal.setPinBlock("");
         reversal.setAmountCents(amountCents);
         reversal.setSurchargeCents(surchargeCents);
         reversal.setReasonCode(reason);

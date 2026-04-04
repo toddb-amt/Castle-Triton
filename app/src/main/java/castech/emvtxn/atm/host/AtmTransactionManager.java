@@ -360,9 +360,8 @@ public class AtmTransactionManager {
                     //     Log.w(TAG, "H0 status monitoring failed (continuing with transaction): " + e.getMessage());
                     // }
 
-                    // Debug: Log track 2 before creating request
                     String track2Value = cardData.getTrack2ForTransaction();
-                    Log.d(TAG, "DEBUG TRACK2 (BI): cardData.getTrack2ForTransaction() = [" + track2Value + "]");
+                    Log.d(TAG, "Track2 (BI): [masked, length=" + (track2Value != null ? track2Value.length() : 0) + "]");
 
                     TransactionRequest request = TransactionRequest.createBalanceInquiry(
                         config.getTerminalId(),
@@ -411,8 +410,7 @@ public class AtmTransactionManager {
                         Log.d(TAG, "Added PIN KSN to balance inquiry request: " + pinKsnHex);
                     }
 
-                    // Debug: Log track 2 after setting in request
-                    Log.d(TAG, "DEBUG TRACK2 (BI): request.getTrack2Data() = [" + request.getTrack2Data() + "]");
+                    Log.d(TAG, "BI request built, track2 present: " + (request.getTrack2Data() != null && !request.getTrack2Data().isEmpty()));
 
                     currentRequest = request;
                     notifyProgress("Connecting to host...");
