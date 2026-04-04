@@ -670,6 +670,13 @@ public class TritonMessageBuilder {
      *         {@link TritonProtocol#getTransactionCode(String, String)}
      */
     private String getTritonTransactionType(TransactionRequest request) {
+        // Prefer new operationType field if available
+        String opType = request.getOperationType();
+        if (opType != null && !opType.isEmpty()) {
+            return opType;
+        }
+
+        // Fallback: parse from Hyosung-style transactionType (CWCACA, BISASA, etc.)
         String txnType = request.getTransactionType();
         if (txnType == null || txnType.isEmpty()) {
             return "WITHDRAWAL";
@@ -700,6 +707,13 @@ public class TritonMessageBuilder {
      * @return Account type string (e.g., "CA", "SA", "CR") or null
      */
     private String getTritonAccountType(TransactionRequest request) {
+        // Prefer new accountType field if available
+        String acctType = request.getAccountType();
+        if (acctType != null && !acctType.isEmpty()) {
+            return acctType;
+        }
+
+        // Fallback: parse from Hyosung-style transactionType (CWCACA, BISASA, etc.)
         String txnType = request.getTransactionType();
         if (txnType != null && txnType.length() >= 4) {
             String acctCode = txnType.substring(2, 4);
