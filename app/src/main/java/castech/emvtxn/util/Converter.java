@@ -15,7 +15,7 @@ public class Converter {
     }
 
     public static String byteArray2HexString(byte[] array, int len) {
-        StringBuffer hexString = new StringBuffer();
+        StringBuilder hexString = new StringBuilder();
 
         for (int i = 0; i < len; i++) {
             int intVal = array[i] & 0xFF;
@@ -30,7 +30,7 @@ public class Converter {
     }
 
     public static String byteArray2HexString(byte[] array, int index, int len) {
-        StringBuffer hexString = new StringBuffer();
+        StringBuilder hexString = new StringBuilder();
 
         for (int i = index; i < len + index; i++) {
             int intVal = array[i] & 0xFF;

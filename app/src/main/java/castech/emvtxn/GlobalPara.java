@@ -170,40 +170,41 @@ public class GlobalPara
 	public static boolean atmUseTls = true;    // Use TLS/SSL for connection
 
 	// Current transaction data (captured during card read)
-	public static String atmTrack2Data = "";
-	public static String atmEncryptedPinBlock = "";
-	public static String atmEmvData = "";
-	public static String atmSensitiveEmvData = "";  // Separate 5A/57 data (clear PAN for PIN translation)
-	public static int atmEntryMode = 0;  // 0=unknown, 1=contact, 2=contactless, 3=MSR
-	public static String atmClearPan = "";  // Clear PAN from server (for PIN block creation)
+	// W1 fix: volatile for thread safety — written by EMV thread, read by UI/host threads
+	public static volatile String atmTrack2Data = "";
+	public static volatile String atmEncryptedPinBlock = "";
+	public static volatile String atmEmvData = "";
+	public static volatile String atmSensitiveEmvData = "";  // Separate 5A/57 data (clear PAN for PIN translation)
+	public static volatile int atmEntryMode = 0;  // 0=unknown, 1=contact, 2=contactless, 3=MSR
+	public static volatile String atmClearPan = "";  // Clear PAN from server (for PIN block creation)
 
 	// PIN collected after transaction flag (for No-CVM cryptogram approach)
 	// When true, PIN was collected AFTER Generate AC (cryptogram already exists)
 	// This is needed because SDK can't do internal PIN with DUKPT (error 0x00001003)
-	public static boolean atmPinCollectedPostTransaction = false;
+	public static volatile boolean atmPinCollectedPostTransaction = false;
 
 	// Host response data
-	public static String atmAuthCode = "";
-	public static String atmReferenceNumber = "";
-	public static String atmAuthDate = "";
-	public static String atmAuthTime = "";
-	public static String atmResponseCode = "";
-	public static String atmResponseMessage = "";
-	public static long atmAccountBalance = 0;
-	public static long atmAvailableBalance = 0;
+	public static volatile String atmAuthCode = "";
+	public static volatile String atmReferenceNumber = "";
+	public static volatile String atmAuthDate = "";
+	public static volatile String atmAuthTime = "";
+	public static volatile String atmResponseCode = "";
+	public static volatile String atmResponseMessage = "";
+	public static volatile long atmAccountBalance = 0;
+	public static volatile long atmAvailableBalance = 0;
 
 	// EMV host response data for txnCompletion (tags 91, 71, 72)
-	public static byte[] atmIssuerAuthData = null;      // Tag 91 - Issuer Authentication Data
-	public static byte[] atmIssuerScript71 = null;      // Tag 71 - Issuer Script Template 1
-	public static byte[] atmIssuerScript72 = null;      // Tag 72 - Issuer Script Template 2
+	public static volatile byte[] atmIssuerAuthData = null;      // Tag 91 - Issuer Authentication Data
+	public static volatile byte[] atmIssuerScript71 = null;      // Tag 71 - Issuer Script Template 1
+	public static volatile byte[] atmIssuerScript72 = null;      // Tag 72 - Issuer Script Template 2
 
 	// Transaction state
-	public static boolean atmHostCallInProgress = false;
-	public static boolean atmHostCallSuccess = false;
-	public static boolean atmNeedsReversal = false;
+	public static volatile boolean atmHostCallInProgress = false;
+	public static volatile boolean atmHostCallSuccess = false;
+	public static volatile boolean atmNeedsReversal = false;
 
 	// Balance inquiry mode
-	public static boolean atmBalanceInquiryMode = false;
+	public static volatile boolean atmBalanceInquiryMode = false;
 
 	// Transaction in progress flag - prevents starting new transaction while one is active
 	public static boolean atmTransactionInProgress = false;

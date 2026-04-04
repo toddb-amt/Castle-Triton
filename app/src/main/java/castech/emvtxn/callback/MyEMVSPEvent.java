@@ -485,7 +485,7 @@ public class MyEMVSPEvent implements CtEMV.IEventShowVirtualPINEx, CtEMV.IEventG
                     clearPinBlock[i] = (byte) (pinBytes[i] ^ panBytes[i]);
                 }
                 String clearPinBlockHex = Converter.byteArray2HexString(clearPinBlock, 8);
-                Log.d(TAG, "  Clear PIN block (Format 0): " + clearPinBlockHex.substring(0, 4) + "****");
+                Log.d(TAG, "  Clear PIN block created (Format 0)");
 
                 // STEP 4: Encrypt with DUKPT
                 Log.d(TAG, "STEP 4: Encrypting with DUKPT at " +

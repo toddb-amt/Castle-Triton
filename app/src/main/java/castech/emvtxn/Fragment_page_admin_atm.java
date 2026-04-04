@@ -403,8 +403,10 @@ public class Fragment_page_admin_atm extends Fragment {
         String storedHash = prefs.getString(KEY_PIN_HASH, null);
 
         if (storedHash == null) {
-            // First time - accept default PIN without prompting to change
+            // W4 fix: First time — accept default PIN but force change
             if (enteredPin.equals(DEFAULT_PIN)) {
+                // Force PIN change on first authentication
+                promptChangePin();
                 return true;
             }
             return false;
@@ -488,13 +490,21 @@ public class Fragment_page_admin_atm extends Fragment {
             }
             return sb.toString();
         } catch (Exception e) {
+            // S7 fix: Fail explicitly — never store/compare plaintext PIN
             Log.e(TAG, "Hash error: " + e.getMessage());
-            return pin; // Fallback to plain (not secure, but won't crash)
+            throw new RuntimeException("SHA-256 unavailable — cannot hash PIN securely", e);
         }
     }
 
     private String generateSalt() {
-        return String.valueOf(System.currentTimeMillis());
+        // W5 fix: Use SecureRandom instead of predictable timestamp
+        byte[] saltBytes = new byte[16];
+        new java.security.SecureRandom().nextBytes(saltBytes);
+        StringBuilder sb = new StringBuilder();
+        for (byte b : saltBytes) {
+            sb.append(String.format("%02x", b));
+        }
+        return sb.toString();
     }
 
     private boolean isLockedOut() {

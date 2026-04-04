@@ -4187,7 +4187,7 @@ public class MainActivity extends AppCompatActivity {
                 Log.d(TAG, "Start Get PIN");
 
                 IKMS2Callback.Stub callback = new IKMS2Callback.Stub() {
-                    StringBuffer sb = new StringBuffer();
+                    StringBuilder sb = new StringBuilder();
                     byte recv;
 
                     @Override
@@ -4958,7 +4958,7 @@ public class MainActivity extends AppCompatActivity {
             dukptKey.setPinControl(CtKMS2Dukpt.PIN_BLOCKTYPE_ANSI_X9_8_ISO_4, entryKeyTimeout, firstEntryKeyTimeout);
 
             // Set callback for PIN entry events
-            final StringBuffer pinDigits = new StringBuffer();
+            final StringBuilder pinDigits = new StringBuilder();
 
             IKMS2Callback.Stub callback = new IKMS2Callback.Stub() {
                 @Override
@@ -5217,7 +5217,7 @@ public class MainActivity extends AppCompatActivity {
             Log.d(TAG, ">>> MVP: Button positions configured");
 
             // Create CtKMS2Callback (Castle MVP approach - NOT IKMS2Callback.Stub)
-            final StringBuffer pinDigits = new StringBuffer();
+            final StringBuilder pinDigits = new StringBuilder();
             CtKMS2Callback callback = new CtKMS2Callback() {
                 @Override
                 public int testCancel() {
@@ -5459,7 +5459,7 @@ public class MainActivity extends AppCompatActivity {
         try {
             // Create Format 0 clear PIN block (with PAN XOR)
             String clearPinBlock = PinBlockFormatter.createFormat0PinBlock(pin, pan);
-            Log.d(TAG, "DUKPT PIN: Clear PIN block (Format 0): " + clearPinBlock);
+            Log.d(TAG, "DUKPT PIN: Clear PIN block created (Format 0)");
 
             // Convert to bytes for encryption
             byte[] pinBlockBytes = Converter.hexString2ByteArray(clearPinBlock);
@@ -5528,7 +5528,7 @@ public class MainActivity extends AppCompatActivity {
         try {
             // Create Format 0 clear PIN block (with PAN XOR)
             String clearPinBlock = PinBlockFormatter.createFormat0PinBlock(pin, pan);
-            Log.d(TAG, "WorkingKey PIN: Clear PIN block (Format 0): " + clearPinBlock);
+            Log.d(TAG, "WorkingKey PIN: Clear PIN block created (Format 0)");
 
             // Use CastleKeyManager for encryption (handles software/hardware automatically)
             if (atmHostService != null && atmHostService.getKeyManager() != null) {
@@ -8358,7 +8358,7 @@ public class MainActivity extends AppCompatActivity {
             long panVal = Long.parseUnsignedLong(panPart, 16);
             long clearBlock = pinVal ^ panVal;
             String expectedClearPinBlock = String.format("%016X", clearBlock);
-            Log.d(TAG, "Expected clear PIN block (ISO-0): " + expectedClearPinBlock);
+            Log.d(TAG, "Expected clear PIN block (ISO-0): [masked]");
 
             // If we have a PIN block from the SDK, compare
             if (GlobalPara.atmEncryptedPinBlock != null && !GlobalPara.atmEncryptedPinBlock.isEmpty()) {
