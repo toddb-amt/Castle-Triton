@@ -70,6 +70,7 @@ public class Fragment_page_admin_atm extends Fragment {
 
     // UI Elements - Host Settings
     private Spinner spinnerProcessorType;
+    private Spinner spinnerProtocolType;
     private EditText edtHostAddress;
     private EditText edtHostPort;
     private EditText edtTerminalId;
@@ -215,6 +216,7 @@ public class Fragment_page_admin_atm extends Fragment {
 
         // Host Settings
         spinnerProcessorType = rootView.findViewById(R.id.spinnerProcessorType);
+        spinnerProtocolType = rootView.findViewById(R.id.spinnerProtocolType);
         edtHostAddress = rootView.findViewById(R.id.edtHostAddress);
         edtHostPort = rootView.findViewById(R.id.edtHostPort);
         edtTerminalId = rootView.findViewById(R.id.edtTerminalId);
@@ -245,8 +247,9 @@ public class Fragment_page_admin_atm extends Fragment {
         switchAutoReboot = rootView.findViewById(R.id.switchAutoReboot);
         btnApplyKiosk = rootView.findViewById(R.id.btnApplyKiosk);
 
-        // Setup processor spinner
+        // Setup processor and protocol spinners
         setupProcessorSpinner();
+        setupProtocolSpinner();
     }
 
     private void setupProcessorSpinner() {
@@ -266,6 +269,27 @@ public class Fragment_page_admin_atm extends Fragment {
         );
         adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
         spinnerProcessorType.setAdapter(adapter);
+    }
+
+    private void setupProtocolSpinner() {
+        List<String> protocolList = new ArrayList<>();
+        protocolList.add("Hyosung STD1");
+        protocolList.add("Triton Standard");
+
+        ArrayAdapter<String> adapter = new ArrayAdapter<>(
+            getContext(),
+            android.R.layout.simple_spinner_item,
+            protocolList
+        );
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        spinnerProtocolType.setAdapter(adapter);
+
+        // Set current selection based on GlobalPara
+        if ("TRITON".equals(GlobalPara.atmProtocolType)) {
+            spinnerProtocolType.setSelection(1);
+        } else {
+            spinnerProtocolType.setSelection(0);
+        }
     }
 
     private void setupListeners() {
@@ -725,7 +749,11 @@ public class Fragment_page_admin_atm extends Fragment {
             // Update processor type based on spinner selection
             GlobalPara.atmProcessorType = getProcessorTypeFromSpinner(spinnerProcessorType.getSelectedItemPosition());
 
+            // Update protocol type based on spinner selection
+            GlobalPara.atmProtocolType = spinnerProtocolType.getSelectedItemPosition() == 1 ? "TRITON" : "HYOSUNG";
+
             Log.d(TAG, "GlobalPara updated - Processor: " + GlobalPara.atmProcessorType +
+                      ", Protocol: " + GlobalPara.atmProtocolType +
                       ", Host: " + GlobalPara.atmHostAddress + ":" + GlobalPara.atmHostPort +
                       ", TLS: " + GlobalPara.atmUseTls);
         } catch (Exception e) {

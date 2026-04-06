@@ -68,7 +68,15 @@ public class AtmHostService {
         }
 
         try {
-            Log.d(TAG, "Initializing ATM Host Service for " + processorConfig.getName());
+            // Apply protocol type from GlobalPara setting
+            if ("TRITON".equals(castech.emvtxn.GlobalPara.atmProtocolType)) {
+                processorConfig.setProtocolType(ProcessorConfig.ProtocolType.TRITON_STANDARD);
+            } else {
+                processorConfig.setProtocolType(ProcessorConfig.ProtocolType.HYOSUNG_STD1);
+            }
+
+            Log.d(TAG, "Initializing ATM Host Service for " + processorConfig.getName() +
+                      " (protocol: " + processorConfig.getProtocolType() + ")");
 
             this.config = processorConfig;
 

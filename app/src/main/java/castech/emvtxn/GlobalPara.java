@@ -163,6 +163,9 @@ public class GlobalPara
 	// Processor selection: "DNS", "SWITCH_COMMERCE", "EFX", "CARDTRONICS", etc.
 	public static String atmProcessorType = "DNS";
 
+	// Protocol selection: "HYOSUNG" or "TRITON"
+	public static String atmProtocolType = "HYOSUNG";  // Default to Hyosung for MUX compatibility
+
 	// Host connection settings
 	public static String atmHostAddress = "";  // e.g., "atm.processor.com"
 	public static int atmHostPort = 8002;      // Default DNS port
