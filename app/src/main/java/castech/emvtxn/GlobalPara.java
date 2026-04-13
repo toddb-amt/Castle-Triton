@@ -54,8 +54,11 @@ public class GlobalPara
 	// Online PIN key location - Use C000/0000 where our DUKPT key is injected
 	// Castle support confirmed: modify to match your injected key location
 	// Same key used for both card data encryption and online PIN (like their sample)
-	public static final int onlinePinKeySet = 0x0000C000;
-	public static final int onlinePinKeyIndex = 0x00000000;
+	// PIN key location — set by AtmHostService based on protocol:
+	// Triton: CFFF/0000 (TMK/Master Key)
+	// Hyosung: C000/0000 (DUKPT)
+	public static int onlinePinKeySet = 0x0000C000;
+	public static int onlinePinKeyIndex = 0x00000000;
 
 	public static String tag = "TAG";
 	public static ClessLed clLED;
@@ -164,6 +167,8 @@ public class GlobalPara
 	public static String atmProcessorType = "DNS";
 
 	// Protocol selection: "HYOSUNG" or "TRITON"
+	// ENQ handshake: true = send ENQ before request (Triton spec), false = skip ENQ (some MUX/processors)
+	public static boolean atmTritonEnqEnabled = false;  // Default OFF — MUX may not support ENQ
 	public static String atmProtocolType = "HYOSUNG";  // Default to Hyosung for MUX compatibility
 
 	// Host connection settings

@@ -1,0 +1,3 @@
+# Template for local.properties
+# Copy this to local.properties and update the sdk.dir path
+sdk.dir=/Users/YOUR_USERNAME/Library/Android/sdk

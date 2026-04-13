@@ -638,6 +638,14 @@ public class Fragment_page_admin_atm extends Fragment {
             if (processorIndex < spinnerProcessorType.getCount()) {
                 spinnerProcessorType.setSelection(processorIndex);
             }
+            // Load protocol selection
+            int protocolIndex = prefs.getInt("protocol_index", 0);
+            if (protocolIndex < spinnerProtocolType.getCount()) {
+                spinnerProtocolType.setSelection(protocolIndex);
+            }
+            // Apply protocol type to GlobalPara immediately
+            GlobalPara.atmProtocolType = protocolIndex == 1 ? "TRITON" : "HYOSUNG";
+
             edtHostAddress.setText(prefs.getString("host_address", ""));
             edtHostPort.setText(prefs.getString("host_port", "9057"));
             edtTerminalId.setText(prefs.getString("terminal_id", ""));
@@ -647,17 +655,29 @@ public class Fragment_page_admin_atm extends Fragment {
             chkUseTls.setChecked(prefs.getBoolean("use_tls", true));
         }
 
-        // DUKPT PIN encryption settings
-        // Key injected at C000/0000 per Castle Key Injection Tool documentation
-        GlobalPara.atmDukptEnabled = prefs.getBoolean("dukpt_enabled", true);  // Default ENABLED
+        // PIN encryption settings — key location depends on protocol
         GlobalPara.atmPinBlockFormat = prefs.getString("pin_block_format", "FORMAT0");
-        GlobalPara.atmDukptKeySet = prefs.getInt("dukpt_key_set", 0x0000C000);   // C000 - Castle default
-        GlobalPara.atmDukptKeyIndex = prefs.getInt("dukpt_key_index", 0x00000000); // 0000 - Castle default
 
-        Log.d(TAG, "Loaded DUKPT settings: enabled=" + GlobalPara.atmDukptEnabled +
-                   ", format=" + GlobalPara.atmPinBlockFormat +
-                   ", keySet=" + String.format("0x%04X", GlobalPara.atmDukptKeySet) +
-                   ", keyIndex=" + String.format("0x%04X", GlobalPara.atmDukptKeyIndex));
+        // Apply key location based on protocol type
+        if ("TRITON".equals(GlobalPara.atmProtocolType)) {
+            // Triton: Master/Session key at CFFF/0000
+            GlobalPara.atmDukptEnabled = false;
+            GlobalPara.atmDukptKeySet = 0x0000CFFF;
+            GlobalPara.atmDukptKeyIndex = 0x00000000;
+            GlobalPara.onlinePinKeySet = 0x0000CFFF;
+            GlobalPara.onlinePinKeyIndex = 0x00000000;
+            Log.d(TAG, "Loaded PIN settings (TRITON): key=CFFF/0000 (TMK)");
+        } else {
+            // Hyosung: DUKPT at C000/0000
+            GlobalPara.atmDukptEnabled = prefs.getBoolean("dukpt_enabled", true);
+            GlobalPara.atmDukptKeySet = prefs.getInt("dukpt_key_set", 0x0000C000);
+            GlobalPara.atmDukptKeyIndex = prefs.getInt("dukpt_key_index", 0x00000000);
+            GlobalPara.onlinePinKeySet = GlobalPara.atmDukptKeySet;
+            GlobalPara.onlinePinKeyIndex = GlobalPara.atmDukptKeyIndex;
+            Log.d(TAG, "Loaded PIN settings (HYOSUNG): key=" +
+                       String.format("0x%04X/0x%04X", GlobalPara.atmDukptKeySet, GlobalPara.atmDukptKeyIndex) +
+                       " (DUKPT)");
+        }
 
         // Also update GlobalPara
         updateGlobalPara();
@@ -679,9 +699,10 @@ public class Fragment_page_admin_atm extends Fragment {
 
             // Host settings
             editor.putInt("processor_index", spinnerProcessorType.getSelectedItemPosition());
-            editor.putString("host_address", edtHostAddress.getText().toString());
-            editor.putString("host_port", edtHostPort.getText().toString());
-            editor.putString("terminal_id", edtTerminalId.getText().toString());
+            editor.putInt("protocol_index", spinnerProtocolType.getSelectedItemPosition());
+            editor.putString("host_address", edtHostAddress.getText().toString().trim());
+            editor.putString("host_port", edtHostPort.getText().toString().trim());
+            editor.putString("terminal_id", edtTerminalId.getText().toString().trim());
             if (chkUseTls != null) {
                 editor.putBoolean("use_tls", chkUseTls.isChecked());
             }
@@ -739,9 +760,9 @@ public class Fragment_page_admin_atm extends Fragment {
             GlobalPara.atmMaxAmount = Double.parseDouble(edtMaxAmount.getText().toString());
 
             // Update host settings
-            GlobalPara.atmHostAddress = edtHostAddress.getText().toString();
-            GlobalPara.atmHostPort = Integer.parseInt(edtHostPort.getText().toString());
-            GlobalPara.atmTerminalId = edtTerminalId.getText().toString();
+            GlobalPara.atmHostAddress = edtHostAddress.getText().toString().trim();
+            GlobalPara.atmHostPort = Integer.parseInt(edtHostPort.getText().toString().trim());
+            GlobalPara.atmTerminalId = edtTerminalId.getText().toString().trim();
             if (chkUseTls != null) {
                 GlobalPara.atmUseTls = chkUseTls.isChecked();
             }
@@ -1146,13 +1167,10 @@ public class Fragment_page_admin_atm extends Fragment {
                         return;
                     }
 
+                    // Always reinitialize to pick up current protocol/host settings
+                    updateStatus("Initializing host service...");
+                    mainActivity.initializeAtmHostService();
                     AtmHostService hostService = mainActivity.getAtmHostService();
-
-                    if (hostService == null) {
-                        updateStatus("Initializing host service...");
-                        mainActivity.initializeAtmHostService();
-                        hostService = mainActivity.getAtmHostService();
-                    }
 
                     if (hostService == null) {
                         showError("Host service not configured");

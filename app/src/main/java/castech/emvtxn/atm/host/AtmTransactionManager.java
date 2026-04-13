@@ -277,8 +277,21 @@ public class AtmTransactionManager {
                     // Mark that we're sending to host - if we fail after this, may need reversal
                     requestSentToHost = true;
 
-                    // Send to host
-                    TransactionResponse response = connection.sendTransaction(request);
+                    // Send to host — use protocol-appropriate path
+                    TransactionResponse response;
+                    AtmProtocol protocol = connection.getProtocol();
+                    if (protocol != null && config.isTritonProtocol()) {
+                        Log.d(TAG, "Using Triton transaction request");
+                        connection.ensureConnected();
+                        byte[] requestMsg = protocol.buildTransactionRequest(request);
+                        byte[] responseMsg = connection.sendAndReceiveRaw(requestMsg);
+                        connection.completeTritonHandshake();
+                        response = protocol.parseTransactionResponse(responseMsg);
+                        connection.disconnect();
+                    } else {
+                        Log.d(TAG, "Using Hyosung transaction request");
+                        response = connection.sendTransaction(request);
+                    }
                     currentResponse = response;
 
                     // Process response
@@ -411,7 +424,21 @@ public class AtmTransactionManager {
                     currentRequest = request;
                     notifyProgress("Connecting to host...");
 
-                    TransactionResponse response = connection.sendTransaction(request);
+                    // Send to host — use protocol-appropriate path
+                    TransactionResponse response;
+                    AtmProtocol protocol = connection.getProtocol();
+                    if (protocol != null && config.isTritonProtocol()) {
+                        Log.d(TAG, "Using Triton balance inquiry request");
+                        connection.ensureConnected();
+                        byte[] requestMsg = protocol.buildTransactionRequest(request);
+                        byte[] responseMsg = connection.sendAndReceiveRaw(requestMsg);
+                        connection.completeTritonHandshake();
+                        response = protocol.parseTransactionResponse(responseMsg);
+                        connection.disconnect();
+                    } else {
+                        Log.d(TAG, "Using Hyosung balance inquiry request");
+                        response = connection.sendTransaction(request);
+                    }
                     currentResponse = response;
 
                     processBalanceInquiryResponse(response);
@@ -448,24 +475,44 @@ public class AtmTransactionManager {
             @Override
             public void run() {
                 try {
-                    ConfigRequest request = new ConfigRequest();
-                    request.setTerminalId(config.getTerminalId());
-                    request.setRoutingId(config.getRoutingId());
-                    request.setConfigType(configType);
+                    AtmProtocol protocol = connection.getProtocol();
 
-                    ConfigResponse response = connection.sendConfigRequest(request);
+                    if (protocol != null && config.isTritonProtocol()) {
+                        // Triton: Config Download (code 60)
+                        Log.d(TAG, "Using Triton config download (code 60)");
+                        connection.ensureConnected();
+                        byte[] requestMsg = protocol.buildConfigDownloadRequest(config.getTerminalId());
+                        byte[] responseMsg = connection.sendAndReceiveRaw(requestMsg);
+                        ConfigResponse response = protocol.parseConfigResponse(responseMsg);
 
-                    // Disconnect after config - server may close after handshake
-                    // This forces fresh connection for subsequent transactions
-                    connection.disconnect();
-                    Log.d(TAG, "Disconnected after config request (server closes after handshake)");
+                        connection.disconnect();
+                        Log.d(TAG, "Disconnected after Triton config request");
 
-                    // Load the working key
-                    if (keyManager.loadWorkingKey(response)) {
-                        notifyProgress("Working key loaded successfully");
-                        notifyConfigComplete(response);
+                        if (response != null && keyManager.loadWorkingKey(response)) {
+                            notifyProgress("Working key loaded successfully");
+                            notifyConfigComplete(response);
+                        } else {
+                            notifyError("Failed to load working key from Triton config");
+                        }
                     } else {
-                        notifyError("Failed to load working key");
+                        // Hyosung: Config Request (type 88)
+                        Log.d(TAG, "Using Hyosung config request (type 88)");
+                        ConfigRequest request = new ConfigRequest();
+                        request.setTerminalId(config.getTerminalId());
+                        request.setRoutingId(config.getRoutingId());
+                        request.setConfigType(configType);
+
+                        ConfigResponse response = connection.sendConfigRequest(request);
+
+                        connection.disconnect();
+                        Log.d(TAG, "Disconnected after Hyosung config request");
+
+                        if (keyManager.loadWorkingKey(response)) {
+                            notifyProgress("Working key loaded successfully");
+                            notifyConfigComplete(response);
+                        } else {
+                            notifyError("Failed to load working key");
+                        }
                     }
 
                 } catch (AtmHostConnection.ConnectionException e) {
@@ -492,7 +539,15 @@ public class AtmTransactionManager {
      *
      * @throws Exception if key download fails after all retries
      */
+    private final Object keyDownloadLock = new Object();
+
     public void downloadKeysSync() throws Exception {
+        synchronized (keyDownloadLock) {
+            downloadKeysSyncInternal();
+        }
+    }
+
+    private void downloadKeysSyncInternal() throws Exception {
         Log.d(TAG, "Downloading keys synchronously...");
 
         int maxRetries = 3;
@@ -515,12 +570,26 @@ public class AtmTransactionManager {
                     connection.connect();
                 }
 
-                ConfigRequest request = new ConfigRequest();
-                request.setTerminalId(config.getTerminalId());
-                request.setRoutingId(config.getRoutingId());
-                request.setConfigType(HyosungProtocol.CONFIG_KEY_ONLY);
+                ConfigResponse response;
+                AtmProtocol protocol = connection.getProtocol();
 
-                ConfigResponse response = connection.sendConfigRequest(request);
+                if (protocol != null && config.isTritonProtocol()) {
+                    // Triton: Config Download (code 60)
+                    Log.d(TAG, "Using Triton config download (code 60) - sync");
+                    byte[] requestMsg = protocol.buildConfigDownloadRequest(config.getTerminalId());
+                    byte[] responseMsg = connection.sendAndReceiveRaw(requestMsg);
+                    // Complete Triton handshake: send ACK, wait for EOT
+                    connection.completeTritonHandshake();
+                    response = protocol.parseConfigResponse(responseMsg);
+                } else {
+                    // Hyosung: Config Request (type 88)
+                    Log.d(TAG, "Using Hyosung config request (type 88) - sync");
+                    ConfigRequest request = new ConfigRequest();
+                    request.setTerminalId(config.getTerminalId());
+                    request.setRoutingId(config.getRoutingId());
+                    request.setConfigType(HyosungProtocol.CONFIG_KEY_ONLY);
+                    response = connection.sendConfigRequest(request);
+                }
 
                 // Disconnect after config - server may close after handshake
                 connection.disconnect();
@@ -815,8 +884,20 @@ public class AtmTransactionManager {
                     Log.d(TAG, "Connecting for host totals request...");
                     connection.connect();
 
-                    // Send host totals request using connection's method
-                    HostTotalsResponse response = connection.sendHostTotalsRequest(reset);
+                    // Send host totals request — protocol-appropriate path
+                    HostTotalsResponse response;
+                    AtmProtocol protocol = connection.getProtocol();
+                    if (protocol != null && config.isTritonProtocol()) {
+                        Log.d(TAG, "Using Triton host totals request");
+                        byte[] requestMsg = protocol.buildHostTotalsRequest(
+                            config.getTerminalId(), 0, reset, 0, 0, 0, 0);
+                        byte[] responseMsg = connection.sendAndReceiveRaw(requestMsg);
+                        connection.completeTritonHandshake();
+                        response = protocol.parseHostTotalsResponse(responseMsg);
+                    } else {
+                        Log.d(TAG, "Using Hyosung host totals request");
+                        response = connection.sendHostTotalsRequest(reset);
+                    }
                     Log.d(TAG, "Host totals response: " + response);
 
                     if (callback != null) {

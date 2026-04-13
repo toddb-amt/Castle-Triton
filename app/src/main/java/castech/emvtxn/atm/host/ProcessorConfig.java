@@ -214,13 +214,9 @@ public class ProcessorConfig {
      */
     public AtmProtocol createProtocol() {
         if (protocolType == ProtocolType.TRITON_STANDARD) {
-            return new castech.emvtxn.atm.host.triton.TritonProtocolImpl(
-                communicationHeader, // Use as Communications Identifier
-                castech.emvtxn.atm.host.triton.TritonProtocol.TERMINAL_TYPE_TRITON,
-                "00",  // Software version
-                castech.emvtxn.atm.host.triton.TritonProtocol.ENCRYPTION_TRIPLE_DES,
-                communicationHeader != null && !communicationHeader.isEmpty()
-            );
+            // Triton: disable optional header group — send minimal messages
+            // (Terminal ID + Transaction Code only)
+            return new castech.emvtxn.atm.host.triton.TritonProtocolImpl();
         } else {
             // Legacy Hyosung protocol — return wrapper (to be implemented)
             return null; // TODO: HyosungProtocolImpl

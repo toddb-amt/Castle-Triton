@@ -150,17 +150,23 @@ public class TritonMessageBuilder {
             addField(baos, TritonProtocol.zeroPad(request.getSurchargeCents(),
                     TritonProtocol.AMOUNT_LENGTH));
 
-            // PIN Block (16 hex chars)
+            // PIN Block (16 hex chars) — Field 12
             String pinBlock = nullToEmpty(request.getPinBlock());
             if (pinBlock.length() < TritonProtocol.PIN_BLOCK_LENGTH) {
                 pinBlock = TritonProtocol.zeroPad(pinBlock, TritonProtocol.PIN_BLOCK_LENGTH);
             }
             addField(baos, pinBlock);
 
-            // Status Monitoring (miscellaneous field, no FID prefix)
+            // Misc 1 (Field 13) — empty placeholder (required for field positioning)
+            addField(baos, "");
+
+            // Misc 2 (Field 14) — empty placeholder (required for field positioning)
+            addField(baos, "");
+
+            // Status Monitoring (Field 15)
             addField(baos, nullToEmpty(request.getStatusMonitoring()));
 
-            // Miscellaneous FID fields
+            // Miscellaneous X fields (Field 16+) — FID-tagged data
 
             // DUKPT KSN (FID 'S') - if available
             String pinKsn = request.getPinKsn();
@@ -175,7 +181,7 @@ public class TritonMessageBuilder {
                 }
             }
 
-            // EMV tagged data (FID "ud") - if available
+            // EMV tagged data (FID "ud") — Field 16+ (after Status Monitoring)
             String emvData = request.getEmvData();
             if (emvData != null && !emvData.isEmpty()) {
                 addMiscField(baos, TritonProtocol.FID_EMV_TAGGED_DATA, emvData);

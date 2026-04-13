@@ -195,6 +195,9 @@ public class MainActivity extends AppCompatActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
+        // Keep screen on while plugged in (ATM should never sleep)
+        getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+
         // Detect emulator FIRST before any SDK initialization
         isRunningOnEmulator = checkIsEmulator();
         Log.d(TAG, "Running on emulator: " + isRunningOnEmulator);
@@ -5139,11 +5142,15 @@ public class MainActivity extends AppCompatActivity {
         GlobalPara.atmEncryptedPinBlock = "";
         GlobalPara.atmDukptKsn = "";
 
-        // Use DUKPT key at C000/0000 (where key is injected)
-        int keySet = GlobalPara.atmDukptKeySet;   // 0xC000
-        int keyIndex = GlobalPara.atmDukptKeyIndex; // 0x0000
+        // Key location depends on protocol:
+        // Triton: CFFF/0000 (TMK/Master Key) — uses CtKMS2SymmetryKey
+        // Hyosung: C000/0000 (DUKPT) — uses CtKMS2Dukpt
+        boolean useTritonKeys = "TRITON".equals(GlobalPara.atmProtocolType);
+        int keySet = GlobalPara.atmDukptKeySet;
+        int keyIndex = GlobalPara.atmDukptKeyIndex;
 
-        Log.d(TAG, ">>> MVP: Key location: " + String.format("0x%04X/0x%04X", keySet, keyIndex));
+        Log.d(TAG, ">>> MVP: Key location: " + String.format("0x%04X/0x%04X", keySet, keyIndex) +
+              " (protocol=" + GlobalPara.atmProtocolType + ", useTriton=" + useTritonKeys + ")");
 
         // Step 1: Show key attributes (Castle MVP does this first)
         showKeyAttributes(keySet, keyIndex);
@@ -5251,50 +5258,99 @@ public class MainActivity extends AppCompatActivity {
                 }
             };
 
-            // Create DUKPT key object
-            Log.d(TAG, ">>> MVP: Creating CtKMS2Dukpt...");
-            CtKMS2Dukpt dukptKey = new CtKMS2Dukpt();
-
-            // Step-by-step Castle MVP flow:
-            // 1. selectKey
-            Log.d(TAG, ">>> MVP: selectKey(" + String.format("0x%04X, 0x%04X", keySet, keyIndex) + ")");
-            dukptKey.selectKey(keySet, keyIndex);
-
-            // 2. setCipherMethod (ECB for PIN)
-            Log.d(TAG, ">>> MVP: setCipherMethod(PIN_CIPHER_METHOD_ECB)");
-            dukptKey.setCipherMethod(CtKMS2SymmetryKey.PIN_CIPHER_METHOD_ECB);
-
-            // 3. setPinInfo - Castle MVP uses 3 params: (pinBlockType, maxDigit, minDigit)
-            // PIN_BLOCKTYPE_ANSI_X9_8_ISO_0 = 0x00 = Format 0 (ISO-0)
-            byte pinBlockType = CtKMS2SymmetryKey.PIN_BLOCKTYPE_ANSI_X9_8_ISO_0;
+            // PIN encryption setup — common parameters
+            byte pinBlockType = 0x00; // PIN_BLOCKTYPE_ANSI_X9_8_ISO_0 = Format 0
             byte maxDigit = 12;
             byte minDigit = 4;
-            Log.d(TAG, ">>> MVP: setPinInfo(0x" + String.format("%02X", pinBlockType) + ", " + maxDigit + ", " + minDigit + ")");
-            dukptKey.setPinInfo(pinBlockType, maxDigit, minDigit);
+            byte nullPinAllowed = 0;
+            int timeout = 60;
+            int firstTimeout = 30;
 
-            // 4. setPinControl - (nullPinAllowed, timeout, firstTimeout)
-            byte nullPinAllowed = 0;  // Don't allow null PIN
-            int timeout = 60;         // 60 seconds between keys
-            int firstTimeout = 30;    // 30 seconds for first key
-            Log.d(TAG, ">>> MVP: setPinControl(" + nullPinAllowed + ", " + timeout + ", " + firstTimeout + ")");
-            dukptKey.setPinControl(nullPinAllowed, timeout, firstTimeout);
+            Log.d(TAG, ">>> MVP: selectKey(" + String.format("0x%04X, 0x%04X", keySet, keyIndex) + ")");
 
-            // 5. setCallback
-            Log.d(TAG, ">>> MVP: setCallback(CtKMS2Callback)");
-            dukptKey.setCallback(callback);
+            if (useTritonKeys) {
+                // Triton Master/Session: Software PIN pad + working key encryption
+                // No hardware KMS2 needed — uses downloaded working key
+                Log.d(TAG, ">>> MVP: Triton Master/Session PIN encryption");
+                Log.d(TAG, ">>> MVP: Using software PIN pad + CastleKeyManager working key");
 
-            // 6. setPAN - Castle MVP uses setPAN(), not setInputData()
-            Log.d(TAG, ">>> MVP: setPAN(panBytes[" + panBytes.length + "])");
-            dukptKey.setPAN(panBytes);
+                // Show software PIN pad and collect PIN
+                runOnUiThread(() -> ui_ShowLog("Enter PIN..."));
+                String pin = collectPinForCallback();
+
+                dismissAtmPinPadDialog();
+
+                if (pin == null || pin.isEmpty()) {
+                    Log.w(TAG, ">>> MVP: Triton PIN entry cancelled or empty");
+                    atmPinEntrySuccess = false;
+                    atmPinEntryCancelled = true;
+                    atmPinEntryComplete = true;
+                    return false;
+                }
+
+                if (pin.length() < 4) {
+                    Log.w(TAG, ">>> MVP: Triton PIN too short: " + pin.length());
+                    atmPinEntrySuccess = false;
+                    atmPinEntryComplete = true;
+                    return false;
+                }
+
+                // Get clear PAN for Format 0 PIN block
+                String clearPan = GlobalPara.atmClearPan;
+                if (clearPan == null || clearPan.isEmpty()) {
+                    clearPan = GlobalPara.asciiPAN;
+                }
+                Log.d(TAG, ">>> MVP: Triton PAN for PIN block: " + castech.emvtxn.util.PanMasker.maskPan(clearPan));
+
+                // Create Format 0 (ISO 9564-1) clear PIN block
+                String clearPinBlock = castech.emvtxn.atm.host.PinBlockFormatter.createFormat0PinBlock(pin, clearPan);
+                Log.d(TAG, ">>> MVP: Triton clear PIN block created (Format 0)");
+
+                // Encrypt with downloaded working key via CastleKeyManager
+                if (atmHostService == null || atmHostService.getKeyManager() == null) {
+                    Log.e(TAG, ">>> MVP: Triton - no key manager available");
+                    atmPinEntrySuccess = false;
+                    atmPinEntryComplete = true;
+                    return false;
+                }
+
+                String encryptedPinHex = atmHostService.getKeyManager().encryptPinBlock(clearPinBlock);
+
+                if (encryptedPinHex != null && encryptedPinHex.length() == 16) {
+                    GlobalPara.atmEncryptedPinBlock = encryptedPinHex;
+                    GlobalPara.atmDukptKsn = ""; // No KSN for Master/Session
+                    Log.d(TAG, ">>> MVP: Triton PIN block encrypted successfully with working key");
+                    atmPinEntrySuccess = true;
+                    ui_ShowMsg("PIN Accepted");
+                    MyUtility.sleep(500);
+                } else {
+                    Log.e(TAG, ">>> MVP: Triton PIN encryption failed - no working key loaded?");
+                    atmPinEntrySuccess = false;
+                }
+
+                atmPinEntryComplete = true;
+                return atmPinEntrySuccess;
+
+            } else {
+                // Hyosung: Use CtKMS2Dukpt with DUKPT at C000/0000
+                Log.d(TAG, ">>> MVP: Creating CtKMS2Dukpt (Hyosung/DUKPT)...");
+                CtKMS2Dukpt dukptKey = new CtKMS2Dukpt();
+                dukptKey.selectKey(keySet, keyIndex);
+                dukptKey.setCipherMethod(CtKMS2Dukpt.PIN_CIPHER_METHOD_ECB);
+                dukptKey.setPinInfo(pinBlockType, maxDigit, minDigit);
+                dukptKey.setPinControl(nullPinAllowed, timeout, firstTimeout);
+                dukptKey.setCallback(callback);
+                dukptKey.setPAN(panBytes);
 
             // Update UI
             runOnUiThread(() -> ui_ShowLog("Enter PIN on keypad..."));
 
             // 7. startVirtualPin - blocking call
+            runOnUiThread(() -> ui_ShowLog("Enter PIN on keypad..."));
             Log.d(TAG, ">>> MVP: startVirtualPin() - waiting for PIN entry...");
             dukptKey.startVirtualPin(virtualPinPad);
 
-            // 8. getKSN - MUST be called before getOutputData (per Castle support)
+            // 8. getKSN
             Log.d(TAG, ">>> MVP: getKSN()");
             byte[] ksn = dukptKey.getKSN();
 
@@ -5320,9 +5376,9 @@ public class MainActivity extends AppCompatActivity {
                 Log.e(TAG, ">>> MVP: KSN is null or empty");
             }
 
-            // Validate
+            // Validate DUKPT result
             if (GlobalPara.atmEncryptedPinBlock.length() == 16 && GlobalPara.atmDukptKsn.length() >= 16) {
-                Log.d(TAG, ">>> MVP: PIN entry SUCCESS");
+                Log.d(TAG, ">>> MVP: PIN entry SUCCESS (DUKPT)");
                 atmPinEntrySuccess = true;
                 ui_ShowMsg("PIN Accepted");
                 MyUtility.sleep(500);
@@ -5334,6 +5390,7 @@ public class MainActivity extends AppCompatActivity {
                 ui_ShowMsg("PIN Entry Failed");
                 return false;
             }
+            } // end else (Hyosung/DUKPT path)
 
         } catch (CTOS.CtKMS2Exception e) {
             Log.e(TAG, ">>> MVP: KMS2 Exception: " + String.format("0x%08X", e.getErrorCode()));

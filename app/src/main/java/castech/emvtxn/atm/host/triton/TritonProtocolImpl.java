@@ -170,12 +170,12 @@ public class TritonProtocolImpl implements AtmProtocol {
     }
 
     /**
-     * Triton Standard REQUIRES ENQ/ACK handshake before every request.
-     * The flow is: Terminal sends ENQ → Host responds ACK → Terminal sends message.
+     * Triton Standard normally requires ENQ/ACK handshake before every request.
+     * Controlled by GlobalPara.atmTritonEnqEnabled — some MUX/processors skip ENQ.
      */
     @Override
     public boolean requiresEnqHandshake() {
-        return true;
+        return castech.emvtxn.GlobalPara.atmTritonEnqEnabled;
     }
 
     @Override

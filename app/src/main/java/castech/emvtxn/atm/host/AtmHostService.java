@@ -39,6 +39,7 @@ public class AtmHostService {
     // State
     private boolean initialized;
     private boolean processingReversals;
+    private volatile boolean keyDownloadInProgress;
 
     // Listener
     private AtmEventListener listener;
@@ -71,8 +72,22 @@ public class AtmHostService {
             // Apply protocol type from GlobalPara setting
             if ("TRITON".equals(castech.emvtxn.GlobalPara.atmProtocolType)) {
                 processorConfig.setProtocolType(ProcessorConfig.ProtocolType.TRITON_STANDARD);
+                // Triton uses Master/Session keys — TMK at CFFF/0000
+                castech.emvtxn.GlobalPara.atmDukptEnabled = false;
+                castech.emvtxn.GlobalPara.atmDukptKeySet = 0x0000CFFF;
+                castech.emvtxn.GlobalPara.atmDukptKeyIndex = 0x00000000;
+                castech.emvtxn.GlobalPara.onlinePinKeySet = 0x0000CFFF;
+                castech.emvtxn.GlobalPara.onlinePinKeyIndex = 0x00000000;
+                Log.d(TAG, "Triton mode: PIN key set to CFFF/0000 (TMK)");
             } else {
                 processorConfig.setProtocolType(ProcessorConfig.ProtocolType.HYOSUNG_STD1);
+                // Hyosung uses DUKPT — key at C000/0000
+                castech.emvtxn.GlobalPara.atmDukptEnabled = true;
+                castech.emvtxn.GlobalPara.atmDukptKeySet = 0x0000C000;
+                castech.emvtxn.GlobalPara.atmDukptKeyIndex = 0x00000000;
+                castech.emvtxn.GlobalPara.onlinePinKeySet = 0x0000C000;
+                castech.emvtxn.GlobalPara.onlinePinKeyIndex = 0x00000000;
+                Log.d(TAG, "Hyosung mode: PIN key set to C000/0000 (DUKPT)");
             }
 
             Log.d(TAG, "Initializing ATM Host Service for " + processorConfig.getName() +
@@ -407,8 +422,35 @@ public class AtmHostService {
             Log.d(TAG, "Current working key cleared");
         }
 
-        // Request new key from host
-        transactionManager.downloadKeys();
+        // Request new key from host — single sync path, guarded against concurrent calls
+        synchronized (this) {
+            if (keyDownloadInProgress) {
+                Log.w(TAG, "Key download already in progress — skipping duplicate request");
+                return;
+            }
+            keyDownloadInProgress = true;
+        }
+
+        new Thread(() -> {
+            try {
+                transactionManager.downloadKeysSync();
+                if (hasWorkingKeys()) {
+                    Log.d(TAG, "Working key downloaded successfully");
+                    if (listener != null) {
+                        listener.onKeysLoaded("OK");
+                    }
+                } else {
+                    notifyError("Failed to download working key");
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "Key download error: " + e.getMessage());
+                notifyError("Key download failed: " + e.getMessage());
+            } finally {
+                synchronized (AtmHostService.this) {
+                    keyDownloadInProgress = false;
+                }
+            }
+        }, "KeyDownload").start();
     }
 
     // =========================================================================

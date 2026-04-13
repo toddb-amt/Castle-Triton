@@ -450,6 +450,13 @@ public class AtmHostConnection {
      * @return The response message
      * @throws ConnectionException if communication fails
      */
+    /**
+     * Sends raw bytes and receives response. Public for protocol-agnostic usage.
+     */
+    public byte[] sendAndReceiveRaw(byte[] message) throws ConnectionException {
+        return sendAndReceive(message);
+    }
+
     private byte[] sendAndReceive(byte[] message) throws ConnectionException {
         try {
             // Triton: ENQ/ACK handshake before sending request
@@ -510,6 +517,11 @@ public class AtmHostConnection {
         if (first == HyosungProtocol.ACK || first == HyosungProtocol.NAK ||
             first == HyosungProtocol.EOT || first == HyosungProtocol.ENQ) {
             return new byte[] { first };
+        }
+
+        // Triton always uses STX/ETX framing regardless of processor's Hyosung setting
+        if (config.isTritonProtocol()) {
+            return readStandardFramedMessage(first);
         }
 
         switch (config.getFramingType()) {
@@ -695,6 +707,48 @@ public class AtmHostConnection {
     }
 
     /**
+     * Completes Triton handshake after receiving response: send ACK, wait for EOT.
+     * Call this after sendAndReceiveRaw() for Triton protocol messages.
+     */
+    public void completeTritonHandshake() throws ConnectionException {
+        try {
+            OutputStream out = outputStream;
+            if (out == null) {
+                log("Triton handshake: output stream null, skipping");
+                return;
+            }
+
+            // Send ACK
+            out.write(new byte[] { 0x06 }); // ACK
+            out.flush();
+            log("Triton handshake: Sent ACK");
+
+            // Wait for EOT (with short timeout)
+            int savedTimeout = socket.getSoTimeout();
+            socket.setSoTimeout(config.getEotTimeout());
+            try {
+                InputStream in = inputStream;
+                if (in != null) {
+                    int eot = in.read();
+                    if (eot == 0x04) {
+                        log("Triton handshake: Received EOT - complete");
+                    } else if (eot == -1) {
+                        log("Triton handshake: Connection closed (no EOT)");
+                    } else {
+                        log("Triton handshake: Expected EOT, got 0x" + String.format("%02X", eot));
+                    }
+                }
+            } catch (SocketTimeoutException e) {
+                log("Triton handshake: EOT timeout (non-critical)");
+            } finally {
+                socket.setSoTimeout(savedTimeout);
+            }
+        } catch (IOException e) {
+            log("Triton handshake error: " + e.getMessage());
+        }
+    }
+
+    /**
      * Sends NAK to request retransmission.
      */
     public void sendNak() throws ConnectionException {
@@ -710,7 +764,7 @@ public class AtmHostConnection {
     /**
      * Ensures the connection is active.
      */
-    private void ensureConnected() throws ConnectionException {
+    public void ensureConnected() throws ConnectionException {
         if (!isConnected()) {
             connect();
         }

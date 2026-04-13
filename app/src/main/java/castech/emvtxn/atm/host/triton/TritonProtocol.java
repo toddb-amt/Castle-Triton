@@ -26,20 +26,20 @@ public final class TritonProtocol {
     // Transaction Codes (Terminal → Host)
     // =========================================================================
 
-    // Withdrawal
-    public static final String TXN_WITHDRAWAL_CHECKING   = "00";
+    // Withdrawal (Triton STD 3 codes — MUX isTritonCashWithdrawal: 11,12,15,61,62,65)
+    public static final String TXN_WITHDRAWAL_CHECKING   = "11";
     public static final String TXN_PIN_CHANGE            = "01";
-    public static final String TXN_WITHDRAWAL_SAVINGS    = "10";
-    public static final String TXN_WITHDRAWAL_CREDIT     = "20";
+    public static final String TXN_WITHDRAWAL_SAVINGS    = "12";
+    public static final String TXN_WITHDRAWAL_CREDIT     = "15";
 
-    // Balance Inquiry
-    public static final String TXN_BALANCE_CHECKING      = "30";
-    public static final String TXN_BALANCE_SAVINGS       = "31";
-    public static final String TXN_BALANCE_CREDIT        = "32";
+    // Balance Inquiry (Triton STD 3 codes — MUX isTritonBalanceInquiry: 31,32,35,81,82,85)
+    public static final String TXN_BALANCE_CHECKING      = "31";
+    public static final String TXN_BALANCE_SAVINGS       = "32";
+    public static final String TXN_BALANCE_CREDIT        = "35";
 
-    // Transfer
-    public static final String TXN_TRANSFER_CHK_TO_SAV   = "35";
-    public static final String TXN_TRANSFER_SAV_TO_CHK   = "36";
+    // Transfer (Triton STD 3 codes — MUX isTritonTransfer: 21,22,25,71,72,75)
+    public static final String TXN_TRANSFER_CHK_TO_SAV   = "21";
+    public static final String TXN_TRANSFER_SAV_TO_CHK   = "22";
 
     // Reversal
     public static final String TXN_REVERSAL              = "29";
