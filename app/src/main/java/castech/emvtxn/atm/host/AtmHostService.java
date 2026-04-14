@@ -81,13 +81,14 @@ public class AtmHostService {
                 Log.d(TAG, "Triton mode: PIN key set to CFFF/0000 (TMK)");
             } else {
                 processorConfig.setProtocolType(ProcessorConfig.ProtocolType.HYOSUNG_STD1);
-                // Hyosung uses DUKPT — key at C000/0000
-                castech.emvtxn.GlobalPara.atmDukptEnabled = true;
+                // Hyosung: check if DUKPT key exists at C000/0000
+                // If not, MKSK at C000/0010 will handle everything (same as Triton)
+                castech.emvtxn.GlobalPara.atmDukptEnabled = false; // Will be set true below if DUKPT found
                 castech.emvtxn.GlobalPara.atmDukptKeySet = 0x0000C000;
                 castech.emvtxn.GlobalPara.atmDukptKeyIndex = 0x00000000;
                 castech.emvtxn.GlobalPara.onlinePinKeySet = 0x0000C000;
                 castech.emvtxn.GlobalPara.onlinePinKeyIndex = 0x00000000;
-                Log.d(TAG, "Hyosung mode: PIN key set to C000/0000 (DUKPT)");
+                Log.d(TAG, "Hyosung mode: DUKPT will be auto-detected during initialization");
             }
 
             Log.d(TAG, "Initializing ATM Host Service for " + processorConfig.getName() +
@@ -102,8 +103,19 @@ public class AtmHostService {
                 return false;
             }
 
-            // No software TMK — all key operations use hardware TMK at CFFF/0000
-            // TMK must be injected via Key Injection Tool / KeyBRIDGE with correct attribute
+            // Auto-detect key mode: DUKPT (C000/0000) vs MKSK (C000/0010)
+            if (keyManager.checkKeyExists(0xC000, 0x0000)) {
+                // DUKPT key found — use hardware DUKPT for PIN encryption
+                castech.emvtxn.GlobalPara.atmDukptEnabled = true;
+                Log.d(TAG, "Key auto-detect: DUKPT key found at C000/0000 — DUKPT mode enabled");
+            } else if (keyManager.checkKeyExists(0xC000, 0x0010)) {
+                // MK(10) found — use MKSK for key exchange and PIN encryption
+                castech.emvtxn.GlobalPara.atmDukptEnabled = false;
+                Log.d(TAG, "Key auto-detect: MKSK key found at C000/0010 — Master/Session mode enabled");
+            } else {
+                Log.w(TAG, "Key auto-detect: No DUKPT or MKSK key found — key download required");
+                castech.emvtxn.GlobalPara.atmDukptEnabled = false;
+            }
 
             // Initialize transaction manager
             transactionManager = new AtmTransactionManager(config, keyManager);
