@@ -338,73 +338,39 @@ public class CastleKeyManager {
         String keyPartB = combinedKey.substring(16, 32);
         Log.d(TAG, "  Key Part A: " + maskKey(keyPartA));
         Log.d(TAG, "  Key Part B: " + maskKey(keyPartB));
+        Log.d(TAG, "  DEBUG ENCRYPTED KEY A: " + keyPartA);
+        Log.d(TAG, "  DEBUG ENCRYPTED KEY B: " + keyPartB);
 
-        // Try to decrypt using TMK (traditional ATM approach)
-        // Method 1: Hardware TMK decryption via KMS2
-        if (checkKeyExists(tmkKeySet, tmkKeyIndex)) {
-            Log.d(TAG, "  TMK exists - attempting HARDWARE key decryption");
-
-            String decryptedKey = decryptKeyPartsWithTmk(keyPartA, keyPartB);
-            if (decryptedKey != null) {
-                Log.d(TAG, "  Hardware TMK decryption SUCCESS");
-                this.softwareWorkingKey = hexStringToBytes(decryptedKey);
-                this.useSoftwareEncryption = true;
-                this.workingKeyLoaded = true;
-                this.currentWorkingKeyCheckValue = "HW-TMK";
-
-                String kcv = calculateSoftwareKcv(softwareWorkingKey);
-                Log.d(TAG, "  Decrypted key KCV: " + kcv);
-
-                saveKeyToPrefs();
-                notifyKeyLoaded();
-                return true;
-            } else {
-                Log.w(TAG, "  Hardware TMK decryption failed (likely 0x2907 - wrong key attribute)");
-            }
-        } else {
-            Log.d(TAG, "  No hardware TMK found at " + String.format("%04X/%04X", tmkKeySet, tmkKeyIndex));
+        // Decrypt using hardware TMK at CFFF/0000 — no software fallback
+        if (!checkKeyExists(tmkKeySet, tmkKeyIndex)) {
+            Log.e(TAG, "  TMK NOT FOUND at " + String.format("%04X/%04X", tmkKeySet, tmkKeyIndex));
+            Log.e(TAG, "  Cannot decrypt working key without TMK. Inject TMK via Key Injection Tool.");
+            return false;
         }
 
-        // Method 2: Software TMK decryption (fallback when hardware fails due to attribute)
-        if (hasSoftwareTmk()) {
-            Log.d(TAG, "  Attempting SOFTWARE TMK decryption...");
+        Log.d(TAG, "  TMK exists - decrypting working key with hardware TMK");
 
-            String decryptedKey = decryptKeyPartsWithSoftwareTmk(keyPartA, keyPartB);
-            if (decryptedKey != null) {
-                Log.d(TAG, "  Software TMK decryption SUCCESS");
-                this.softwareWorkingKey = hexStringToBytes(decryptedKey);
-                this.useSoftwareEncryption = true;
-                this.workingKeyLoaded = true;
-                this.currentWorkingKeyCheckValue = "SW-TMK";
+        String decryptedKey = decryptKeyPartsWithTmk(keyPartA, keyPartB);
+        if (decryptedKey != null) {
+            Log.d(TAG, "  Hardware TMK decryption SUCCESS");
+            this.softwareWorkingKey = hexStringToBytes(decryptedKey);
+            this.useSoftwareEncryption = true;
+            this.workingKeyLoaded = true;
+            this.currentWorkingKeyCheckValue = "HW-TMK";
 
-                String kcv = calculateSoftwareKcv(softwareWorkingKey);
-                Log.d(TAG, "  Decrypted working key KCV: " + kcv);
+            String kcv = calculateSoftwareKcv(softwareWorkingKey);
+            Log.d(TAG, "  Decrypted working key KCV: " + kcv);
 
-                saveKeyToPrefs();
-                notifyKeyLoaded();
-                return true;
-            } else {
-                Log.e(TAG, "  Software TMK decryption failed");
-            }
-        } else {
-            Log.w(TAG, "  No software TMK configured - call setSoftwareTmk() first");
+            saveKeyToPrefs();
+            notifyKeyLoaded();
+            return true;
         }
 
-        // Fallback: Use key as-is (ONLY if processor sends CLEAR keys, which is rare)
-        Log.w(TAG, "=== WARNING: Using key as CLEAR (no TMK decryption) ===");
-        Log.w(TAG, "  This is likely WRONG if processor encrypts working keys under TMK!");
-        Log.w(TAG, "  Configure software TMK with setSoftwareTmk() if keys are encrypted.");
-        this.softwareWorkingKey = hexStringToBytes(combinedKey);
-        this.useSoftwareEncryption = true;
-        this.workingKeyLoaded = true;
-        this.currentWorkingKeyCheckValue = "CLEAR";
-
-        String kcv = calculateSoftwareKcv(softwareWorkingKey);
-        Log.d(TAG, "  Clear key KCV: " + kcv);
-
-        saveKeyToPrefs();
-        notifyKeyLoaded();
-        return true;
+        // Hardware TMK decryption failed — likely wrong key attribute (0x2907)
+        Log.e(TAG, "  Hardware TMK decryption FAILED");
+        Log.e(TAG, "  TMK at CFFF/0000 may have wrong attribute (needs Key Decryption, not Data Decryption)");
+        Log.e(TAG, "  Re-inject TMK with correct attribute via Key Injection Tool / KeyBRIDGE");
+        return false;
     }
 
     /**

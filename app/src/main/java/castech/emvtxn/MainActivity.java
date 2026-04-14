@@ -267,10 +267,10 @@ public class MainActivity extends AppCompatActivity {
 
         GlobalPara.tag = TAG;
 
-        // Run EMV Cryptogram Diagnostic Test on startup (logs results)
-        if (!isRunningOnEmulator) {
-            runEmvDiagnosticTest();
-        }
+        // EMV Cryptogram Diagnostic Test DISABLED — causes ANR/crash on some terminals
+        // if (!isRunningOnEmulator) {
+        //     runEmvDiagnosticTest();
+        // }
 
         //Cless LED
         try {

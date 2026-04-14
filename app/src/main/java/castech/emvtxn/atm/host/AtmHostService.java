@@ -102,10 +102,8 @@ public class AtmHostService {
                 return false;
             }
 
-            // Configure software TMK for decryption fallback
-            // This is used when hardware TMK fails with error 0x2907 (wrong key attribute)
-            // The TMK is the XOR of Key Part A and Key Part B from processor
-            configureSoftwareTmk();
+            // No software TMK — all key operations use hardware TMK at CFFF/0000
+            // TMK must be injected via Key Injection Tool / KeyBRIDGE with correct attribute
 
             // Initialize transaction manager
             transactionManager = new AtmTransactionManager(config, keyManager);
@@ -278,7 +276,16 @@ public class AtmHostService {
             return;
         }
 
-        // Check if renewal is needed
+        // DUKPT mode doesn't need working key download — skip startup renewal
+        if (castech.emvtxn.GlobalPara.atmDukptEnabled) {
+            Log.d(TAG, "Startup key check: DUKPT mode — no working key renewal needed");
+            if (callback != null) {
+                callback.onRenewalSuccess("DUKPT mode - hardware key");
+            }
+            return;
+        }
+
+        // Check if renewal is needed (Master/Session mode only)
         if (!keyManager.needsRenewal()) {
             Log.d(TAG, "Startup key check: Key is valid - " + keyManager.getKeyStatus());
             if (callback != null) {
@@ -414,6 +421,15 @@ public class AtmHostService {
     public void requestNewWorkingKey() {
         ensureInitialized();
 
+        // DUKPT mode doesn't use downloadable working keys
+        if (castech.emvtxn.GlobalPara.atmDukptEnabled) {
+            Log.d(TAG, "DUKPT mode — working key download not needed (hardware key at C000/0000)");
+            if (listener != null) {
+                listener.onKeysLoaded("DUKPT - hardware key");
+            }
+            return;
+        }
+
         Log.d(TAG, "Requesting new working key...");
 
         // Clear the current key first
@@ -470,8 +486,10 @@ public class AtmHostService {
         ensureInitialized();
 
         // Auto-download keys if not loaded
-        if (!hasWorkingKeys()) {
-            Log.d(TAG, "Working keys not loaded - auto-downloading before transaction...");
+        // Skip for DUKPT — PIN encryption is handled by hardware, no working key needed
+        boolean isDukpt = castech.emvtxn.GlobalPara.atmDukptEnabled;
+        if (!isDukpt && !hasWorkingKeys()) {
+            Log.d(TAG, "Master/Session mode - working keys not loaded, auto-downloading...");
             try {
                 transactionManager.downloadKeysSync();
                 if (!hasWorkingKeys()) {
@@ -485,6 +503,8 @@ public class AtmHostService {
                 notifyError("Key download failed: " + e.getMessage());
                 return;
             }
+        } else if (isDukpt) {
+            Log.d(TAG, "DUKPT mode - no working key download needed");
         }
 
         transactionManager.performCashWithdrawal(cardData, amountCents, surchargeCents, accountType);
@@ -500,8 +520,10 @@ public class AtmHostService {
         ensureInitialized();
 
         // Auto-download keys if not loaded
-        if (!hasWorkingKeys()) {
-            Log.d(TAG, "Working keys not loaded - auto-downloading before balance inquiry...");
+        // Skip for DUKPT — PIN encryption is handled by hardware, no working key needed
+        boolean isDukptBI = castech.emvtxn.GlobalPara.atmDukptEnabled;
+        if (!isDukptBI && !hasWorkingKeys()) {
+            Log.d(TAG, "Master/Session mode - working keys not loaded, auto-downloading...");
             try {
                 transactionManager.downloadKeysSync();
                 if (!hasWorkingKeys()) {
