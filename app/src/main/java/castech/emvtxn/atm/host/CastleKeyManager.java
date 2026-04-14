@@ -13,6 +13,7 @@ import CTOS.CtKMS2FixedKey;
 import CTOS.CtKMS2Exception;
 import CTOS.CtKMS2System;
 import CTOS.CtKMS2SymmetryKey;
+import CTOS.CtKMS2Dukpt;
 
 import javax.crypto.Cipher;
 import javax.crypto.SecretKey;
@@ -219,6 +220,10 @@ public class CastleKeyManager {
 
             initialized = true;
             Log.d(TAG, "CastleKeyManager initialized, workingKeyLoaded=" + workingKeyLoaded);
+
+            // DEBUG: Known-plaintext test to identify actual key at C001/00A1
+            runKeyIdentificationTest();
+
             return true;
 
         } catch (Exception e) {
@@ -366,10 +371,43 @@ public class CastleKeyManager {
             return true;
         }
 
-        // Hardware TMK decryption failed — likely wrong key attribute (0x2907)
-        Log.e(TAG, "  Hardware TMK decryption FAILED");
-        Log.e(TAG, "  TMK at CFFF/0000 may have wrong attribute (needs Key Decryption, not Data Decryption)");
-        Log.e(TAG, "  Re-inject TMK with correct attribute via Key Injection Tool / KeyBRIDGE");
+        // Hardware TMK decryption failed at CFFF/0000 — try alternate locations
+        Log.w(TAG, "  TMK at CFFF/0000 failed — trying alternate locations...");
+
+        // Try alternate TMK locations: MK(10) at C000/0010, then C001/00A1
+        int[][] altLocations = {
+            {0xC000, 0x0010},  // MK(10) - Master Session Key via FutureX
+            {0xC001, 0x00A1}   // Alternate key location
+        };
+
+        for (int[] loc : altLocations) {
+            if (checkKeyExists(loc[0], loc[1])) {
+                Log.d(TAG, "  Alternate TMK found at " + String.format("%04X/%04X", loc[0], loc[1]) + " — attempting decryption");
+                String altDecryptedKey = decryptKeyPartsAtLocation(keyPartA, keyPartB, loc[0], loc[1]);
+                if (altDecryptedKey != null) {
+                    if ("MKSK_SESSION_KEY".equals(altDecryptedKey)) {
+                        // MKSK handled everything — session key loaded, ready for PIN
+                        Log.d(TAG, "  MKSK session key loaded — hardware PIN encryption ready");
+                        return true;
+                    }
+                    Log.d(TAG, "  Alternate TMK decryption SUCCESS at " + String.format("%04X/%04X", loc[0], loc[1]));
+                    this.softwareWorkingKey = hexStringToBytes(altDecryptedKey);
+                    this.useSoftwareEncryption = true;
+                    this.workingKeyLoaded = true;
+                    this.currentWorkingKeyCheckValue = "HW-ALT";
+
+                    String kcv = calculateSoftwareKcv(softwareWorkingKey);
+                    Log.d(TAG, "  Decrypted working key KCV: " + kcv);
+
+                    saveKeyToPrefs();
+                    notifyKeyLoaded();
+                    return true;
+                }
+                Log.w(TAG, "  Alternate TMK at " + String.format("%04X/%04X", loc[0], loc[1]) + " failed");
+            }
+        }
+
+        Log.e(TAG, "  All hardware TMK decryption attempts FAILED");
         return false;
     }
 
@@ -462,6 +500,278 @@ public class CastleKeyManager {
      * @param keyPartB Second 16 hex chars (encrypted Key Part B)
      * @return Decrypted 32 hex char working key, or null on failure
      */
+    /**
+     * Decrypts key parts using a key at a specific location.
+     * Used as fallback when CFFF/0000 has wrong attribute.
+     */
+    /**
+     * DEBUG: Encrypts known plaintext with keys at various locations to identify actual key values.
+     * Give the ciphertext to the MUX operator to reverse-engineer which key is stored.
+     */
+    private void runKeyIdentificationTest() {
+        byte[] zeros = new byte[] {0,0,0,0,0,0,0,0};
+        byte[] ones = new byte[] {0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01};
+
+        Log.d(TAG, "");
+        Log.d(TAG, "========== KEY IDENTIFICATION TEST ==========");
+
+        // Test C001/00A1
+        testEncryptAtLocation(0xC001, 0x00A1, zeros, "C001/00A1 zeros");
+        testEncryptAtLocation(0xC001, 0x00A1, ones, "C001/00A1 ones");
+
+        // Test CFFF/0000
+        testEncryptAtLocation(0xCFFF, 0x0000, zeros, "CFFF/0000 zeros");
+
+        // Test C000/0010 (MK10 - Master Session Key)
+        testEncryptAtLocation(0xC000, 0x0010, zeros, "C000/0010 MK10 zeros");
+        testEncryptAtLocation(0xC000, 0x0010, ones, "C000/0010 MK10 ones");
+
+        // Test C000/0000 if exists
+        testEncryptAtLocation(0xC000, 0x0000, zeros, "C000/0000 zeros");
+
+        Log.d(TAG, "========== END KEY ID TEST ==========");
+        Log.d(TAG, "");
+    }
+
+    private void testEncryptAtLocation(int keySet, int keyIndex, byte[] plaintext, String label) {
+        try {
+            if (!checkKeyExists(keySet, keyIndex)) {
+                Log.d(TAG, "  " + label + ": NO KEY");
+                return;
+            }
+            CtKMS2Dukpt key = new CtKMS2Dukpt();
+            key.selectKey(keySet, keyIndex);
+            key.setCipherMethod((byte) 0x00); // ECB
+            key.setInputData(plaintext, 0, plaintext.length);
+            key.dataEncrypt();
+            byte[] encrypted = key.getOutpuData();
+            if (encrypted != null) {
+                Log.d(TAG, "  " + label + " => " + bytesToHexString(encrypted));
+            } else {
+                Log.d(TAG, "  " + label + " => null");
+            }
+        } catch (CtKMS2Exception e) {
+            // Try FixedKey if Dukpt fails
+            try {
+                CtKMS2FixedKey fk = new CtKMS2FixedKey();
+                fk.selectKey(keySet, keyIndex);
+                fk.setCipherMethod((byte) 0x00);
+                fk.setInputData(plaintext, 0, plaintext.length);
+                fk.dataEncrypt();
+                byte[] encrypted = fk.getOutpuData();
+                if (encrypted != null) {
+                    Log.d(TAG, "  " + label + " (FixedKey) => " + bytesToHexString(encrypted));
+                } else {
+                    Log.d(TAG, "  " + label + " (FixedKey) => null");
+                }
+            } catch (CtKMS2Exception e2) {
+                Log.d(TAG, "  " + label + " => FAILED both: 0x" + String.format("%08X", e.getError()) +
+                           " / 0x" + String.format("%08X", e2.getError()));
+            }
+        }
+    }
+
+    private String decryptKeyPartsAtLocation(String keyPartA, String keyPartB, int keySet, int keyIndex) {
+        // Try CtKMS2MKSK first (Master/Session Key), then FixedKey, then Dukpt
+        String result = decryptKeyPartsWithMksk(keyPartA, keyPartB, keySet, keyIndex);
+        if (result != null) return result;
+        result = decryptKeyPartsWithFixedKey(keyPartA, keyPartB, keySet, keyIndex);
+        if (result != null) return result;
+        result = decryptKeyPartsWithDukptKey(keyPartA, keyPartB, keySet, keyIndex);
+        return result;
+    }
+
+    // MKSK key location for session key operations (set after successful setSK)
+    private int mkskKeySet = -1;
+    private int mkskKeyIndex = -1;
+    private boolean mkskSessionKeyLoaded = false;
+    private String mkskEncryptedSessionKey = null;
+
+    private String decryptKeyPartsWithMksk(String keyPartA, String keyPartB, int keySet, int keyIndex) {
+        try {
+            Log.d(TAG, "=== Decrypting Key Parts at " + String.format("%04X/%04X", keySet, keyIndex) + " (MKSK setSK) ===");
+
+            // Combine both encrypted parts into 16-byte session key
+            String combinedEncrypted = keyPartA + keyPartB;
+            byte[] encryptedSessionKey = hexStringToBytes(combinedEncrypted);
+            Log.d(TAG, "  Encrypted session key length: " + encryptedSessionKey.length);
+
+            CtKMS2MKSK mksk = new CtKMS2MKSK();
+            mksk.selectKey(keySet, keyIndex);
+            mksk.setOperation((byte) 0x00); // ECB mode
+
+            // setSK decrypts the session key using the master key and stores it internally
+            mksk.setSK(encryptedSessionKey, 0, encryptedSessionKey.length);
+            Log.d(TAG, "  MKSK setSK succeeded!");
+
+            // Get KCV by encrypting zeros
+            byte[] testData = new byte[8];
+            mksk.setInputData(testData, 0, testData.length);
+            mksk.dataEncrypt();
+            byte[] encrypted = mksk.getOutpuData();
+
+            String kcv = "MKSK";
+            if (encrypted != null && encrypted.length >= 3) {
+                kcv = bytesToHexString(encrypted).substring(0, 6).toUpperCase();
+                Log.d(TAG, "  Session key KCV: " + kcv);
+            }
+
+            // Store MKSK location for PIN encryption
+            this.mkskKeySet = keySet;
+            this.mkskKeyIndex = keyIndex;
+            this.mkskSessionKeyLoaded = true;
+            this.mkskEncryptedSessionKey = combinedEncrypted;
+            this.workingKeyLoaded = true;
+            this.useSoftwareEncryption = false; // Use hardware MKSK, not software
+            this.currentWorkingKeyCheckValue = kcv;
+
+            Log.d(TAG, "  MKSK session key ready for PIN encryption at " + String.format("%04X/%04X", keySet, keyIndex));
+
+            saveKeyToPrefs();
+            notifyKeyLoaded();
+
+            // Return special marker — caller should check mkskSessionKeyLoaded
+            return "MKSK_SESSION_KEY";
+
+        } catch (CtKMS2Exception e) {
+            Log.w(TAG, "  MKSK decryption failed at " + String.format("%04X/%04X", keySet, keyIndex) +
+                       ": 0x" + String.format("%08X", e.getError()));
+            return null;
+        }
+    }
+
+    /**
+     * Encrypts a PIN block using the MKSK session key.
+     * Must be called after successful key download with MKSK setSK.
+     */
+    public String encryptPinBlockWithMksk(String clearPinBlock) {
+        if (!mkskSessionKeyLoaded || mkskEncryptedSessionKey == null) {
+            Log.e(TAG, "MKSK session key not loaded");
+            return null;
+        }
+
+        try {
+            Log.d(TAG, "=== MKSK PIN Block Encryption ===");
+
+            // Re-create MKSK and load the session key
+            CtKMS2MKSK mksk = new CtKMS2MKSK();
+            mksk.selectKey(mkskKeySet, mkskKeyIndex);
+            mksk.setOperation((byte) 0x00); // ECB
+
+            // Reload session key
+            byte[] encSK = hexStringToBytes(mkskEncryptedSessionKey);
+            mksk.setSK(encSK, 0, encSK.length);
+
+            // Encrypt the PIN block
+            byte[] pinBlockBytes = hexStringToBytes(clearPinBlock);
+            mksk.setInputData(pinBlockBytes, 0, pinBlockBytes.length);
+            mksk.dataEncrypt();
+            byte[] encryptedBlock = mksk.getOutpuData();
+
+            if (encryptedBlock != null && encryptedBlock.length >= 8) {
+                String result = bytesToHexString(encryptedBlock);
+                Log.d(TAG, "  MKSK encrypted PIN block: " + result);
+                return result;
+            }
+
+            Log.e(TAG, "  MKSK PIN encryption returned null");
+            return null;
+
+        } catch (CtKMS2Exception e) {
+            Log.e(TAG, "MKSK PIN encryption failed: 0x" + String.format("%08X", e.getError()));
+            return null;
+        }
+    }
+
+    /**
+     * Returns true if MKSK session key is loaded for hardware PIN encryption.
+     */
+    public boolean isMkskReady() {
+        return mkskSessionKeyLoaded;
+    }
+
+    private String decryptKeyPartsWithFixedKey(String keyPartA, String keyPartB, int keySet, int keyIndex) {
+        try {
+            Log.d(TAG, "=== Decrypting Key Parts at " + String.format("%04X/%04X", keySet, keyIndex) + " (FixedKey) ===");
+
+            CtKMS2FixedKey key = new CtKMS2FixedKey();
+            key.selectKey(keySet, keyIndex);
+            key.setCipherMethod((byte) 0x00);  // ECB mode
+
+            byte[] partABytes = hexStringToBytes(keyPartA);
+            key.setInputData(partABytes, 0, partABytes.length);
+            key.dataDecrypt();
+            byte[] decryptedA = key.getOutpuData();
+
+            if (decryptedA == null || decryptedA.length < 8) {
+                Log.e(TAG, "  Part A decryption failed (FixedKey)");
+                return null;
+            }
+            Log.d(TAG, "  Part A decrypted: " + maskKey(bytesToHexString(decryptedA)));
+
+            byte[] partBBytes = hexStringToBytes(keyPartB);
+            key.setInputData(partBBytes, 0, partBBytes.length);
+            key.dataDecrypt();
+            byte[] decryptedB = key.getOutpuData();
+
+            if (decryptedB == null || decryptedB.length < 8) {
+                Log.e(TAG, "  Part B decryption failed (FixedKey)");
+                return null;
+            }
+            Log.d(TAG, "  Part B decrypted: " + maskKey(bytesToHexString(decryptedB)));
+
+            String combined = bytesToHexString(decryptedA) + bytesToHexString(decryptedB);
+            Log.d(TAG, "  Combined working key: " + maskKey(combined));
+            return combined;
+
+        } catch (CtKMS2Exception e) {
+            Log.w(TAG, "  FixedKey decryption failed at " + String.format("%04X/%04X", keySet, keyIndex) +
+                       ": 0x" + String.format("%08X", e.getError()));
+            return null;
+        }
+    }
+
+    private String decryptKeyPartsWithDukptKey(String keyPartA, String keyPartB, int keySet, int keyIndex) {
+        try {
+            Log.d(TAG, "=== Decrypting Key Parts at " + String.format("%04X/%04X", keySet, keyIndex) + " (Dukpt) ===");
+
+            CtKMS2Dukpt key = new CtKMS2Dukpt();
+            key.selectKey(keySet, keyIndex);
+            key.setCipherMethod((byte) 0x00);  // ECB mode
+
+            byte[] partABytes = hexStringToBytes(keyPartA);
+            key.setInputData(partABytes, 0, partABytes.length);
+            key.dataDecrypt();
+            byte[] decryptedA = key.getOutpuData();
+
+            if (decryptedA == null || decryptedA.length < 8) {
+                Log.e(TAG, "  Part A decryption failed at " + String.format("%04X/%04X", keySet, keyIndex));
+                return null;
+            }
+            Log.d(TAG, "  Part A decrypted: " + maskKey(bytesToHexString(decryptedA)));
+
+            byte[] partBBytes = hexStringToBytes(keyPartB);
+            key.setInputData(partBBytes, 0, partBBytes.length);
+            key.dataDecrypt();
+            byte[] decryptedB = key.getOutpuData();
+
+            if (decryptedB == null || decryptedB.length < 8) {
+                Log.e(TAG, "  Part B decryption failed at " + String.format("%04X/%04X", keySet, keyIndex));
+                return null;
+            }
+            Log.d(TAG, "  Part B decrypted: " + maskKey(bytesToHexString(decryptedB)));
+
+            String combined = bytesToHexString(decryptedA) + bytesToHexString(decryptedB);
+            Log.d(TAG, "  Combined working key: " + maskKey(combined));
+            return combined;
+
+        } catch (CtKMS2Exception e) {
+            Log.e(TAG, "Decryption failed at " + String.format("%04X/%04X", keySet, keyIndex) +
+                       ": 0x" + String.format("%08X", e.getError()));
+            return null;
+        }
+    }
+
     private String decryptKeyPartsWithTmk(String keyPartA, String keyPartB) {
         try {
             Log.d(TAG, "=== Decrypting Key Parts with TMK ===");
@@ -767,49 +1077,57 @@ public class CastleKeyManager {
             return false;
         }
 
-        try {
-            // Use Castle KMS2 TR-31 to load the key
-            CtKMS2TR31 tr31 = new CtKMS2TR31();
+        // Try multiple KBPK locations for TR-31 unwrapping
+        int[][] kbpkLocations = {
+            {tmkKeySet, tmkKeyIndex},  // CFFF/0000
+            {0xC000, 0x0010},          // MK(10) - Master Session Key via FutureX
+            {0xC001, 0x00A1}           // Alternate key location
+        };
 
-            // Select the KBPK (Key Block Protection Key) for TR-31 unwrapping
-            tr31.selectKey(tmkKeySet, tmkKeyIndex);
-            Log.d(TAG, "  Selected KBPK at " + String.format("%04X/%04X", tmkKeySet, tmkKeyIndex));
+        for (int[] kbpk : kbpkLocations) {
+            try {
+                if (!checkKeyExists(kbpk[0], kbpk[1])) {
+                    continue;
+                }
 
-            // Set the destination location for the unwrapped key
-            tr31.setKeyLocation(pinKeySet, pinKeyIndex);
-            Log.d(TAG, "  Target location: " + String.format("%04X/%04X", pinKeySet, pinKeyIndex));
+                Log.d(TAG, "  Trying KBPK at " + String.format("%04X/%04X", kbpk[0], kbpk[1]));
 
-            // Set the TR-31 key block
-            byte[] keyBlockBytes = tr31Block.getBytes("ISO-8859-1");
-            tr31.setTR31KeyBlock(keyBlockBytes, 0, keyBlockBytes.length);
-            Log.d(TAG, "  Set TR-31 key block (" + keyBlockBytes.length + " bytes)");
+                CtKMS2TR31 tr31 = new CtKMS2TR31();
+                tr31.selectKey(kbpk[0], kbpk[1]);
+                Log.d(TAG, "  Selected KBPK at " + String.format("%04X/%04X", kbpk[0], kbpk[1]));
 
-            // Write the key (decrypts using TMK and stores at target location)
-            tr31.writeKey();
-            Log.d(TAG, "  TR-31 key written successfully");
+                tr31.setKeyLocation(pinKeySet, pinKeyIndex);
+                Log.d(TAG, "  Target location: " + String.format("%04X/%04X", pinKeySet, pinKeyIndex));
 
-            // Verify the key was written
-            if (checkKeyExists(pinKeySet, pinKeyIndex)) {
-                workingKeyLoaded = true;
-                currentWorkingKeyCheckValue = "TR31";
-                Log.d(TAG, "TR-31 working key loaded and verified");
-                notifyKeyLoaded();
-                return true;
-            } else {
-                Log.e(TAG, "Key write succeeded but key not found at target location");
-                return false;
+                byte[] keyBlockBytes = tr31Block.getBytes(java.nio.charset.StandardCharsets.ISO_8859_1);
+                tr31.setTR31KeyBlock(keyBlockBytes, 0, keyBlockBytes.length);
+                Log.d(TAG, "  Set TR-31 key block (" + keyBlockBytes.length + " bytes)");
+
+                tr31.writeKey();
+                Log.d(TAG, "  TR-31 key written successfully at KBPK " + String.format("%04X/%04X", kbpk[0], kbpk[1]));
+
+                if (checkKeyExists(pinKeySet, pinKeyIndex)) {
+                    workingKeyLoaded = true;
+                    currentWorkingKeyCheckValue = "TR31";
+                    Log.d(TAG, "TR-31 working key loaded and verified");
+                    notifyKeyLoaded();
+                    return true;
+                } else {
+                    Log.e(TAG, "Key write succeeded but key not found at target location");
+                    return false;
+                }
+
+            } catch (CtKMS2Exception e) {
+                Log.w(TAG, "TR-31 failed at " + String.format("%04X/%04X", kbpk[0], kbpk[1]) +
+                           ": 0x" + String.format("%08X", e.getError()) + " — trying next KBPK...");
+                continue;
             }
-
-        } catch (CtKMS2Exception e) {
-            Log.e(TAG, "TR-31 key loading failed: " + String.format("0x%08X", e.getError()));
-            e.showStatus();
-            notifyKeyError("TR-31 key load failed: " + String.format("0x%08X", e.getError()));
-            return false;
-        } catch (Exception e) {
-            Log.e(TAG, "TR-31 key loading failed: " + e.getMessage(), e);
-            notifyKeyError("TR-31 key load failed: " + e.getMessage());
-            return false;
         }
+
+        // All KBPK locations failed
+        Log.e(TAG, "TR-31 key loading failed at all KBPK locations");
+        notifyKeyError("TR-31 key load failed — no valid KBPK");
+        return false;
     }
 
     /**
@@ -832,6 +1150,16 @@ public class CastleKeyManager {
 
         try {
             Log.d(TAG, "Encrypting PIN block...");
+
+            // MKSK hardware encryption (Master/Session Key — Triton mode)
+            if (mkskSessionKeyLoaded) {
+                Log.d(TAG, "  Using MKSK hardware encryption");
+                String result = encryptPinBlockWithMksk(clearPinBlock);
+                if (result != null) {
+                    return result;
+                }
+                Log.w(TAG, "  MKSK encryption failed, trying fallback...");
+            }
 
             // PRIMARY: Use software encryption if enabled (bypasses KMS2 attribute issues)
             if (useSoftwareEncryption && softwareWorkingKey != null) {
@@ -868,46 +1196,7 @@ public class CastleKeyManager {
      * Encrypts PIN block using MKSK (Master Key / Session Key).
      * The TMK decrypts the session key, which is then used to encrypt the PIN block.
      */
-    private String encryptPinBlockWithMksk(String clearPinBlock) {
-        try {
-            Log.d(TAG, "=== MKSK PIN Block Encryption ===");
-
-            CtKMS2MKSK mksk = new CtKMS2MKSK();
-
-            // Select TMK as master key
-            mksk.selectKey(tmkKeySet, tmkKeyIndex);
-            Log.d(TAG, "  Master key: " + String.format("%04X/%04X", tmkKeySet, tmkKeyIndex));
-
-            // Set the encrypted working key as session key
-            mksk.setSK(encryptedWorkingKey, 0, encryptedWorkingKey.length);
-            Log.d(TAG, "  Session key set");
-
-            // Set cipher method (ECB = 0x00)
-            mksk.setCipherMethod((byte) 0x00);
-
-            // Set the clear PIN block as input
-            byte[] pinBlockBytes = hexStringToBytes(clearPinBlock);
-            mksk.setInputData(pinBlockBytes, 0, pinBlockBytes.length);
-            Log.d(TAG, "  Input PIN block: " + maskKey(clearPinBlock));
-
-            // Encrypt
-            mksk.dataEncrypt();
-            byte[] encryptedBlock = mksk.getOutpuData();
-
-            if (encryptedBlock != null && encryptedBlock.length >= 8) {
-                String result = bytesToHexString(encryptedBlock);
-                Log.d(TAG, "  Encrypted PIN block: " + result);
-                return result;
-            } else {
-                Log.e(TAG, "MKSK encryption returned invalid result");
-                return null;
-            }
-
-        } catch (CtKMS2Exception e) {
-            Log.e(TAG, "MKSK PIN encryption failed: " + String.format("0x%08X", e.getError()));
-            return null;
-        }
-    }
+    // Old MKSK method removed — replaced by encryptPinBlockWithMksk() using session key at MK(10)
 
     /**
      * Encrypts PIN block using FixedKey (pre-loaded key at target location).
@@ -1470,9 +1759,15 @@ public class CastleKeyManager {
      */
     public String encryptPinWithMkskAtC001(String clearPinBlock) {
         if (clearPinBlock == null || clearPinBlock.length() != 16) {
-            Log.e(TAG, "Invalid PIN block for MKSK C001: " +
+            Log.e(TAG, "Invalid PIN block for MKSK: " +
                       (clearPinBlock == null ? "null" : "length=" + clearPinBlock.length()));
             return null;
+        }
+
+        // If MKSK session key is loaded (Triton mode), use it instead of C001/0001
+        if (mkskSessionKeyLoaded) {
+            Log.d(TAG, "=== MKSK Session Key PIN Encryption (C000/0010) ===");
+            return encryptPinBlockWithMksk(clearPinBlock);
         }
 
         try {

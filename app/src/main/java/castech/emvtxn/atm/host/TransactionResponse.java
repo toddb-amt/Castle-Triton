@@ -231,7 +231,49 @@ public class TransactionResponse {
      * Checks if the transaction was approved.
      */
     public boolean isApproved() {
-        return HyosungProtocol.isApproved(responseCode);
+        // Check both Hyosung ("00") and Triton ("000") approval codes
+        return HyosungProtocol.isApproved(responseCode) || "000".equals(responseCode);
+    }
+
+    /**
+     * Gets human-readable description for Triton response codes.
+     */
+    public static String getTritonResponseDescription(String code) {
+        if (code == null) return "Unknown";
+        switch (code) {
+            case "000": return "Transaction Approved";
+            case "001": return "Expired Card";
+            case "002": return "Unauthorized Usage";
+            case "003": return "PIN Error";
+            case "004": return "Invalid PIN";
+            case "005": return "Bank Unavailable";
+            case "006": return "Card Not Supported";
+            case "007": return "Insufficient Funds";
+            case "008": return "Ineligible Transaction";
+            case "009": return "Ineligible Account";
+            case "010": return "Daily Withdrawals Exceeded";
+            case "011": return "Cannot Process Transaction";
+            case "012": return "Amount Too Large";
+            case "013": return "Account Closed";
+            case "014": return "PIN Tries Exceeded";
+            case "015": return "Database Problem";
+            case "016": return "Withdrawal Limit Reached";
+            case "017": return "Invalid Amount";
+            case "018": return "External Decline";
+            case "019": return "System Error";
+            case "020": return "Contact Card Issuer";
+            case "021": return "Routing Lookup Problem";
+            case "022": return "Message Edit Error";
+            case "023": return "Transaction Not Supported";
+            case "024": return "Insufficient Funds";
+            case "027": return "CRC Error";
+            case "033": return "Response Exceeds Message Size";
+            case "034": return "Missing Information";
+            case "035": return "Second Invalid PIN";
+            case "111": return "Reversal Declined";
+            case "222": return "PIN Change Declined";
+            default: return "Declined (" + code + ")";
+        }
     }
 
     /**
