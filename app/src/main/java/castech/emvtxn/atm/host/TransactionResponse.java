@@ -308,6 +308,14 @@ public class TransactionResponse {
      * Gets the human-readable response description.
      */
     public String getResponseDescription() {
+        // Use display message from host (FID 'p' receipt text) if available
+        if (displayMessage != null && !displayMessage.isEmpty()) {
+            return displayMessage;
+        }
+        // Try Triton codes first (3-digit), then Hyosung (2-digit)
+        if (responseCode != null && responseCode.length() == 3) {
+            return getTritonResponseDescription(responseCode);
+        }
         return HyosungProtocol.getResponseDescription(responseCode);
     }
 

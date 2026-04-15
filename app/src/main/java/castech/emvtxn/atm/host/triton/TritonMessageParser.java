@@ -173,10 +173,15 @@ public class TritonMessageParser {
         if (idx < fields.length) {
             Map<String, String> miscFields = parseMiscFields(fields, idx);
 
-            // FID 'p' - receipt text
+            // FID 'p' - receipt text (format: line_count + text)
             if (miscFields.containsKey(String.valueOf(TritonProtocol.FID_RECEIPT_TEXT))) {
-                response.setDisplayMessage(
-                        miscFields.get(String.valueOf(TritonProtocol.FID_RECEIPT_TEXT)));
+                String receiptRaw = miscFields.get(String.valueOf(TritonProtocol.FID_RECEIPT_TEXT));
+                // Strip the line count prefix (first char is number of lines)
+                if (receiptRaw != null && receiptRaw.length() > 1) {
+                    response.setDisplayMessage(receiptRaw.substring(1));
+                } else {
+                    response.setDisplayMessage(receiptRaw);
+                }
             }
 
             // FID 'b' - available balance
