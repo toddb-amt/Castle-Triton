@@ -172,6 +172,8 @@ public class Fragment_page_admin_atm extends Fragment {
         if (!isAuthenticated) {
             pinDialogShown = false;
         }
+        // Refresh reversal status — host may have been initialized since fragment created
+        updateReversalStatus();
     }
 
     @Override
@@ -658,26 +660,20 @@ public class Fragment_page_admin_atm extends Fragment {
         // PIN encryption settings — key location depends on protocol
         GlobalPara.atmPinBlockFormat = prefs.getString("pin_block_format", "FORMAT0");
 
-        // Apply key location based on protocol type
+        // Build flavor determines DUKPT vs MKSK; key location depends on protocol
+        GlobalPara.atmDukptEnabled = "DUKPT".equals(BuildConfig.KEY_MODE);
         if ("TRITON".equals(GlobalPara.atmProtocolType)) {
-            // Triton: Master/Session key at CFFF/0000
-            GlobalPara.atmDukptEnabled = false;
             GlobalPara.atmDukptKeySet = 0x0000CFFF;
             GlobalPara.atmDukptKeyIndex = 0x00000000;
-            GlobalPara.onlinePinKeySet = 0x0000CFFF;
-            GlobalPara.onlinePinKeyIndex = 0x00000000;
-            Log.d(TAG, "Loaded PIN settings (TRITON): key=CFFF/0000 (TMK)");
         } else {
-            // Hyosung: DUKPT at C000/0000
-            GlobalPara.atmDukptEnabled = prefs.getBoolean("dukpt_enabled", true);
             GlobalPara.atmDukptKeySet = prefs.getInt("dukpt_key_set", 0x0000C000);
             GlobalPara.atmDukptKeyIndex = prefs.getInt("dukpt_key_index", 0x00000000);
-            GlobalPara.onlinePinKeySet = GlobalPara.atmDukptKeySet;
-            GlobalPara.onlinePinKeyIndex = GlobalPara.atmDukptKeyIndex;
-            Log.d(TAG, "Loaded PIN settings (HYOSUNG): key=" +
-                       String.format("0x%04X/0x%04X", GlobalPara.atmDukptKeySet, GlobalPara.atmDukptKeyIndex) +
-                       " (DUKPT)");
         }
+        GlobalPara.onlinePinKeySet = GlobalPara.atmDukptKeySet;
+        GlobalPara.onlinePinKeyIndex = GlobalPara.atmDukptKeyIndex;
+        Log.d(TAG, "Loaded PIN settings (" + GlobalPara.atmProtocolType + "/" +
+                   BuildConfig.KEY_MODE + "): key=" +
+                   String.format("0x%04X/0x%04X", GlobalPara.atmDukptKeySet, GlobalPara.atmDukptKeyIndex));
 
         // Also update GlobalPara
         updateGlobalPara();
@@ -885,6 +881,9 @@ public class Fragment_page_admin_atm extends Fragment {
         mainActivity.initializeAtmHostService();
         final AtmHostService hostService = mainActivity.getAtmHostService();
 
+        // Refresh reversal status — host service now (re)initialized
+        updateReversalStatus();
+
         Log.d(TAG, "testConnection: hostService=" + (hostService != null ? "OK" : "NULL"));
 
         if (hostService == null) {
@@ -1058,6 +1057,10 @@ public class Fragment_page_admin_atm extends Fragment {
                         updateStatus("Initializing host service...");
                         mainActivity.initializeAtmHostService();
                         hostService = mainActivity.getAtmHostService();
+                        // Refresh reversal status now that host is initialized
+                        if (getActivity() != null) {
+                            getActivity().runOnUiThread(() -> updateReversalStatus());
+                        }
                     }
 
                     if (hostService == null) {
@@ -1175,6 +1178,11 @@ public class Fragment_page_admin_atm extends Fragment {
                     if (hostService == null) {
                         showError("Host service not configured");
                         return;
+                    }
+
+                    // Refresh reversal status now that host is (re)initialized
+                    if (getActivity() != null) {
+                        getActivity().runOnUiThread(() -> updateReversalStatus());
                     }
 
                     updateStatus("Requesting new working key...");

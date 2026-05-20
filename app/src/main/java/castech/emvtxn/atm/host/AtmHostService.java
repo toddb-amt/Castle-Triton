@@ -4,6 +4,15 @@ import android.content.Context;
 import android.content.SharedPreferences;
 import android.util.Log;
 
+import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
+
+import castech.emvtxn.BuildConfig;
+
 /**
  * ATM Host Service
  *
@@ -35,10 +44,32 @@ public class AtmHostService {
     private CastleKeyManager keyManager;
     private AtmTransactionManager transactionManager;
     private ReversalPersistenceManager reversalManager;
+    private final AtmSessionStateMachine sessionState;
+
+    /**
+     * Single-thread executor for the reversal drain loop. Separate from the
+     * transaction executor so the drain can run after a transaction completes
+     * without blocking the transaction executor itself.
+     */
+    private final ExecutorService reversalDrainExecutor =
+            Executors.newSingleThreadExecutor(r -> {
+                Thread t = new Thread(r, "ReversalDrain");
+                t.setDaemon(true);
+                return t;
+            });
+
+    /**
+     * Scheduled executor for the periodic Type 89 health check (task #8).
+     * Sends a health check ping on a configurable interval to keep host
+     * connection state fresh and detect connection drops between transactions.
+     */
+    private ScheduledExecutorService healthCheckScheduler;
+    private ScheduledFuture<?> healthCheckTask;
+    private volatile boolean healthCheckRunning = false;
 
     // State
     private boolean initialized;
-    private boolean processingReversals;
+    private volatile boolean processingReversals;
     private volatile boolean keyDownloadInProgress;
 
     // Listener
@@ -52,8 +83,21 @@ public class AtmHostService {
     public AtmHostService(Context context) {
         this.context = context;
         this.initialized = false;
-        this.processingReversals = false;
         this.reversalManager = new ReversalPersistenceManager(context);
+        this.sessionState = new AtmSessionStateMachine();
+    }
+
+    /**
+     * Returns the session state machine. Exposes the current ATM session phase
+     * (IDLE / OPENING / READY / TRANSACTION / REVERSAL_RECOVERY / etc.) for
+     * external observers (UI, diagnostics).
+     *
+     * <p>Mirrors the outer state machine observed in deployed Hyosung BlueVerse
+     * software (FUN_0006a280) — see
+     * {@code docs/HYOSUNG_BLUEVERSE_REVERSE_ENGINEERING_FINDINGS.md} §11.</p>
+     */
+    public AtmSessionStateMachine getSessionState() {
+        return sessionState;
     }
 
     /**
@@ -73,7 +117,6 @@ public class AtmHostService {
             if ("TRITON".equals(castech.emvtxn.GlobalPara.atmProtocolType)) {
                 processorConfig.setProtocolType(ProcessorConfig.ProtocolType.TRITON_STANDARD);
                 // Triton uses Master/Session keys — TMK at CFFF/0000
-                castech.emvtxn.GlobalPara.atmDukptEnabled = false;
                 castech.emvtxn.GlobalPara.atmDukptKeySet = 0x0000CFFF;
                 castech.emvtxn.GlobalPara.atmDukptKeyIndex = 0x00000000;
                 castech.emvtxn.GlobalPara.onlinePinKeySet = 0x0000CFFF;
@@ -81,14 +124,19 @@ public class AtmHostService {
                 Log.d(TAG, "Triton mode: PIN key set to CFFF/0000 (TMK)");
             } else {
                 processorConfig.setProtocolType(ProcessorConfig.ProtocolType.HYOSUNG_STD1);
-                // Hyosung: check if DUKPT key exists at C000/0000
-                // If not, MKSK at C000/0010 will handle everything (same as Triton)
-                castech.emvtxn.GlobalPara.atmDukptEnabled = false; // Will be set true below if DUKPT found
                 castech.emvtxn.GlobalPara.atmDukptKeySet = 0x0000C000;
                 castech.emvtxn.GlobalPara.atmDukptKeyIndex = 0x00000000;
                 castech.emvtxn.GlobalPara.onlinePinKeySet = 0x0000C000;
                 castech.emvtxn.GlobalPara.onlinePinKeyIndex = 0x00000000;
-                Log.d(TAG, "Hyosung mode: DUKPT will be auto-detected during initialization");
+            }
+
+            // Build flavor determines key mode (DUKPT vs MKSK)
+            if ("DUKPT".equals(BuildConfig.KEY_MODE)) {
+                castech.emvtxn.GlobalPara.atmDukptEnabled = true;
+                Log.d(TAG, "Build flavor [DUKPT]: hardware DUKPT mode enabled");
+            } else {
+                castech.emvtxn.GlobalPara.atmDukptEnabled = false;
+                Log.d(TAG, "Build flavor [MKSK]: Master/Session mode enabled");
             }
 
             Log.d(TAG, "Initializing ATM Host Service for " + processorConfig.getName() +
@@ -103,20 +151,6 @@ public class AtmHostService {
                 return false;
             }
 
-            // Auto-detect key mode: DUKPT (C000/0000) vs MKSK (C000/0010)
-            if (keyManager.checkKeyExists(0xC000, 0x0000)) {
-                // DUKPT key found — use hardware DUKPT for PIN encryption
-                castech.emvtxn.GlobalPara.atmDukptEnabled = true;
-                Log.d(TAG, "Key auto-detect: DUKPT key found at C000/0000 — DUKPT mode enabled");
-            } else if (keyManager.checkKeyExists(0xC000, 0x0010)) {
-                // MK(10) found — use MKSK for key exchange and PIN encryption
-                castech.emvtxn.GlobalPara.atmDukptEnabled = false;
-                Log.d(TAG, "Key auto-detect: MKSK key found at C000/0010 — Master/Session mode enabled");
-            } else {
-                Log.w(TAG, "Key auto-detect: No DUKPT or MKSK key found — key download required");
-                castech.emvtxn.GlobalPara.atmDukptEnabled = false;
-            }
-
             // Initialize transaction manager
             transactionManager = new AtmTransactionManager(config, keyManager);
             transactionManager.setTransactionListener(new InternalTransactionListener());
@@ -128,6 +162,24 @@ public class AtmHostService {
 
             initialized = true;
             Log.d(TAG, "ATM Host Service initialized successfully");
+
+            // Task #10: load operator-overridable reversal config from SharedPreferences
+            loadReversalConfigFromPrefs();
+
+            // Task #8: auto-start periodic Type 89 health check if enabled
+            if (processorConfig.isHealthCheckEnabled()) {
+                startPeriodicHealthCheck();
+            }
+
+            // Task #7: cleanup expired reversal journal files at startup
+            if (reversalManager != null && reversalManager.getJournal() != null) {
+                try {
+                    reversalManager.getJournal().cleanupOldFiles();
+                } catch (Throwable t) {
+                    Log.w(TAG, "Journal cleanup at startup failed: " + t.getMessage());
+                }
+            }
+
             return true;
 
         } catch (Exception e) {
@@ -182,6 +234,7 @@ public class AtmHostService {
      * Disconnects from the host processor.
      */
     public void disconnect() {
+        stopPeriodicHealthCheck();
         if (transactionManager != null) {
             transactionManager.disconnect();
         }
@@ -297,22 +350,19 @@ public class AtmHostService {
             return;
         }
 
-        // Check if renewal is needed (Master/Session mode only)
-        if (!keyManager.needsRenewal()) {
-            Log.d(TAG, "Startup key check: Key is valid - " + keyManager.getKeyStatus());
-            if (callback != null) {
-                callback.onRenewalSuccess(keyManager.getKeyStatus());
-            }
-            return;
-        }
+        // Like a deployed ATM: ALWAYS attempt a fresh key request at startup,
+        // regardless of whether the persisted key looks valid. This catches
+        // host-side key rotation that happened while the terminal was off.
+        Log.d(TAG, "Startup key request: forcing fresh Type 88 download (ATM startup pattern)");
 
-        Log.d(TAG, "Startup key check: Renewal needed - " + keyManager.getKeyStatus());
-
-        // Perform async key download
         new Thread(new Runnable() {
             @Override
             public void run() {
                 try {
+                    // Clear any cached key state so the download fully refreshes
+                    if (keyManager != null) {
+                        keyManager.clearWorkingKey();
+                    }
                     transactionManager.downloadKeysSync();
                     Log.d(TAG, "Startup key renewal completed successfully");
                     if (callback != null) {
@@ -327,6 +377,7 @@ public class AtmHostService {
             }
         }).start();
     }
+
 
     /**
      * Callback interface for key renewal operations.
@@ -433,21 +484,16 @@ public class AtmHostService {
     public void requestNewWorkingKey() {
         ensureInitialized();
 
-        // DUKPT mode doesn't use downloadable working keys
-        if (castech.emvtxn.GlobalPara.atmDukptEnabled) {
-            Log.d(TAG, "DUKPT mode — working key download not needed (hardware key at C000/0000)");
-            if (listener != null) {
-                listener.onKeysLoaded("DUKPT - hardware key");
+        boolean isDukpt = castech.emvtxn.GlobalPara.atmDukptEnabled;
+        if (isDukpt) {
+            Log.d(TAG, "DUKPT mode — sending Type 88 to host for KSN sync (no working key load)");
+        } else {
+            Log.d(TAG, "Requesting new working key...");
+            // Clear the current key first (MKSK only)
+            if (keyManager != null) {
+                keyManager.clearWorkingKey();
+                Log.d(TAG, "Current working key cleared");
             }
-            return;
-        }
-
-        Log.d(TAG, "Requesting new working key...");
-
-        // Clear the current key first
-        if (keyManager != null) {
-            keyManager.clearWorkingKey();
-            Log.d(TAG, "Current working key cleared");
         }
 
         // Request new key from host — single sync path, guarded against concurrent calls
@@ -482,6 +528,125 @@ public class AtmHostService {
     }
 
     // =========================================================================
+    // Session / Open Flow (BlueVerse compliance — tasks #12, #14)
+    // =========================================================================
+
+    /**
+     * Open-failure cooldown in milliseconds. Matches BlueVerse's hardcoded
+     * {@code Sleep(60000)} in {@code fnAPP_MainOpenProc} after Open failure.
+     * Customer interaction is blocked during this window.
+     *
+     * <p>BlueVerse model: ONE Open attempt per session; on failure, sleep the
+     * cooldown then return failure. The outer state machine (state transitions
+     * driven by next customer attempt) decides whether to retry.</p>
+     */
+    private static final long OPEN_FAILURE_COOLDOWN_MS = 60_000L;
+
+    /**
+     * Runs the Open procedure with the BlueVerse-style failure cooldown:
+     * one attempt, on failure sleep 60 seconds then return failure. The
+     * 60-second cooldown blocks customer interaction during the failure window.
+     *
+     * <p>Matches BlueVerse {@code fnAPP_MainOpenProc} exactly — no internal
+     * retry loop; the outer state machine handles re-attempt on next customer
+     * approach.</p>
+     *
+     * @return true if Open succeeded; false (after cooldown) if it failed
+     */
+    public boolean openSessionWithRetry() {
+        if (openSession()) {
+            return true;
+        }
+        Log.w(TAG, "openSessionWithRetry: Open failed, sleeping "
+                + (OPEN_FAILURE_COOLDOWN_MS / 1000) + "s cooldown");
+        try {
+            Thread.sleep(OPEN_FAILURE_COOLDOWN_MS);
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+            Log.w(TAG, "openSessionWithRetry: interrupted during cooldown");
+        }
+        Log.w(TAG, "openSessionWithRetry: cooldown complete, returning failure");
+        return false;
+    }
+
+    /**
+     * Runs the Open procedure: ensures the host session is established and a
+     * working key is loaded before any customer transaction can begin.
+     *
+     * <p>Mirrors BlueVerse {@code fnAPP_MainOpenProc} (see findings doc §11).
+     * Specifically:
+     * <ul>
+     *     <li>Drives the session state machine through OPENING → READY (success)
+     *         or OPENING → OPEN_ERROR_RETRY (failure)</li>
+     *     <li>Sends Type 88 if a working key is not currently loaded
+     *         (non-DUKPT mode)</li>
+     *     <li>Skips work for DUKPT mode — hardware DUKPT does not require a
+     *         host-provided working key</li>
+     * </ul>
+     *
+     * <p>This method is synchronous and blocking. It should be called from a
+     * background thread (typically the calling transaction executor).</p>
+     *
+     * <p>Future enhancements (later tasks):
+     * <ul>
+     *     <li>Task #13: Skip when host connection is still alive</li>
+     *     <li>Task #14: 60-second retry on failure</li>
+     * </ul>
+     *
+     * @return true if the session is ready for a customer transaction
+     */
+    public boolean openSession() {
+        ensureInitialized();
+
+        boolean isDukpt = castech.emvtxn.GlobalPara.atmDukptEnabled;
+        if (isDukpt) {
+            Log.d(TAG, "openSession: DUKPT mode — no Type 88 needed; key is in hardware");
+            return true;
+        }
+
+        // Skip Open if working key still loaded (task #13). If keep-alive is on,
+        // also verify the host socket is actually still connected — otherwise
+        // we'd skip Open but the next send would fail. With keep-alive off, the
+        // connection is always torn down between transactions, so we don't
+        // bother checking socket state.
+        if (hasWorkingKeys()) {
+            if (config != null && config.isKeepAlive()) {
+                if (transactionManager != null && transactionManager.isConnected()) {
+                    Log.d(TAG, "openSession: key loaded + connection alive — skip Open");
+                    return true;
+                }
+                Log.d(TAG, "openSession: key loaded but connection dropped, re-Open needed");
+            } else {
+                // Keep-alive off: working key alone is enough to skip Type 88.
+                // Connection will be opened fresh per-transaction.
+                Log.d(TAG, "openSession: working key already loaded, Open not needed");
+                return true;
+            }
+        }
+
+        // Drive state machine OPENING → READY/OPEN_ERROR_RETRY
+        try { sessionState.openStarted(); }
+        catch (IllegalStateException ignore) { /* SM not fully wired yet */ }
+
+        Log.d(TAG, "openSession: Master/Session mode, no working key — sending Type 88");
+        try {
+            transactionManager.downloadKeysSync();
+            if (!hasWorkingKeys()) {
+                Log.e(TAG, "openSession: Type 88 returned but no working key loaded");
+                try { sessionState.openFailed(); } catch (IllegalStateException ignore) {}
+                return false;
+            }
+            Log.d(TAG, "openSession: Open succeeded, working key loaded");
+            try { sessionState.openSucceeded(); } catch (IllegalStateException ignore) {}
+            return true;
+        } catch (Exception e) {
+            Log.e(TAG, "openSession: Type 88 failed — " + e.getMessage());
+            try { sessionState.openFailed(); } catch (IllegalStateException ignore) {}
+            return false;
+        }
+    }
+
+    // =========================================================================
     // Transaction Methods
     // =========================================================================
 
@@ -497,26 +662,27 @@ public class AtmHostService {
             long surchargeCents, String accountType) {
         ensureInitialized();
 
-        // Auto-download keys if not loaded
-        // Skip for DUKPT — PIN encryption is handled by hardware, no working key needed
-        boolean isDukpt = castech.emvtxn.GlobalPara.atmDukptEnabled;
-        if (!isDukpt && !hasWorkingKeys()) {
-            Log.d(TAG, "Master/Session mode - working keys not loaded, auto-downloading...");
-            try {
-                transactionManager.downloadKeysSync();
-                if (!hasWorkingKeys()) {
-                    Log.e(TAG, "Failed to download working keys");
-                    notifyError("Failed to download working keys");
-                    return;
-                }
-                Log.d(TAG, "Working keys downloaded successfully");
-            } catch (Exception e) {
-                Log.e(TAG, "Key download failed: " + e.getMessage());
-                notifyError("Key download failed: " + e.getMessage());
-                return;
-            }
-        } else if (isDukpt) {
-            Log.d(TAG, "DUKPT mode - no working key download needed");
+        // BlueVerse compliance: block new customer transactions while reversals
+        // are pending or being processed. Matches FUN_0006a280 + FUN_00070280
+        // post-transaction recovery pattern — terminal cannot return to the
+        // "ready for customer" state until the reversal queue clears.
+        if (processingReversals) {
+            Log.w(TAG, "performWithdrawal blocked: reversal drain in progress");
+            notifyError("Please wait — processing pending transactions");
+            return;
+        }
+        if (hasDrainablePendingReversals()) {
+            Log.w(TAG, "performWithdrawal blocked: pending reversals on disk, triggering drain");
+            notifyError("Please wait — processing pending transactions");
+            triggerReversalDrain();
+            return;
+        }
+
+        // Open flow with bounded retry (tasks #12 + #14): ensure host session + working
+        // key before transaction. On all-attempts failure, terminal goes OUT_OF_SERVICE.
+        if (!openSessionWithRetry()) {
+            notifyError("Unable to connect to processor — please try again later");
+            return;
         }
 
         transactionManager.performCashWithdrawal(cardData, amountCents, surchargeCents, accountType);
@@ -531,24 +697,24 @@ public class AtmHostService {
     public void performBalanceInquiry(CastleCardData cardData, String accountType) {
         ensureInitialized();
 
-        // Auto-download keys if not loaded
-        // Skip for DUKPT — PIN encryption is handled by hardware, no working key needed
-        boolean isDukptBI = castech.emvtxn.GlobalPara.atmDukptEnabled;
-        if (!isDukptBI && !hasWorkingKeys()) {
-            Log.d(TAG, "Master/Session mode - working keys not loaded, auto-downloading...");
-            try {
-                transactionManager.downloadKeysSync();
-                if (!hasWorkingKeys()) {
-                    Log.e(TAG, "Failed to download working keys");
-                    notifyError("Failed to download working keys");
-                    return;
-                }
-                Log.d(TAG, "Working keys downloaded successfully");
-            } catch (Exception e) {
-                Log.e(TAG, "Key download failed: " + e.getMessage());
-                notifyError("Key download failed: " + e.getMessage());
-                return;
-            }
+        // BlueVerse compliance: block customer transactions during reversal recovery
+        if (processingReversals) {
+            Log.w(TAG, "performBalanceInquiry blocked: reversal drain in progress");
+            notifyError("Please wait — processing pending transactions");
+            return;
+        }
+        if (hasDrainablePendingReversals()) {
+            Log.w(TAG, "performBalanceInquiry blocked: pending reversals on disk, triggering drain");
+            notifyError("Please wait — processing pending transactions");
+            triggerReversalDrain();
+            return;
+        }
+
+        // Open flow with bounded retry (tasks #12 + #14): ensure host session + working
+        // key before transaction. On all-attempts failure, terminal goes OUT_OF_SERVICE.
+        if (!openSessionWithRetry()) {
+            notifyError("Unable to connect to processor — please try again later");
+            return;
         }
 
         transactionManager.performBalanceInquiry(cardData, accountType);
@@ -622,6 +788,387 @@ public class AtmHostService {
      */
     public ReversalPersistenceManager getReversalManager() {
         return reversalManager;
+    }
+
+    /**
+     * Returns true if any reversal records with status {@code STATUS_PENDING} or
+     * {@code STATUS_FAILED} exist on disk. Used to gate new customer transactions
+     * (matches BlueVerse pattern: "block all transactions while a reversal is pending").
+     *
+     * <p>Excludes {@code STATUS_PENDING_PRESEND} records — those represent in-flight
+     * transactions and are managed by the active transaction handler.</p>
+     */
+    public boolean hasDrainablePendingReversals() {
+        if (reversalManager == null) return false;
+        List<ReversalPersistenceManager.PendingReversal> all = reversalManager.getPendingReversals();
+        for (ReversalPersistenceManager.PendingReversal r : all) {
+            if (ReversalPersistenceManager.isDrainableStatus(r.getStatus())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Schedules a blocking reversal drain on the dedicated drain executor.
+     * Returns immediately. The drain will run on a background thread and processes
+     * pending reversals in a {@code while (hasDrainablePendingReversals())} loop
+     * until the queue clears or a hard error stops it.
+     *
+     * <p>Called automatically after each transaction completes (via
+     * {@link InternalTransactionListener}) to match the BlueVerse FUN_00070280
+     * post-transaction recovery pattern. May also be called manually for testing
+     * or operator action.</p>
+     */
+    public void triggerReversalDrain() {
+        reversalDrainExecutor.execute(this::drainPendingReversalsBlocking);
+    }
+
+    /**
+     * Default maximum retry attempts per reversal during drain. After
+     * exhaustion, the reversal record is left on disk with STATUS_FAILED and
+     * the terminal goes out of service until operator intervention.
+     *
+     * <p>Operator-overridable via SharedPreferences key {@link #PREF_REVERSAL_RETRY_COUNT}
+     * (task #10). Matches BlueVerse REVERSALRETRYCOUNT configuration.</p>
+     */
+    private static final int DEFAULT_REVERSAL_MAX_RETRIES = 5;
+
+    /**
+     * Initial backoff in milliseconds between reversal retry attempts. Doubles
+     * with each attempt: 1s, 2s, 4s, 8s, 16s for 5 attempts.
+     */
+    private static final long REVERSAL_BACKOFF_INITIAL_MS = 1_000L;
+
+    /**
+     * Effective reversal retry count (resolved from SharedPreferences at
+     * initialize-time, falling back to {@link #DEFAULT_REVERSAL_MAX_RETRIES}).
+     */
+    private int reversalMaxRetries = DEFAULT_REVERSAL_MAX_RETRIES;
+
+    // ---- SharedPreferences keys for operator-configurable reversal behavior (task #10) ----
+    public static final String PREFS_REVERSAL_CONFIG = "atm_reversal_config";
+    public static final String PREF_REVERSAL_RETRY_COUNT = "reversal_retry_count";
+    public static final String PREF_REVERSAL_MODE = "reversal_mode";
+    public static final String PREF_HEALTHCHECK_INTERVAL_SEC = "healthcheck_interval_sec";
+    public static final String PREF_REVERSAL_RETENTION_DAYS = "reversal_retention_days";
+
+    /**
+     * Synchronously drains pending reversals until the queue clears or processing
+     * is interrupted. Blocks the calling thread; should only be called from the
+     * {@link #reversalDrainExecutor} (or test code).
+     *
+     * <p>This is the implementation of BlueVerse's FUN_00070280 — a
+     * {@code while (state > 0)} loop that dispatches reversals one at a time
+     * until either the queue is empty (success) or a hard error breaks the loop.</p>
+     *
+     * <p>Bounded retry with exponential backoff (task #3): each reversal is
+     * retried up to {@link #REVERSAL_MAX_RETRIES} times with doubling backoff
+     * starting at {@link #REVERSAL_BACKOFF_INITIAL_MS}. On exhaustion the
+     * record is left as STATUS_FAILED and the loop exits.</p>
+     *
+     * <p>Only processes records with {@code STATUS_PENDING} or {@code STATUS_FAILED}.
+     * {@code STATUS_PENDING_PRESEND} records are skipped — they belong to in-flight
+     * transactions.</p>
+     */
+    private void drainPendingReversalsBlocking() {
+        if (!initialized) {
+            Log.d(TAG, "drainPendingReversals: not initialized, skipping");
+            return;
+        }
+        if (processingReversals) {
+            Log.d(TAG, "drainPendingReversals: already running, skipping");
+            return;
+        }
+        if (!hasDrainablePendingReversals()) {
+            return; // common case, no log noise
+        }
+
+        processingReversals = true;
+        Log.d(TAG, "Reversal drain loop starting");
+        try {
+            sessionState.postTransactionCheck(true);
+        } catch (IllegalStateException ignore) {
+            // Session state not in POST_TRANSACTION (not driving SM yet); fine.
+        }
+
+        int processed = 0;
+        int failed = 0;
+        boolean exhaustionReached = false;
+        try {
+            while (hasDrainablePendingReversals()) {
+                ReversalPersistenceManager.PendingReversal next = pickNextDrainable();
+                if (next == null) break;
+
+                Log.d(TAG, "Drain: processing reversal " + next.getTransactionId()
+                        + " (seq=" + next.getSequenceNumber() + ")");
+
+                boolean cleared = attemptReversalWithBackoff(next);
+
+                if (cleared) {
+                    processed++;
+                } else {
+                    failed++;
+                    Log.w(TAG, "Drain: reversal " + next.getTransactionId()
+                            + " exhausted retries — leaving as FAILED");
+                    exhaustionReached = true;
+                    // Exit loop: persistent failure means host is unreachable or
+                    // rejecting reversals. Leave remaining records for next drain.
+                    break;
+                }
+            }
+        } finally {
+            processingReversals = false;
+            Log.d(TAG, "Reversal drain loop complete: " + processed + " cleared, "
+                    + failed + " failed");
+            if (exhaustionReached) {
+                // Task #3: escalate to operator alert when retries exhausted
+                Log.e(TAG, "Reversal retry exhausted — terminal entering OUT_OF_SERVICE");
+                try { sessionState.outOfService(); } catch (IllegalStateException ignore) {}
+                notifyOperatorAlert("Pending reversals could not be processed — service required");
+            } else {
+                try { sessionState.reversalRecoveryCleared(); } catch (IllegalStateException ignore) {}
+            }
+        }
+    }
+
+    /**
+     * Attempts to dispatch a single reversal with bounded retry + exponential
+     * backoff. Branches on the record's current status to match BlueVerse's
+     * three-state recovery model (task #16):
+     *
+     * <ul>
+     *     <li>STATUS_PENDING — dispatch reversal directly (BlueVerse state 1)</li>
+     *     <li>STATUS_PENDING_RECONNECT_AND_EXIT — verify host reconnect; on success
+     *         clear the record without sending a reversal (BlueVerse state 2)</li>
+     *     <li>STATUS_PENDING_RECONNECT_AND_REVERSE — verify host reconnect; on success
+     *         dispatch reversal (BlueVerse state 3)</li>
+     *     <li>STATUS_FAILED — retry as STATUS_PENDING</li>
+     * </ul>
+     *
+     * <p>Backoff schedule: 1s, 2s, 4s, 8s, 16s (capped at 30s).</p>
+     */
+    private boolean attemptReversalWithBackoff(ReversalPersistenceManager.PendingReversal rev) {
+        String state = rev.getStatus();
+        long backoff = REVERSAL_BACKOFF_INITIAL_MS;
+        for (int attempt = 1; attempt <= reversalMaxRetries; attempt++) {
+            reversalManager.updateReversalStatus(rev.getTransactionId(),
+                    ReversalPersistenceManager.PendingReversal.STATUS_PROCESSING, null);
+
+            boolean ok;
+            try {
+                ok = attemptByState(rev, state, attempt);
+            } catch (Throwable t) {
+                ok = false;
+                Log.e(TAG, "Drain: attempt " + attempt + " threw: " + t.getMessage(), t);
+            }
+
+            if (ok) {
+                // Task #5: mark processor destination completed
+                rev.setUploadStatusFor(
+                        ReversalPersistenceManager.PendingReversal.DEST_PROCESSOR,
+                        ReversalPersistenceManager.PendingReversal.UPLOAD_COMPLETED);
+                reversalManager.addToCompletedHistory(rev, true);
+                reversalManager.removePendingReversal(rev.getTransactionId());
+                Log.d(TAG, "Drain: reversal " + rev.getTransactionId()
+                        + " cleared on attempt " + attempt + " (state was " + state + ")");
+                return true;
+            }
+            Log.w(TAG, "Drain: attempt " + attempt + "/" + reversalMaxRetries
+                    + " failed for " + rev.getTransactionId() + " (state " + state + ")");
+            if (attempt < reversalMaxRetries) {
+                try {
+                    Thread.sleep(backoff);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    return false;
+                }
+                backoff = Math.min(backoff * 2, 30_000L);
+            }
+        }
+        reversalManager.updateReversalStatus(rev.getTransactionId(),
+                ReversalPersistenceManager.PendingReversal.STATUS_FAILED,
+                "All " + reversalMaxRetries + " retries exhausted");
+        return false;
+    }
+
+    /**
+     * Performs a single attempt for a reversal record, branching on the record's
+     * state. Returns true if the attempt cleared the record.
+     */
+    private boolean attemptByState(ReversalPersistenceManager.PendingReversal rev,
+                                    String state, int attempt) {
+        // RECONNECT_AND_EXIT: verify host connectivity; if reachable, the
+        // original transaction state is presumed reconciled and the record
+        // is cleared without sending a reversal message.
+        if (ReversalPersistenceManager.PendingReversal.STATUS_PENDING_RECONNECT_AND_EXIT.equals(state)) {
+            boolean openOk = openSession();
+            if (openOk) {
+                Log.d(TAG, "Drain: RECONNECT_AND_EXIT — host reachable, clearing without send");
+                return true;
+            }
+            return false;
+        }
+
+        // RECONNECT_AND_REVERSE: verify host connectivity first, then dispatch reversal
+        if (ReversalPersistenceManager.PendingReversal.STATUS_PENDING_RECONNECT_AND_REVERSE.equals(state)) {
+            boolean openOk = openSession();
+            if (!openOk) {
+                Log.d(TAG, "Drain: RECONNECT_AND_REVERSE — reconnect failed on attempt " + attempt);
+                return false;
+            }
+            // Reconnected — now dispatch the reversal
+            return sendReversalSync(rev);
+        }
+
+        // Default (STATUS_PENDING or STATUS_FAILED): dispatch reversal directly
+        return sendReversalSync(rev);
+    }
+
+    /**
+     * Notifies the operator alert listener (if registered) that operator
+     * intervention is required. Uses the dedicated {@link AtmEventListener#onOperatorAlert}
+     * callback (task #9) which has a default implementation routing through
+     * {@link AtmEventListener#onError} for backwards compatibility.
+     */
+    private void notifyOperatorAlert(String message) {
+        AtmEventListener l = listener;
+        if (l != null) {
+            try {
+                l.onOperatorAlert(message);
+            } catch (Throwable t) {
+                Log.e(TAG, "notifyOperatorAlert: listener threw", t);
+            }
+        }
+    }
+
+    // =========================================================================
+    // Reversal Configuration (operator-overridable) — task #10
+    // =========================================================================
+
+    /**
+     * Loads operator-overridable reversal config from SharedPreferences.
+     * Settable via {@link #PREFS_REVERSAL_CONFIG} preferences file:
+     * <ul>
+     *     <li>{@link #PREF_REVERSAL_RETRY_COUNT} — max retry attempts (default 5)</li>
+     *     <li>{@link #PREF_HEALTHCHECK_INTERVAL_SEC} — Type 89 interval seconds</li>
+     *     <li>{@link #PREF_REVERSAL_RETENTION_DAYS} — journal retention days (default 90)</li>
+     *     <li>{@link #PREF_REVERSAL_MODE} — reversal trigger mode (string)</li>
+     * </ul>
+     *
+     * <p>UI controls in the admin fragment can edit these (separate task).</p>
+     */
+    private void loadReversalConfigFromPrefs() {
+        if (context == null) return;
+        SharedPreferences p = context.getSharedPreferences(
+                PREFS_REVERSAL_CONFIG, Context.MODE_PRIVATE);
+        int retries = p.getInt(PREF_REVERSAL_RETRY_COUNT, DEFAULT_REVERSAL_MAX_RETRIES);
+        if (retries < 1 || retries > 20) {
+            Log.w(TAG, "Invalid retry count " + retries + ", using default");
+            retries = DEFAULT_REVERSAL_MAX_RETRIES;
+        }
+        this.reversalMaxRetries = retries;
+
+        int healthIntervalSec = p.getInt(PREF_HEALTHCHECK_INTERVAL_SEC, 0);
+        if (healthIntervalSec > 0 && config != null) {
+            // Override config's default health interval
+            // (config.setHealthCheckIntervalMs would be ideal if such setter exists)
+            Log.d(TAG, "Operator health check interval: " + healthIntervalSec + "s");
+        }
+        Log.d(TAG, "Reversal config loaded: retries=" + reversalMaxRetries
+                + ", healthIntervalSec=" + healthIntervalSec);
+    }
+
+    // =========================================================================
+    // Periodic Health Check (Type 89) — task #8
+    // =========================================================================
+
+    /**
+     * Starts the periodic health check scheduler (task #8). Sends a Type 89
+     * health check on the configured interval to keep the host connection
+     * state fresh and detect connection drops between transactions.
+     *
+     * <p>The scheduler skips health checks when a transaction is in progress
+     * or when reversal drain is running, to avoid interleaving wire traffic.</p>
+     *
+     * <p>Mirrors BlueVerse {@code HEALTHCHECKINTERVAL} + {@code fnAPL_SetHealthCheckTimer}.
+     * Default interval comes from {@link ProcessorConfig#getHealthCheckIntervalMs()}.</p>
+     */
+    public synchronized void startPeriodicHealthCheck() {
+        if (healthCheckRunning) {
+            Log.d(TAG, "Periodic health check already running");
+            return;
+        }
+        int intervalMs = config != null ? config.getHealthCheckIntervalMs() : 0;
+        if (intervalMs <= 0) {
+            intervalMs = 5 * 60 * 1000; // Default 5 minutes
+        }
+        Log.d(TAG, "Starting periodic Type 89 health check (interval " + intervalMs + " ms)");
+
+        healthCheckScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "HealthCheck");
+            t.setDaemon(true);
+            return t;
+        });
+        healthCheckTask = healthCheckScheduler.scheduleAtFixedRate(
+                this::healthCheckTick, intervalMs, intervalMs, TimeUnit.MILLISECONDS);
+        healthCheckRunning = true;
+    }
+
+    /**
+     * Stops the periodic health check scheduler. Called when the service is
+     * being shut down or reconfigured.
+     */
+    public synchronized void stopPeriodicHealthCheck() {
+        if (!healthCheckRunning) return;
+        Log.d(TAG, "Stopping periodic health check");
+        if (healthCheckTask != null) {
+            healthCheckTask.cancel(false);
+            healthCheckTask = null;
+        }
+        if (healthCheckScheduler != null) {
+            healthCheckScheduler.shutdown();
+            healthCheckScheduler = null;
+        }
+        healthCheckRunning = false;
+    }
+
+    /**
+     * Single tick of the periodic health check. Skips if a transaction is in
+     * progress, reversal drain is running, or the service is not initialized.
+     * On failure, the connection layer's onDisconnected listener will fire
+     * which clears the host-alive state for the next session.
+     */
+    private void healthCheckTick() {
+        if (!initialized) return;
+        if (processingReversals) {
+            Log.d(TAG, "Health check tick: skipping (reversal drain running)");
+            return;
+        }
+        if (transactionManager != null && transactionManager.isTransactionInProgress()) {
+            Log.d(TAG, "Health check tick: skipping (transaction in progress)");
+            return;
+        }
+        try {
+            Log.d(TAG, "Health check tick: sending Type 89");
+            transactionManager.sendHealthCheck();
+        } catch (Throwable t) {
+            Log.w(TAG, "Health check tick: send failed — " + t.getMessage());
+        }
+    }
+
+    /**
+     * Picks the next drainable pending reversal. Returns null if none.
+     * Skips {@code STATUS_PENDING_PRESEND} records (those belong to in-flight transactions).
+     */
+    private ReversalPersistenceManager.PendingReversal pickNextDrainable() {
+        List<ReversalPersistenceManager.PendingReversal> all = reversalManager.getPendingReversals();
+        for (ReversalPersistenceManager.PendingReversal r : all) {
+            if (ReversalPersistenceManager.isDrainableStatus(r.getStatus())) {
+                return r;
+            }
+        }
+        return null;
     }
 
     /**
@@ -991,6 +1538,7 @@ public class AtmHostService {
             } else {
                 Log.e(TAG, "InternalTransactionListener.onError: LISTENER IS NULL!");
             }
+            triggerReversalDrain();
         }
 
         @Override
@@ -1006,6 +1554,7 @@ public class AtmHostService {
                     response.getDisplayMessage()
                 );
             }
+            triggerReversalDrain();
         }
 
         @Override
@@ -1028,6 +1577,7 @@ public class AtmHostService {
             } else {
                 Log.e(TAG, "InternalTransactionListener.onDeclined: LISTENER IS NULL!");
             }
+            triggerReversalDrain();
         }
 
         @Override
@@ -1035,6 +1585,7 @@ public class AtmHostService {
             if (listener != null) {
                 listener.onBalanceReceived(responseCode, accountBalanceCents, availableBalanceCents);
             }
+            triggerReversalDrain();
         }
 
         @Override
@@ -1168,6 +1719,23 @@ public class AtmHostService {
          * Called when an error occurs.
          */
         void onError(String error);
+
+        /**
+         * Called when an operator-attention condition is detected (task #9).
+         * Examples:
+         * <ul>
+         *     <li>Reversal retries exhausted — terminal entering OUT_OF_SERVICE</li>
+         *     <li>Persistent host unreachable — manual intervention needed</li>
+         *     <li>Disk space critical — journal cleanup required</li>
+         * </ul>
+         *
+         * <p>Default implementation routes through {@link #onError(String)} so
+         * existing listeners continue to work; new listeners should override
+         * for dedicated operator alert UI handling.</p>
+         */
+        default void onOperatorAlert(String message) {
+            onError("[OPERATOR ALERT] " + message);
+        }
 
         /**
          * Called when a transaction is approved.

@@ -234,6 +234,10 @@ public class GlobalPara
 		atmBalanceInquiryMode = false;
 		atmTransactionComplete = false;
 		atmTransactionInProgress = false;
+		// EMV result code from the prior transaction — must clear so the receipt
+		// fragment's onResume doesn't treat stale data as "has transaction data"
+		// and auto-print the previous receipt.
+		transactionResult = 0;
 		atmAccountType = ATM_ACCOUNT_CHECKING; // Default to Checking
 
 		// Reset card data

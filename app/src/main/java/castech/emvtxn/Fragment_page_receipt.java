@@ -67,8 +67,15 @@ public class Fragment_page_receipt extends Fragment {
         // Set up button listeners
         setupButtonListeners();
 
-        // Display transaction results
-        displayTransactionResults();
+        // Only render results if there's actual transaction data. Otherwise the
+        // adjacent ViewPager pre-creation of this fragment will auto-print an
+        // empty receipt (e.g. when the user clicks Balance Inquiry, which
+        // navigates to TRANSACTION and pre-loads RECEIPT).
+        if (hasTransactionDataToDisplay()) {
+            displayTransactionResults();
+        } else {
+            Log.d(TAG, "onCreateView: no transaction data — skipping display/auto-print");
+        }
 
         // Don't start timeout in onCreateView - only in onResume when visible
         // This prevents timeout from firing when ViewPager pre-creates adjacent fragments
@@ -265,7 +272,23 @@ public class Fragment_page_receipt extends Fragment {
 
         // Display host response data
         displayHostResponseData(isSuccess);
+
+        // Auto-print the receipt on first display (approve or decline).
+        // Customer can press the "Print Receipt" button to print a duplicate.
+        if (!autoPrintTriggered) {
+            autoPrintTriggered = true;
+            // Use post() to ensure UI is fully laid out before kicking off the print
+            if (view != null) {
+                view.post(() -> {
+                    Log.d(TAG, "Auto-printing receipt on display");
+                    printReceipt();
+                });
+            }
+        }
     }
+
+    /** Tracks whether auto-print has already fired for this receipt display. */
+    private boolean autoPrintTriggered = false;
 
     /**
      * Displays the decline reason from the host response.
@@ -457,9 +480,11 @@ public class Fragment_page_receipt extends Fragment {
     private void printReceipt() {
         Log.d(TAG, "Printing receipt...");
 
-        // Disable print button temporarily
-        btnPrintReceipt.setEnabled(false);
-        btnPrintReceipt.setText("Printing...");
+        // Disable print button temporarily while the printer is busy
+        if (btnPrintReceipt != null) {
+            btnPrintReceipt.setEnabled(false);
+            btnPrintReceipt.setText("Printing...");
+        }
 
         // Run print in separate thread to avoid blocking UI
         new Thread(new Runnable() {
@@ -468,15 +493,18 @@ public class Fragment_page_receipt extends Fragment {
                 try {
                     boolean printSuccess = printReceiptContent();
 
-                    // Update UI on main thread
+                    // Update UI on main thread — re-enable for duplicate print on both
+                    // success and failure paths (customer / merchant may want a copy).
                     if (getActivity() != null) {
                         getActivity().runOnUiThread(new Runnable() {
                             @Override
                             public void run() {
-                                if (printSuccess) {
-                                    btnPrintReceipt.setText("Receipt Printed ✓");
-                                } else {
-                                    btnPrintReceipt.setText("Print Failed - Try Again");
+                                if (btnPrintReceipt != null) {
+                                    if (printSuccess) {
+                                        btnPrintReceipt.setText("Print Another Receipt");
+                                    } else {
+                                        btnPrintReceipt.setText("Print Failed — Tap to Retry");
+                                    }
                                     btnPrintReceipt.setEnabled(true);
                                 }
                             }
@@ -488,8 +516,10 @@ public class Fragment_page_receipt extends Fragment {
                         getActivity().runOnUiThread(new Runnable() {
                             @Override
                             public void run() {
-                                btnPrintReceipt.setText("Print Failed - Try Again");
-                                btnPrintReceipt.setEnabled(true);
+                                if (btnPrintReceipt != null) {
+                                    btnPrintReceipt.setText("Print Failed — Tap to Retry");
+                                    btnPrintReceipt.setEnabled(true);
+                                }
                             }
                         });
                     }
@@ -593,8 +623,10 @@ public class Fragment_page_receipt extends Fragment {
                 Log.d(TAG, "getPrinter() returned: " + (printer != null ? "valid printer" : "NULL"));
                 if (printer != null) {
                     Log.d(TAG, "Calling printer.printf() with " + receipt.length() + " chars");
+                    // printf() is self-contained: initPage + drawText + printPage.
+                    // Do NOT call goprintf() — that's a legacy SAMPLE RECEIPT demo, not a flush.
                     printer.printf(receipt.toString());
-                    Log.d(TAG, "Receipt sent to printer successfully");
+                    Log.d(TAG, "Receipt printed successfully");
                     return true;
                 } else {
                     Log.e(TAG, "Printer is null - may be running on emulator or printer not initialized");
@@ -639,11 +671,16 @@ public class Fragment_page_receipt extends Fragment {
 
     private void resetATMParameters() {
         Log.d(TAG, "resetATMParameters called");
+        // Reset auto-print flag so next transaction's receipt auto-prints
+        autoPrintTriggered = false;
         // Reset all ATM transaction parameters
         GlobalPara.atmSelectedAmount = "0.00";
         GlobalPara.atmFee = "0.00";
         GlobalPara.atmTotal = "0.00";
         GlobalPara.atmTransactionComplete = false;
+        // Clear EMV transaction result so onResume doesn't think old data is still valid
+        // and auto-print the previous receipt on the next transaction.
+        GlobalPara.transactionResult = 0;
         GlobalPara.atmTransactionId = "";
         GlobalPara.atmLastFourDigits = "";
         GlobalPara.atmBalanceInquiryMode = false; // Important: reset balance inquiry flag
@@ -690,15 +727,21 @@ public class Fragment_page_receipt extends Fragment {
         view = null;
     }
 
+    /**
+     * Returns true if the receipt fragment should render results (and auto-print).
+     * Used to suppress display when ViewPager pre-creates the fragment with no data.
+     */
+    private boolean hasTransactionDataToDisplay() {
+        return GlobalPara.atmTransactionComplete ||
+               GlobalPara.transactionResult != 0 ||
+               (GlobalPara.atmResponseCode != null && !GlobalPara.atmResponseCode.isEmpty()) ||
+               (GlobalPara.atmResponseMessage != null && !GlobalPara.atmResponseMessage.isEmpty());
+    }
+
     @Override
     public void onResume() {
         super.onResume();
-        // Refresh display if we have transaction data (complete or not)
-        // Check multiple indicators that a transaction occurred
-        boolean hasTransactionData = GlobalPara.atmTransactionComplete ||
-                                     GlobalPara.transactionResult != 0 ||
-                                     (GlobalPara.atmResponseCode != null && !GlobalPara.atmResponseCode.isEmpty()) ||
-                                     (GlobalPara.atmResponseMessage != null && !GlobalPara.atmResponseMessage.isEmpty());
+        boolean hasTransactionData = hasTransactionDataToDisplay();
 
         if (hasTransactionData) {
             Log.d(TAG, "onResume: Transaction data found, refreshing display");

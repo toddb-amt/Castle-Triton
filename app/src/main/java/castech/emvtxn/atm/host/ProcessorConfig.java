@@ -52,6 +52,21 @@ public class ProcessorConfig {
     private boolean devMode = false;
 
     /**
+     * Connection keep-alive flag (task #13). When true, the host TCP connection
+     * is retained between transactions and the Open flow short-circuits if the
+     * connection is still alive. When false, the connection is torn down after
+     * every transaction (the legacy/conservative behavior — preserves
+     * compatibility with processors that close after each transaction).
+     *
+     * <p>Default: false. Opt-in per processor once keep-alive has been
+     * validated against that processor's actual behavior.</p>
+     *
+     * <p>Mirrors BlueVerse {@code fnAPL_CheckHostOpen} behavior: skip Open
+     * when host is already open.</p>
+     */
+    private boolean keepAlive = false;
+
+    /**
      * Creates a new ProcessorConfig with default values.
      */
     public ProcessorConfig() {
@@ -64,7 +79,7 @@ public class ProcessorConfig {
         this.responseTimeout = 60000;       // 60 seconds
         this.ackTimeout = 10000;            // 10 seconds
         this.eotTimeout = 5000;             // 5 seconds
-        this.healthCheckEnabled = false;
+        this.healthCheckEnabled = true;
         this.healthCheckIntervalMs = 360000; // 6 minutes
         this.reversalOnHostError = true;
         this.maxReversalRetries = 3;
@@ -87,7 +102,7 @@ public class ProcessorConfig {
         config.setFramingType(HyosungProtocol.FramingType.STANDARD);
         config.setRoutingId("000000");
         config.setTerminalId(terminalId);
-        config.setHealthCheckEnabled(false);
+        config.setHealthCheckEnabled(true);
         return config;
     }
 
@@ -120,7 +135,7 @@ public class ProcessorConfig {
         config.setRoutingId("SC101");
         config.setCommunicationHeader("123SC101");
         config.setTerminalId(terminalId);
-        config.setHealthCheckEnabled(false);
+        config.setHealthCheckEnabled(true);
         return config;
     }
 
@@ -136,7 +151,7 @@ public class ProcessorConfig {
         config.setFramingType(HyosungProtocol.FramingType.VISA_NO_STX_ETX);
         config.setRoutingId("000000");
         config.setTerminalId(terminalId);
-        config.setHealthCheckEnabled(false);
+        config.setHealthCheckEnabled(true);
         return config;
     }
 
@@ -152,7 +167,7 @@ public class ProcessorConfig {
         config.setRoutingId("CTSTRA");
         config.setCommunicationHeader("CTSTRI");
         config.setTerminalId(terminalId);
-        config.setHealthCheckEnabled(false);
+        config.setHealthCheckEnabled(true);
         return config;
     }
 
@@ -185,7 +200,7 @@ public class ProcessorConfig {
         config.setRoutingId("LNKATM");
         config.setCommunicationHeader("LNKATM");
         config.setTerminalId(terminalId);
-        config.setHealthCheckEnabled(false);
+        config.setHealthCheckEnabled(true);
         return config;
     }
 
@@ -200,7 +215,7 @@ public class ProcessorConfig {
         config.setFramingType(HyosungProtocol.FramingType.VISA_LENGTH_PREFIX);
         config.setRoutingId("000000");
         config.setTerminalId(terminalId);
-        config.setHealthCheckEnabled(false);
+        config.setHealthCheckEnabled(true);
         return config;
     }
 
@@ -418,6 +433,14 @@ public class ProcessorConfig {
 
     public boolean isDevMode() {
         return devMode;
+    }
+
+    public boolean isKeepAlive() {
+        return keepAlive;
+    }
+
+    public void setKeepAlive(boolean keepAlive) {
+        this.keepAlive = keepAlive;
     }
 
     public void setDevMode(boolean devMode) {

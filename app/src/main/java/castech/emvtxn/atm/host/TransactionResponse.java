@@ -305,6 +305,34 @@ public class TransactionResponse {
     }
 
     /**
+     * Determines whether this response indicates that a reversal should be
+     * generated. Mirrors BlueVerse {@code IsReversalCondition} (task #20).
+     *
+     * <p>In production ATM software, a reversal is typically triggered by
+     * post-approval failures (dispense fail, customer cancel, etc.) — those
+     * are detected by the device layer, not the response itself. However,
+     * certain response codes/states from the host can also indicate that the
+     * terminal should reverse a previously-authorized transaction.</p>
+     *
+     * <p>Current implementation returns false for all "happy path" responses.
+     * If we observe processors using specific response codes to signal "please
+     * reverse," they should be added here.</p>
+     *
+     * <p>Note: this method does NOT trigger reversals for declines — declined
+     * transactions don't need reversal because the host didn't authorize them.</p>
+     *
+     * @return true if a reversal should be generated based on the response alone
+     */
+    public boolean requiresReversal() {
+        // No host-driven reversal conditions identified yet. Reversal triggers
+        // currently come from: connection errors (catch blocks), post-approval
+        // dispense failures (sendReversal call sites), and customer cancel
+        // (UI-driven sendReversal). If a processor's response codes are
+        // discovered to indicate "please reverse," add the checks here.
+        return false;
+    }
+
+    /**
      * Gets the human-readable response description.
      */
     public String getResponseDescription() {
