@@ -17,7 +17,7 @@ import android.util.Log;
  *   <li>{@code jwt} + {@code jwtExpiresAtMillis} — connection-server JWT cache (cleared when expired)
  * </ul>
  */
-public final class PosConfig {
+public class PosConfig {
 
     private static final String TAG = "PosConfig";
     private static final String PREFS_FILE = "pos_config";
