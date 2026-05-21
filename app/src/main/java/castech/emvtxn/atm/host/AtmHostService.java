@@ -1431,6 +1431,17 @@ public class AtmHostService {
         requestHostTotals(false);
     }
 
+    /**
+     * Requests host totals with a caller-supplied callback (used by POS mode where
+     * the result must be routed back to a specific transaction flow rather than
+     * the global event listener).
+     */
+    public void requestHostTotals(boolean reset, AtmTransactionManager.HostTotalsCallback callback) {
+        ensureInitialized();
+        Log.d(TAG, "Requesting host totals (reset=" + reset + ", caller-supplied callback)");
+        transactionManager.requestHostTotals(reset, callback);
+    }
+
     // =========================================================================
     // Configuration Update
     // =========================================================================

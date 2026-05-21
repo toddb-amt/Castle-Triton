@@ -184,6 +184,11 @@ public class MainActivity extends AppCompatActivity {
     // ATM Settings Manager
     private AtmSettingsManager atmSettingsManager = null;
 
+    // POS-mode integration (proxy connection for semi-integrated POS).
+    // Started lazily in initializeAtmHostService() if PosConfig.isEnabled().
+    // See castech.emvtxn.pos.* for the wire protocol and component design.
+    private castech.emvtxn.pos.PosOrchestrator posOrchestrator = null;
+
     // Transaction Log Manager - DISABLED FOR TESTING
     // private TransactionLogManager transactionLogManager = null;
     // private TransactionLog currentTransactionLog = null;
@@ -319,6 +324,18 @@ public class MainActivity extends AppCompatActivity {
         }
 
         Log.d(TAG, "MainActivity onCreate()-->");
+    }
+
+    @Override
+    protected void onDestroy() {
+        if (posOrchestrator != null) {
+            Log.d(TAG, "onDestroy: stopping POS orchestrator");
+            try { posOrchestrator.stop(); } catch (Exception e) {
+                Log.w(TAG, "Error stopping POS orchestrator: " + e.getMessage());
+            }
+            posOrchestrator = null;
+        }
+        super.onDestroy();
     }
 
     /**
@@ -571,6 +588,8 @@ public class MainActivity extends AppCompatActivity {
                             if (atmTransactionLatch != null) {
                                 atmTransactionLatch.countDown();
                             }
+                            // POS hook (no-op if no POS callback is armed)
+                            castech.emvtxn.pos.PosTransactionObserver.notifyError(error);
                         }
 
                         @Override
@@ -590,6 +609,10 @@ public class MainActivity extends AppCompatActivity {
                             if (atmTransactionLatch != null) {
                                 atmTransactionLatch.countDown();
                             }
+                            // POS hook (no-op if no POS callback is armed)
+                            castech.emvtxn.pos.PosTransactionObserver.notifyApproved(
+                                    responseCode, referenceNumber, authDate, authTime,
+                                    accountBalanceCents, availableBalanceCents, displayMessage);
                         }
 
                         @Override
@@ -606,6 +629,9 @@ public class MainActivity extends AppCompatActivity {
                             } else {
                                 Log.e(TAG, ">>> CALLBACK onTransactionDeclined: LATCH IS NULL - cannot signal!");
                             }
+                            // POS hook (no-op if no POS callback is armed)
+                            castech.emvtxn.pos.PosTransactionObserver.notifyDeclined(
+                                    responseCode, responseMessage, retainCard);
                         }
 
                         @Override
@@ -621,6 +647,10 @@ public class MainActivity extends AppCompatActivity {
                             if (atmTransactionLatch != null) {
                                 atmTransactionLatch.countDown();
                             }
+                            // POS hook — balance inquiry flows here, not onTransactionApproved
+                            castech.emvtxn.pos.PosTransactionObserver.notifyApproved(
+                                    responseCode, "", "", "",
+                                    accountBalanceCents, availableBalanceCents, "APPROVED");
                         }
 
                         @Override
@@ -651,6 +681,13 @@ public class MainActivity extends AppCompatActivity {
 
                     // Check and renew working key if needed
                     performStartupKeyRenewal();
+
+                    // POS-mode boot — runs alongside the customer-driven flow.
+                    // When PosConfig.isEnabled() the orchestrator opens a persistent
+                    // WebSocket to the proxy and handles inbound POS commands.
+                    // Reversal + settlement work end-to-end today; sale + balance_inquiry
+                    // return not_supported until Phase 7b (card-read trigger integration).
+                    startPosModeIfEnabled();
                 } else {
                     Log.e(TAG, "ATM Host Service initialization failed");
                     atmHostService = null;
@@ -661,6 +698,53 @@ public class MainActivity extends AppCompatActivity {
                 atmHostService = null;
             }
         }
+    }
+
+    /**
+     * Boots the POS-mode orchestrator when {@code PosConfig.isEnabled()}.
+     * Idempotent — calling twice is a no-op.
+     *
+     * <p>This is the single integration point between the existing customer-driven
+     * Cashless ATM app and the new POS proxy client. All POS-specific code lives
+     * in {@code castech.emvtxn.pos.*}.
+     */
+    private void startPosModeIfEnabled() {
+        castech.emvtxn.pos.PosConfig posConfig = new castech.emvtxn.pos.PosConfig(this);
+        if (!posConfig.isEnabled()) {
+            Log.d(TAG, "POS mode disabled — skipping orchestrator boot");
+            return;
+        }
+        if (posOrchestrator != null) {
+            Log.w(TAG, "POS orchestrator already running");
+            return;
+        }
+        if (atmHostService == null) {
+            Log.w(TAG, "POS mode enabled but AtmHostService unavailable — cannot start");
+            return;
+        }
+
+        String terminalSerial = atmSettingsManager == null ? "" : GlobalPara.atmTerminalId;
+        String appVersion = BuildConfig.VERSION_NAME;
+        String deviceModel = android.os.Build.MODEL;
+
+        // UI bridge — lets the gateway navigate to the transaction page so the
+        // existing card-detection loop runs for POS-initiated sale / balance_inquiry.
+        final MainActivity self = this;
+        castech.emvtxn.pos.AtmHostServiceGateway.UiBridge uiBridge =
+            new castech.emvtxn.pos.AtmHostServiceGateway.UiBridge() {
+                @Override public void runOnUi(Runnable r) {
+                    self.runOnUiThread(r);
+                }
+                @Override public void navigateToTransactionPage() {
+                    self.navigateToPage(GlobalDef.d_PAGE_TRANSACTION);
+                }
+            };
+
+        posOrchestrator = new castech.emvtxn.pos.PosOrchestrator(
+                this, posConfig, atmHostService, uiBridge,
+                terminalSerial, appVersion, deviceModel);
+        posOrchestrator.start();
+        Log.d(TAG, "POS orchestrator started — state=" + posOrchestrator.getState());
     }
 
     /**
