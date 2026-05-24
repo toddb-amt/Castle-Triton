@@ -640,6 +640,79 @@
                 android:textSize="16sp"
                 android:layout_marginBottom="16dp"/>
 
+            <!-- ============ POS Mode (semi-integrated proxy) ============ -->
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:background="#CCCCCC"
+                android:layout_marginTop="24dp"
+                android:layout_marginBottom="16dp"/>
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="POS MODE (semi-integrated)"
+                android:textSize="16sp"
+                android:textStyle="bold"
+                android:textColor="@android:color/black"
+                android:layout_marginBottom="4dp"/>
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="When enabled, this terminal also accepts transactions from the TFI proxy. Restart the app after changing these settings."
+                android:textSize="12sp"
+                android:textColor="#666666"
+                android:layout_marginBottom="12dp"/>
+
+            <CheckBox
+                android:id="@+id/cbEnablePosMode"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Enable POS Mode"
+                android:textSize="14sp"
+                android:layout_marginBottom="8dp"/>
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Proxy URL"
+                android:textSize="13sp"
+                android:layout_marginTop="4dp"/>
+            <EditText
+                android:id="@+id/edtPosProxyUrl"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="wss://proxy.myviewonline.com"
+                android:inputType="textUri"
+                android:textSize="14sp"
+                android:layout_marginBottom="8dp"/>
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Terminal Access Key"
+                android:textSize="13sp"
+                android:layout_marginTop="4dp"/>
+            <EditText
+                android:id="@+id/edtPosAccessKey"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="from proxy admin portal"
+                android:inputType="textPassword"
+                android:textSize="14sp"
+                android:layout_marginBottom="8dp"/>
+
+            <TextView
+                android:id="@+id/txvPosStatus"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="POS state: (not running)"
+                android:textSize="12sp"
+                android:textColor="#666666"
+                android:layout_marginTop="4dp"
+                android:layout_marginBottom="16dp"/>
+
             <!-- Save Settings Button -->
             <Button
                 android:id="@+id/btnSaveSettings"

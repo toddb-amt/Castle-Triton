@@ -11,6 +11,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
+import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.RadioButton;
@@ -93,6 +94,13 @@ public class Fragment_page_admin_atm extends Fragment {
     private TextView txvReversalStatus;
     private Button btnProcessReversals;
     private Button btnClearReversals;
+
+    // UI Elements - POS Mode (semi-integrated proxy)
+    private CheckBox cbEnablePosMode;
+    private EditText edtPosProxyUrl;
+    private EditText edtPosAccessKey;
+    private TextView txvPosStatus;
+    private castech.emvtxn.pos.PosConfig posConfig;
 
     // Processor list
     private List<String> processorList = new ArrayList<>();
@@ -236,6 +244,14 @@ public class Fragment_page_admin_atm extends Fragment {
         btnTestCardReader = rootView.findViewById(R.id.btnTestCardReader);
         btnSaveSettings = rootView.findViewById(R.id.btnSaveSettings);
         btnExit = rootView.findViewById(R.id.btnExit);
+
+        // POS Mode controls
+        cbEnablePosMode = rootView.findViewById(R.id.cbEnablePosMode);
+        edtPosProxyUrl = rootView.findViewById(R.id.edtPosProxyUrl);
+        edtPosAccessKey = rootView.findViewById(R.id.edtPosAccessKey);
+        txvPosStatus = rootView.findViewById(R.id.txvPosStatus);
+        posConfig = new castech.emvtxn.pos.PosConfig(getContext());
+        loadPosSettings();
 
         // Reversal Management
         txvReversalStatus = rootView.findViewById(R.id.txvReversalStatus);
@@ -719,6 +735,9 @@ public class Fragment_page_admin_atm extends Fragment {
                        ", processor=" + processorType + " (DUKPT needed: " + dukptNeeded + ")");
 
             editor.apply();
+
+            // Persist POS Mode settings (own SharedPreferences file via PosConfig)
+            savePosSettings();
 
             // Update GlobalPara
             updateGlobalPara();
@@ -1539,6 +1558,45 @@ public class Fragment_page_admin_atm extends Fragment {
         isAuthenticated = false;
         if (mainActivity != null) {
             mainActivity.navigateToPage(GlobalDef.d_PAGE_MAIN_MENU);
+        }
+    }
+
+    // ---- POS Mode settings ----------------------------------------------------
+
+    /** Populates the POS Mode controls from {@link castech.emvtxn.pos.PosConfig}. */
+    private void loadPosSettings() {
+        if (posConfig == null) return;
+        if (cbEnablePosMode != null)  cbEnablePosMode.setChecked(posConfig.isEnabled());
+        if (edtPosProxyUrl != null)   edtPosProxyUrl.setText(posConfig.getProxyBaseUrl());
+        if (edtPosAccessKey != null)  edtPosAccessKey.setText(posConfig.getTerminalAccessKey());
+        if (txvPosStatus != null) {
+            String state = (mainActivity != null && mainActivity.getPosOrchestratorState() != null)
+                    ? mainActivity.getPosOrchestratorState() : "not running";
+            boolean jwtExpired = posConfig.isJwtExpired();
+            int pending = (mainActivity != null && mainActivity.getAtmHostService() != null)
+                    ? mainActivity.getAtmHostService().getPendingReversalCount() : 0;
+            txvPosStatus.setText("POS state: " + state
+                    + " | JWT: " + (jwtExpired ? "expired/missing" : "cached")
+                    + " | pending reversals: " + pending);
+        }
+    }
+
+    /**
+     * Persists the POS Mode controls to {@link castech.emvtxn.pos.PosConfig}.
+     * Changes take effect on next app restart (orchestrator boots from
+     * MainActivity.startPosModeIfEnabled at startup).
+     */
+    private void savePosSettings() {
+        if (posConfig == null) return;
+        if (edtPosProxyUrl != null)   posConfig.setProxyBaseUrl(edtPosProxyUrl.getText().toString().trim());
+        if (edtPosAccessKey != null)  posConfig.setTerminalAccessKey(edtPosAccessKey.getText().toString().trim());
+        if (cbEnablePosMode != null) {
+            boolean wasEnabled = posConfig.isEnabled();
+            boolean nowEnabled = cbEnablePosMode.isChecked();
+            posConfig.setEnabled(nowEnabled);
+            if (wasEnabled != nowEnabled) {
+                Log.d(TAG, "POS Mode toggled " + (nowEnabled ? "ON" : "OFF") + " — restart required");
+            }
         }
     }
 }

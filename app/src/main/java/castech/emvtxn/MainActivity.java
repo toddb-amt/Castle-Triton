@@ -701,6 +701,14 @@ public class MainActivity extends AppCompatActivity {
     }
 
     /**
+     * Returns the POS orchestrator's current state for admin UI display.
+     * Returns null when POS mode is off / not started.
+     */
+    public String getPosOrchestratorState() {
+        return posOrchestrator == null ? null : posOrchestrator.getState();
+    }
+
+    /**
      * Boots the POS-mode orchestrator when {@code PosConfig.isEnabled()}.
      * Idempotent — calling twice is a no-op.
      *
