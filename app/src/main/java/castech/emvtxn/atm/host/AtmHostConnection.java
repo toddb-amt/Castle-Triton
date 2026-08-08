@@ -1,5 +1,7 @@
 package castech.emvtxn.atm.host;
 
+import android.util.Log;
+
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -268,7 +270,18 @@ public class AtmHostConnection {
         ensureConnected();
 
         byte[] requestMessage = builder.buildReversalRequest(request);
+        // Log the request bytes so we (and the mux team) can see exactly what
+        // we put on the wire when a reversal gets rejected.
+        Log.d(TAG, "[" + config.getName() + "] Reversal REQ (" + requestMessage.length + " bytes): "
+                + toHex(requestMessage));
+
         byte[] responseMessage = sendAndReceive(requestMessage);
+
+        // Log the raw response bytes too — needed to diagnose "Reversal not accepted"
+        // failures (the parsed responseCode alone doesn't show framing or field layout
+        // differences).
+        Log.d(TAG, "[" + config.getName() + "] Reversal RSP (" + responseMessage.length + " bytes): "
+                + toHex(responseMessage));
 
         ReversalResponse response = parser.parseReversalResponse(responseMessage);
 
@@ -276,6 +289,14 @@ public class AtmHostConnection {
         completeHandshake();
 
         return response;
+    }
+
+    /** Hex-dump a byte array for diagnostic logging. */
+    private static String toHex(byte[] bytes) {
+        if (bytes == null) return "(null)";
+        StringBuilder sb = new StringBuilder(bytes.length * 2);
+        for (byte b : bytes) sb.append(String.format("%02X", b));
+        return sb.toString();
     }
 
     /**

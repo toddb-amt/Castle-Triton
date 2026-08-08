@@ -578,6 +578,32 @@ public class MainActivity extends AppCompatActivity {
                         @Override
                         public void onProgress(String message) {
                             Log.d(TAG, "ATM Host Progress: " + message);
+                            // Route [REVERSAL] progress messages to the GlobalPara fields the
+                            // receipt fragment displays. Customer-visible — they should see
+                            // the reversal actually happening, not silently in logs.
+                            if (message != null && message.startsWith("[REVERSAL] ")) {
+                                String body = message.substring("[REVERSAL] ".length());
+                                GlobalPara.atmReversalStatus = body;
+                                if (body.toLowerCase().contains("in progress")) {
+                                    GlobalPara.atmReversalInProgress = true;
+                                } else {
+                                    // Any non-"in progress" message marks the drain as finished.
+                                    GlobalPara.atmReversalInProgress = false;
+                                    if (body.toLowerCase().contains("approved")
+                                            || body.toLowerCase().contains("complete")) {
+                                        GlobalPara.atmReversalSent = true;
+                                    }
+                                }
+                                // Ask the receipt fragment to refresh so the customer sees the
+                                // status update without waiting for a tap.
+                                runOnUiThread(() -> {
+                                    SectionsPagerAdapter adapter = mSectionsPagerAdapter;
+                                    if (adapter != null) {
+                                        Fragment_page_receipt receipt = adapter.getReceiptFragment();
+                                        if (receipt != null) receipt.refreshDisplay();
+                                    }
+                                });
+                            }
                         }
 
                         @Override
@@ -1967,6 +1993,16 @@ public class MainActivity extends AppCompatActivity {
                     return "Admin";
             }
             return null;
+        }
+
+        /**
+         * Returns the cached receipt fragment (or null if it hasn't been created yet).
+         * Used by the host event listener to push reversal-progress updates into the
+         * already-visible receipt page without making the user tap anything.
+         */
+        public Fragment_page_receipt getReceiptFragment() {
+            Fragment f = map.get(GlobalDef.d_PAGE_RECEIPT);
+            return (f instanceof Fragment_page_receipt) ? (Fragment_page_receipt) f : null;
         }
     }
 
@@ -3783,7 +3819,12 @@ public class MainActivity extends AppCompatActivity {
                                 // Calculate amount in cents
                                 long amountCents = 0;
                                 try {
-                                    double amtValue = Double.parseDouble(GlobalPara.atmTotal.isEmpty() ? "0" : GlobalPara.atmTotal);
+                                    // F4 on the wire must be the REQUESTED amount only —
+                                    // NOT amount+surcharge. atmTotal includes the surcharge;
+                                    // atmSelectedAmount is what the customer asked for.
+                                    // The host computes the cardholder charge as F4 + F6.
+                                    double amtValue = Double.parseDouble(
+                                        GlobalPara.atmSelectedAmount.isEmpty() ? "0" : GlobalPara.atmSelectedAmount);
                                     amountCents = (long)(amtValue * 100);
                                 } catch (Exception e) {
                                     Log.e(TAG, "ATM HOST (CL): Error parsing amount: " + e.getMessage());
@@ -3942,7 +3983,12 @@ public class MainActivity extends AppCompatActivity {
                                 // Calculate amount in cents
                                 long amountCents = 0;
                                 try {
-                                    double amtValue = Double.parseDouble(GlobalPara.atmTotal.isEmpty() ? "0" : GlobalPara.atmTotal);
+                                    // F4 on the wire must be the REQUESTED amount only —
+                                    // NOT amount+surcharge. atmTotal includes the surcharge;
+                                    // atmSelectedAmount is what the customer asked for.
+                                    // The host computes the cardholder charge as F4 + F6.
+                                    double amtValue = Double.parseDouble(
+                                        GlobalPara.atmSelectedAmount.isEmpty() ? "0" : GlobalPara.atmSelectedAmount);
                                     amountCents = (long)(amtValue * 100);
                                 } catch (Exception e) {
                                     Log.e(TAG, "ATM HOST (CT): Error parsing amount: " + e.getMessage());

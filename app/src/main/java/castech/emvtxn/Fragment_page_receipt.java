@@ -273,9 +273,15 @@ public class Fragment_page_receipt extends Fragment {
         // Display host response data
         displayHostResponseData(isSuccess);
 
-        // Auto-print the receipt on first display (approve or decline).
-        // Customer can press the "Print Receipt" button to print a duplicate.
-        if (!autoPrintTriggered) {
+        // Update the on-screen reversal status line. Refreshed whenever
+        // refreshDisplay() is called by MainActivity's onProgress hook.
+        updateReversalStatusDisplay();
+
+        // Auto-print the receipt on first display (approve or decline) — BUT
+        // hold off while a reversal drain is actively running. The receipt
+        // should reflect the final outcome (including reversal info) rather
+        // than printing mid-flight and then surprising the customer.
+        if (!autoPrintTriggered && !GlobalPara.atmReversalInProgress) {
             autoPrintTriggered = true;
             // Use post() to ensure UI is fully laid out before kicking off the print
             if (view != null) {
@@ -284,6 +290,32 @@ public class Fragment_page_receipt extends Fragment {
                     printReceipt();
                 });
             }
+        } else if (GlobalPara.atmReversalInProgress) {
+            Log.d(TAG, "Auto-print deferred — reversal drain in progress");
+        }
+    }
+
+    /**
+     * Updates (or hides) the on-screen reversal status line based on the
+     * current {@link GlobalPara#atmReversalStatus}. Safe to call on any
+     * thread — posts to the UI thread internally.
+     */
+    private void updateReversalStatusDisplay() {
+        if (view == null) return;
+        final String status = GlobalPara.atmReversalStatus;
+        if (status == null || status.isEmpty()) {
+            return;  // nothing to show — leave the label hidden
+        }
+        // Use the existing response-message slot to show reversal status without
+        // adding a new XML widget. Color it amber/orange so customers notice.
+        if (mainActivity != null) {
+            mainActivity.runOnUiThread(() -> {
+                if (txvResponseMessage != null) {
+                    txvResponseMessage.setText("Reversal: " + status);
+                    txvResponseMessage.setTextColor(getResources().getColor(android.R.color.holo_orange_dark));
+                    txvResponseMessage.setVisibility(View.VISIBLE);
+                }
+            });
         }
     }
 
@@ -607,6 +639,27 @@ public class Fragment_page_receipt extends Fragment {
             }
 
             receipt.append("\n");
+
+            // Reversal section — append only if a reversal was attempted for this txn.
+            // Tells the customer "your transaction failed AND we sent the reversal so
+            // your card was not charged" (or pending status if reversal didn't complete).
+            String reversalStatus = GlobalPara.atmReversalStatus;
+            if (reversalStatus != null && !reversalStatus.isEmpty()) {
+                receipt.append("--------------------------------\n");
+                receipt.append("           REVERSAL             \n");
+                receipt.append("--------------------------------\n");
+                if (GlobalPara.atmReversalSent) {
+                    receipt.append("Status: SENT TO PROCESSOR\n");
+                    receipt.append("Card NOT charged.\n");
+                } else if (GlobalPara.atmReversalInProgress) {
+                    receipt.append("Status: IN PROGRESS\n");
+                } else {
+                    receipt.append("Status: PENDING\n");
+                    receipt.append("Please contact merchant.\n");
+                }
+                receipt.append("Detail: ").append(reversalStatus).append("\n");
+                receipt.append("\n");
+            }
 
             receipt.append("================================\n");
             receipt.append("     Thank you for using our    \n");

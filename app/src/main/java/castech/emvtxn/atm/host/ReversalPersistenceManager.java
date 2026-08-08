@@ -105,10 +105,11 @@ public class ReversalPersistenceManager {
         reversal.setTerminalId(terminalId);
         reversal.setSequenceNumber(sequenceNumber);
         reversal.setAuthData(authData != null ? authData : "");
-        // PCI: Do NOT store Track 2 or PIN block in SharedPreferences
-        // Reversal messages use sequence number + auth data to identify the original transaction
-        reversal.setTrack2Data("");
-        reversal.setPinBlock("");
+        // Track 2 + PIN block ARE persisted — see createPreSendReversal() comment
+        // for the PCI tradeoff rationale. Sequence number alone is not enough for
+        // most processors to match the reversal to the original Type 85.
+        reversal.setTrack2Data(track2Data == null ? "" : track2Data);
+        reversal.setPinBlock(pinBlock == null ? "" : pinBlock);
         reversal.setAmountCents(amountCents);
         reversal.setSurchargeCents(surchargeCents);
         reversal.setReasonCode(reason);
@@ -147,20 +148,29 @@ public class ReversalPersistenceManager {
      */
     public PendingReversal createPreSendReversal(
             String terminalId, int sequenceNumber,
-            long amountCents, long surchargeCents) {
+            long amountCents, long surchargeCents,
+            String retrievalReference, String statusMonitoring, String emvData) {
 
         PendingReversal reversal = new PendingReversal();
         reversal.setTransactionId(generateTransactionId());
         reversal.setTerminalId(terminalId);
         reversal.setSequenceNumber(sequenceNumber);
         reversal.setAuthData("");
-        // PCI: never persist Track 2 or PIN block
+        // EFX/Pulse TC86 layout does NOT carry track 2 or PIN block — leave empty.
         reversal.setTrack2Data("");
         reversal.setPinBlock("");
         reversal.setAmountCents(amountCents);
         reversal.setSurchargeCents(surchargeCents);
         reversal.setReasonCode("");
         reversal.setCreatedTime(System.currentTimeMillis());
+
+        // EFX/Pulse F3/F5/F8/F9 — must be populated so the host can match the
+        // reversal to the original 85. F5 (dispensed amount) defaults to 0 = full
+        // reversal; we don't track per-bill dispensing on the customer side.
+        reversal.setRetrievalReference(retrievalReference == null ? "" : retrievalReference);
+        reversal.setDispensedAmountCents(0L);
+        reversal.setStatusMonitoring(statusMonitoring == null ? "" : statusMonitoring);
+        reversal.setEmvData(emvData == null ? "" : emvData);
         reversal.setAttemptCount(0);
         reversal.setStatus(PendingReversal.STATUS_PENDING_PRESEND);
 
@@ -433,11 +443,18 @@ public class ReversalPersistenceManager {
         request.setTerminalId(pending.getTerminalId());
         request.setOriginalSequenceNumber(pending.getSequenceNumber());
         request.setOriginalAuthData(pending.getAuthData() != null ? pending.getAuthData() : "");
+        // EFX/Pulse TC86 layout does NOT carry these — left for backwards-compat only.
         request.setTrack2Data(pending.getTrack2Data());
         request.setPinBlock(pending.getPinBlock());
         request.setOriginalAmountCents(pending.getAmountCents());
         request.setOriginalSurchargeCents(pending.getSurchargeCents());
         request.setReversalReason(pending.getReasonCode());
+
+        // EFX/Pulse TC86 fields — the ones that actually go on the wire.
+        request.setRetrievalReference(pending.getRetrievalReference());
+        request.setDispensedAmountCents(pending.getDispensedAmountCents());
+        request.setStatusMonitoring(pending.getStatusMonitoring());
+        request.setEmvData(pending.getEmvData());
         return request;
     }
 
@@ -536,16 +553,22 @@ public class ReversalPersistenceManager {
         private String terminalId;
         private int sequenceNumber;
         private String authData;
-        private String track2Data;
-        private String pinBlock;
+        private String track2Data;       // legacy / unused in EFX TC86 layout
+        private String pinBlock;         // legacy / unused in EFX TC86 layout
         private long amountCents;
         private long surchargeCents;
-        private String reasonCode;
+        private String reasonCode;       // legacy / unused in EFX TC86 layout
         private long createdTime;
         private long lastAttemptTime;
         private int attemptCount;
         private String status;
         private String lastError;
+
+        // ---- EFX/Pulse TC86 fields (what SWC actually consumes) ----
+        private String retrievalReference;  // F3: 26-char MMDDYYYY+HHMMSS+12-digit seq
+        private long dispensedAmountCents;  // F5: 0 for a full reversal
+        private String statusMonitoring;    // F8: same as original 85 F12
+        private String emvData;             // F9: same as original 85 F13 (with "ud" prefix)
 
         /**
          * Per-destination upload state map (task #5). Key = destination
@@ -599,6 +622,19 @@ public class ReversalPersistenceManager {
 
         public String getLastError() { return lastError; }
         public void setLastError(String lastError) { this.lastError = lastError; }
+
+        // ---- EFX/Pulse TC86 field accessors ----
+        public String getRetrievalReference() { return retrievalReference; }
+        public void setRetrievalReference(String s) { this.retrievalReference = s; }
+
+        public long getDispensedAmountCents() { return dispensedAmountCents; }
+        public void setDispensedAmountCents(long c) { this.dispensedAmountCents = c; }
+
+        public String getStatusMonitoring() { return statusMonitoring; }
+        public void setStatusMonitoring(String s) { this.statusMonitoring = s; }
+
+        public String getEmvData() { return emvData; }
+        public void setEmvData(String s) { this.emvData = s; }
 
         // ---- Per-destination upload tracking (task #5) ----
 
@@ -685,6 +721,12 @@ public class ReversalPersistenceManager {
                 obj.put("status", status);
                 obj.put("lastError", lastError);
 
+                // EFX/Pulse TC86 fields
+                obj.put("retrievalReference", retrievalReference);
+                obj.put("dispensedAmountCents", dispensedAmountCents);
+                obj.put("statusMonitoring", statusMonitoring);
+                obj.put("emvData", emvData);
+
                 // Per-destination upload tracking (task #5)
                 if (uploadStatus != null && !uploadStatus.isEmpty()) {
                     JSONObject up = new JSONObject();
@@ -718,6 +760,13 @@ public class ReversalPersistenceManager {
             rev.attemptCount = obj.optInt("attemptCount", 0);
             rev.status = obj.optString("status", STATUS_PENDING);
             rev.lastError = obj.optString("lastError", "");
+
+            // EFX/Pulse TC86 fields (default to empty for older records — those will
+            // fail SWC validation but won't crash; operator can Clear them).
+            rev.retrievalReference = obj.optString("retrievalReference", "");
+            rev.dispensedAmountCents = obj.optLong("dispensedAmountCents", 0);
+            rev.statusMonitoring = obj.optString("statusMonitoring", "");
+            rev.emvData = obj.optString("emvData", "");
 
             // Per-destination upload tracking (task #5)
             JSONObject up = obj.optJSONObject("uploadStatus");

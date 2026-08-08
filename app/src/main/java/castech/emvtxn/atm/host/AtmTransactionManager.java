@@ -369,14 +369,24 @@ public class AtmTransactionManager {
                     // authorized transaction. Cleared on clean approval, promoted on failure.
                     // Matches the deployed Hyosung BlueVerse pre-send persistence pattern.
                     if (reversalManager != null) {
+                        // EFX/Pulse TC86 needs F3 (retrieval ref) + F8 (status monitoring) +
+                        // F9 (EMV TLV) from the ORIGINAL 85 to match the reversal on the host.
+                        // Build the retrieval ref now (terminal clock + seq) — the host echoes
+                        // the same value in its 85 response, so this gives us field parity.
+                        String retrievalRef = ReversalRequest.buildRetrievalReference(
+                                new java.util.Date(), request.getSequenceNumber());
                         currentPreSendReversal = reversalManager.createPreSendReversal(
                             config.getTerminalId(),
                             request.getSequenceNumber(),
                             amountCents,
-                            surchargeCents);
+                            surchargeCents,
+                            retrievalRef,
+                            request.getStatusMonitoring(),
+                            request.getEmvData());
                         Log.d(TAG, "Pre-persisted reversal record for seq "
                             + request.getSequenceNumber()
-                            + " (id=" + currentPreSendReversal.getTransactionId() + ")");
+                            + " (id=" + currentPreSendReversal.getTransactionId()
+                            + ", rrn=" + retrievalRef + ")");
                     }
 
                     // Mark that we're sending to host - if we fail after this, may need reversal
@@ -463,6 +473,11 @@ public class AtmTransactionManager {
             return;
         }
 
+        // Reset reversal tracking — same pattern as performCashWithdrawal.
+        // BlueVerse architecture parity: the reversal mechanism is generic across all
+        // transaction types (see IsReversalCondition() — state-based, not type-based).
+        resetReversalState();
+
         // transactionInProgress already set by compareAndSet above
         notifyProgress("Checking balance...");
 
@@ -535,6 +550,44 @@ public class AtmTransactionManager {
                     currentRequest = request;
                     notifyProgress("Connecting to host...");
 
+                    // KEY-LOADED flag check (BlueVerse compliance — task #17, parity with withdrawal):
+                    // For non-DUKPT mode, the working key MUST be loaded before we send — otherwise
+                    // the host can't decrypt the PIN block and balance inquiry will fail with 76.
+                    boolean isDukptModeBI = castech.emvtxn.GlobalPara.atmDukptEnabled;
+                    if (!isDukptModeBI && keyManager != null && !keyManager.isWorkingKeyLoaded()) {
+                        Log.e(TAG, "KEY-LOADED check failed (BI): non-DUKPT mode but no working key loaded");
+                        notifyError("Working key not loaded — cannot complete balance inquiry");
+                        return;
+                    }
+
+                    // Pre-persist reversal BEFORE send (BlueVerse parity — IsReversalCondition is
+                    // state-based, not type-based, so BIs need the same protection as withdrawals).
+                    // If a connection-close happens mid-receive after the host approved, this record
+                    // gets promoted to RECONNECT_AND_REVERSE and drained on the next session.
+                    // Amount = 0 because BI doesn't move money — the Type 86 still echoes the original
+                    // Type 85 fields (including the BI account-type) which is what the processor needs
+                    // to identify and unwind the orphan approval.
+                    if (reversalManager != null) {
+                        // See withdrawal path for the EFX/Pulse TC86 layout rationale.
+                        String retrievalRef = ReversalRequest.buildRetrievalReference(
+                                new java.util.Date(), request.getSequenceNumber());
+                        currentPreSendReversal = reversalManager.createPreSendReversal(
+                            config.getTerminalId(),
+                            request.getSequenceNumber(),
+                            0L,   // amount — balance inquiry doesn't move money
+                            0L,   // surcharge
+                            retrievalRef,
+                            request.getStatusMonitoring(),
+                            request.getEmvData());
+                        Log.d(TAG, "Pre-persisted reversal record for BI seq "
+                            + request.getSequenceNumber()
+                            + " (id=" + currentPreSendReversal.getTransactionId()
+                            + ", rrn=" + retrievalRef + ")");
+                    }
+
+                    // Mark that we're sending to host - if we fail after this, may need reversal
+                    requestSentToHost = true;
+
                     // Send to host — use protocol-appropriate path
                     TransactionResponse response;
                     AtmProtocol protocol = connection.getProtocol();
@@ -552,13 +605,43 @@ public class AtmTransactionManager {
                     }
                     currentResponse = response;
 
+                    // Clean response received — processBalanceInquiryResponse already calls
+                    // clearPreSendReversal() on both approved and declined paths, so the
+                    // pre-persisted record is removed when the round-trip completed cleanly.
                     processBalanceInquiryResponse(response);
 
                 } catch (AtmHostConnection.ConnectionException e) {
+                    Log.e(TAG, "Connection error (BI): " + e.getMessage());
+                    // If request was sent, we may need a reversal (timeout/conn-close = possible approval)
+                    if (requestSentToHost) {
+                        boolean isTimeout = e.getMessage() != null &&
+                            (e.getMessage().contains("timeout") || e.getMessage().contains("Timeout"));
+                        String reason = isTimeout ? HyosungProtocol.REV_REASON_TIMEOUT :
+                                                   HyosungProtocol.REV_REASON_HOST_ERROR;
+                        Log.w(TAG, "BI connection error after sending — promoting reversal (reason: " + reason + ")");
+                        promoteOrCreatePendingReversal(reason);
+                    } else {
+                        // Send didn't happen — clear the pre-persist
+                        clearPreSendReversal();
+                    }
                     handleConnectionError(e);
                 } catch (HyosungMessageParser.ParseException e) {
+                    Log.e(TAG, "Parse error (BI): " + e.getMessage());
+                    if (requestSentToHost) {
+                        Log.w(TAG, "BI parse error after sending — promoting reversal");
+                        promoteOrCreatePendingReversal(HyosungProtocol.REV_REASON_HOST_ERROR);
+                    } else {
+                        clearPreSendReversal();
+                    }
                     notifyError("Invalid response from host: " + e.getMessage());
                 } catch (Exception e) {
+                    Log.e(TAG, "Balance inquiry error: " + e.getMessage());
+                    if (requestSentToHost) {
+                        Log.w(TAG, "BI error after sending — promoting reversal");
+                        promoteOrCreatePendingReversal(HyosungProtocol.REV_REASON_HOST_ERROR);
+                    } else {
+                        clearPreSendReversal();
+                    }
                     notifyError("Balance inquiry failed: " + e.getMessage());
                 } finally {
                     // Always disconnect - server closes connection after each transaction
@@ -1088,6 +1171,41 @@ public class AtmTransactionManager {
      *
      * @param reason Reversal reason code
      */
+    /**
+     * Sends a fully-constructed reversal that was built from a persisted record
+     * (i.e. survives an app restart, unlike the in-memory currentRequest/
+     * currentResponse path used by {@link #sendReversal(String)}). Called by
+     * {@code AtmHostService.sendReversalSync} when draining records that were
+     * written to disk in a previous session.
+     *
+     * @return true if the host accepted the reversal (response code "00")
+     */
+    public boolean sendReversalDirect(ReversalRequest reversal) {
+        if (reversal == null) {
+            Log.w(TAG, "sendReversalDirect: null reversal request");
+            return false;
+        }
+        try {
+            ReversalResponse response = sendReversalWithRetry(reversal);
+            if (response != null && response.isAccepted()) {
+                Log.d(TAG, "Reversal accepted (direct, responseCode="
+                        + response.getResponseCode() + ")");
+                notifyReversalComplete(true);
+                return true;
+            } else {
+                String code = (response != null) ? response.getResponseCode() : "(null response)";
+                String desc = (response != null) ? response.getResponseDescription() : "no response object";
+                Log.w(TAG, "Reversal not accepted (direct) — responseCode=" + code + " (" + desc + ")");
+                notifyReversalComplete(false);
+                return false;
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Reversal direct send failed: " + e.getMessage());
+            notifyReversalComplete(false);
+            return false;
+        }
+    }
+
     public void sendReversal(final String reason) {
         if (currentRequest == null || currentResponse == null) {
             Log.w(TAG, "No transaction to reverse");
@@ -1106,10 +1224,15 @@ public class AtmTransactionManager {
                     ReversalResponse response = sendReversalWithRetry(reversal);
 
                     if (response != null && response.isAccepted()) {
-                        Log.d(TAG, "Reversal accepted");
+                        Log.d(TAG, "Reversal accepted (responseCode=" + response.getResponseCode() + ")");
                         notifyReversalComplete(true);
                     } else {
-                        Log.w(TAG, "Reversal not accepted");
+                        // Surface enough detail to identify *why* the host rejected — we
+                        // were previously logging just "not accepted" which hides whether
+                        // it's a wire/parse issue or a real host-side decision.
+                        String code = (response != null) ? response.getResponseCode() : "(null response)";
+                        String desc = (response != null) ? response.getResponseDescription() : "no response object";
+                        Log.w(TAG, "Reversal not accepted — responseCode=" + code + " (" + desc + ")");
                         notifyReversalComplete(false);
                     }
 

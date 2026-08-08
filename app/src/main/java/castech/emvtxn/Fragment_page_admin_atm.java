@@ -751,7 +751,24 @@ public class Fragment_page_admin_atm extends Fragment {
                 }
             }
 
-            Toast.makeText(getContext(), "Settings saved", Toast.LENGTH_SHORT).show();
+            // Re-initialize the host service so the new settings (processor, host
+            // URL/port, TLS, terminal ID, DUKPT mode, etc.) take effect immediately.
+            // Without this, the live AtmHostService keeps the old config (or remains
+            // null if no service was ever initialized) and the next transaction
+            // either hits the wrong host or fails with "AtmHostService not available".
+            // Matches what the existing Test Connection button already does.
+            if (mainActivity != null) {
+                Log.d(TAG, "Settings saved — re-initializing host service so new config takes effect");
+                new Thread(() -> {
+                    try {
+                        mainActivity.initializeAtmHostService();
+                    } catch (Exception ex) {
+                        Log.e(TAG, "Host re-init failed after settings save: " + ex.getMessage());
+                    }
+                }, "SaveSettings-HostReinit").start();
+            }
+
+            Toast.makeText(getContext(), "Settings saved — reloading host…", Toast.LENGTH_SHORT).show();
             Log.d(TAG, "Settings saved successfully");
         } catch (Exception e) {
             Log.e(TAG, "Error saving settings: " + e.getMessage());
@@ -1364,11 +1381,19 @@ public class Fragment_page_admin_atm extends Fragment {
             }
             if (btnClearReversals != null) {
                 btnClearReversals.setEnabled(pendingCount > 0);
+                // Toggle visibility — the XML defaults this button to gone so
+                // operators can't accidentally tap it when no reversals exist.
+                // Show it ONLY when there's something to clear; the existing
+                // AlertDialog in clearPendingReversals() guards against typos.
+                btnClearReversals.setVisibility(pendingCount > 0 ? View.VISIBLE : View.GONE);
             }
         } else {
             txvReversalStatus.setText("Pending Reversals: N/A (Host not configured)");
             if (btnProcessReversals != null) btnProcessReversals.setEnabled(false);
-            if (btnClearReversals != null) btnClearReversals.setEnabled(false);
+            if (btnClearReversals != null) {
+                btnClearReversals.setEnabled(false);
+                btnClearReversals.setVisibility(View.GONE);
+            }
         }
     }
 

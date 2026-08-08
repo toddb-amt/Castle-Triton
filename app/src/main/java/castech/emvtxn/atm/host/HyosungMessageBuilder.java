@@ -135,19 +135,29 @@ public class HyosungMessageBuilder {
      * @return Framed message bytes ready for transmission
      */
     public byte[] buildReversalRequest(ReversalRequest request) {
-        String[] fields = new String[11];
+        // 10-field EFX/Pulse layout. Production processors (SWC and others) reject
+        // the 11-field Hyosung STD1 layout by silently closing the connection.
+        // See docs/CASTLE_POS_INTEGRATION_SPEC.md and the mux audit. The dropped
+        // fields (track 2, PIN block, reversal reason) are not carried in TC86;
+        // the host correlates the reversal to its original 85 via F3 (retrieval
+        // reference) + F8 (status monitoring) + F9 (EMV TLV).
+        String[] fields = new String[10];
 
-        fields[0] = request.getInfoHeader();                    // Field 0: Info Header
-        fields[1] = request.getTerminalId();                    // Field 1: Terminal ID
-        fields[2] = HyosungProtocol.MSG_TYPE_REVERSAL;          // Field 2: Transaction Code
-        fields[3] = nullToEmpty(request.getOriginalAuthData()); // Field 3: Original Auth Data
-        fields[4] = request.getOriginalSequenceNumberString();  // Field 4: Original Sequence
-        fields[5] = nullToEmpty(request.getTrack2Data());       // Field 5: Track 2 Data
-        fields[6] = "";                                         // Field 6: Reserved
-        fields[7] = nullToEmpty(request.getPinBlock());         // Field 7: PIN Block
-        fields[8] = String.valueOf(request.getOriginalAmountCents()); // Field 8: Original Amount
-        fields[9] = String.valueOf(request.getOriginalSurchargeCents()); // Field 9: Original Surcharge
-        fields[10] = nullToEmpty(request.getReversalReason());  // Field 10: Reversal Reason
+        fields[0] = request.getInfoHeader();                              // F0: Info Header
+        fields[1] = request.getTerminalId();                              // F1: Terminal ID
+        fields[2] = HyosungProtocol.MSG_TYPE_REVERSAL;                    // F2: Transaction Code
+        fields[3] = nullToEmpty(request.getRetrievalReference());         // F3: Retrieval Reference (26 chars)
+        fields[4] = String.valueOf(request.getOriginalAmountCents());     // F4: Amount (cents)
+        fields[5] = String.valueOf(request.getDispensedAmountCents());    // F5: Dispensed amount (0 = full reversal)
+        fields[6] = String.valueOf(request.getOriginalSurchargeCents()); // F6: Surcharge (cents)
+        fields[7] = nullToEmpty(request.getMiscFlag());                   // F7: Misc flag (typically "1")
+        fields[8] = nullToEmpty(request.getStatusMonitoring());           // F8: Status monitoring block (same as original 85 F12)
+
+        // F9: EMV TLV with "ud" prefix (same as TC85 F13 — see buildTransactionRequest line 117).
+        // Production GH001029 reversals send "ud9F02...", our GH111003 was sending bare "9F02..."
+        // which causes SWC to misparse the field.
+        String emvRaw = request.getEmvData();
+        fields[9] = (emvRaw == null || emvRaw.isEmpty()) ? "" : "ud" + emvRaw;
 
         return frameMessage(fields);
     }

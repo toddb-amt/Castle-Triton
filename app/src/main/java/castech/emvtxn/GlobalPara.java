@@ -201,6 +201,14 @@ public class GlobalPara
 	public static volatile long atmAccountBalance = 0;
 	public static volatile long atmAvailableBalance = 0;
 
+	// ---- Reversal status (set by drain progress notifications, read by receipt UI/printer) ----
+	/** Latest [REVERSAL] progress message — "in progress…", "approved (...)", "pending — contact merchant", etc. */
+	public static volatile String atmReversalStatus = "";
+	/** True while a reversal drain is actively running. UI uses this to delay auto-print. */
+	public static volatile boolean atmReversalInProgress = false;
+	/** True if at least one reversal was successfully sent in the last drain. Receipt printer keys off this. */
+	public static volatile boolean atmReversalSent = false;
+
 	// EMV host response data for txnCompletion (tags 91, 71, 72)
 	public static volatile byte[] atmIssuerAuthData = null;      // Tag 91 - Issuer Authentication Data
 	public static volatile byte[] atmIssuerScript71 = null;      // Tag 71 - Issuer Script Template 1
@@ -262,6 +270,11 @@ public class GlobalPara
 		atmResponseMessage = "";
 		atmAccountBalance = 0;
 		atmAvailableBalance = 0;
+
+		// Reset reversal status — prior reversal info should not leak into the next txn
+		atmReversalStatus = "";
+		atmReversalInProgress = false;
+		atmReversalSent = false;
 		atmIssuerAuthData = null;
 		atmIssuerScript71 = null;
 		atmIssuerScript72 = null;

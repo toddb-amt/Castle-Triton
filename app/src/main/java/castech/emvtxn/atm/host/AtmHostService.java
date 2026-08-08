@@ -886,6 +886,9 @@ public class AtmHostService {
 
         processingReversals = true;
         Log.d(TAG, "Reversal drain loop starting");
+        // User-visible: announce reversal start. Prefixed with [REVERSAL] so
+        // MainActivity's onProgress can route these specifically to receipt UI.
+        notifyDrainProgress("Reversal in progress…");
         try {
             sessionState.postTransactionCheck(true);
         } catch (IllegalStateException ignore) {
@@ -907,6 +910,7 @@ public class AtmHostService {
 
                 if (cleared) {
                     processed++;
+                    notifyDrainProgress("Reversal approved (seq " + next.getSequenceNumber() + ")");
                 } else {
                     failed++;
                     Log.w(TAG, "Drain: reversal " + next.getTransactionId()
@@ -925,9 +929,29 @@ public class AtmHostService {
                 // Task #3: escalate to operator alert when retries exhausted
                 Log.e(TAG, "Reversal retry exhausted — terminal entering OUT_OF_SERVICE");
                 try { sessionState.outOfService(); } catch (IllegalStateException ignore) {}
+                notifyDrainProgress("Reversal pending — please contact merchant");
                 notifyOperatorAlert("Pending reversals could not be processed — service required");
+            } else if (processed > 0) {
+                notifyDrainProgress("Reversal complete (" + processed + " sent)");
+                try { sessionState.reversalRecoveryCleared(); } catch (IllegalStateException ignore) {}
             } else {
                 try { sessionState.reversalRecoveryCleared(); } catch (IllegalStateException ignore) {}
+            }
+        }
+    }
+
+    /**
+     * Send a user-visible reversal-progress message. Prefixed with [REVERSAL]
+     * so the receipt UI (MainActivity.atmTransactionEventListener.onProgress)
+     * can route these specifically to a status line rather than dropping them.
+     */
+    private void notifyDrainProgress(String message) {
+        AtmEventListener l = listener;
+        if (l != null) {
+            try {
+                l.onProgress("[REVERSAL] " + message);
+            } catch (Throwable t) {
+                Log.w(TAG, "notifyDrainProgress: listener threw", t);
             }
         }
     }
@@ -1337,15 +1361,13 @@ public class AtmHostService {
         };
 
         try {
-            transactionManager.sendReversal(pending.getReasonCode());
-
-            // Wait for result with timeout
-            synchronized (lock) {
-                lock.wait(30000); // 30 second timeout
-            }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            result[0] = false;
+            // Use the reconstituted ReversalRequest from the persisted record —
+            // NOT transactionManager.sendReversal(reason), which depends on
+            // in-memory currentRequest/currentResponse that don't survive an
+            // app restart. That's the bug that left REV* records stuck.
+            // sendReversalDirect is synchronous (it blocks on retries internally),
+            // so we don't need the lock.wait() that the old in-memory path relied on.
+            result[0] = transactionManager.sendReversalDirect(request);
         } finally {
             // Restore original listener
             this.listener = originalListener;
