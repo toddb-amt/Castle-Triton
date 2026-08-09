@@ -31,7 +31,7 @@
         android:id="@+id/txvResultMessage"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="Transaction Approved"
+        android:text=""
         android:textSize="28sp"
         android:textStyle="bold"
         android:textColor="#4CAF50"

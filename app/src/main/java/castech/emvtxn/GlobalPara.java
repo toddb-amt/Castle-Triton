@@ -143,7 +143,10 @@ public class GlobalPara
 	// DUKPT settings - ENABLED for PIN encryption
 	// Key material is managed via Key Injection Tool / KeyBRIDGE HSM
 	// See DUKPT_KEY_REFERENCE.md for key ceremony documentation
-	public static boolean atmDukptEnabled = true;  // DUKPT ENABLED for PIN
+	// Default MUST follow the build flavor. Hard-coding `true` meant the MKSK build
+	// ran the DUKPT PIN path before AtmHostService.initialize() had run (or at all,
+	// if init failed), encrypting at C000/0000 where MKSK has no key → 0x2905.
+	public static boolean atmDukptEnabled = "DUKPT".equals(BuildConfig.KEY_MODE);
 	public static int atmDukptKeySet = 0x0000C000;    // DUKPT key set - C000 has PIN attribute, C001 only has DECRYPT
 	public static int atmDukptKeyIndex = 0x00000000;  // DUKPT key index
 	public static String atmDukptKsn = "";            // KSN captured after PIN encryption
@@ -159,6 +162,19 @@ public class GlobalPara
 	public static boolean atmAutoReboot = false;        // Auto reboot daily
 	public static int atmAutoRebootHour = 3;            // Reboot hour (24h format)
 	public static int atmAutoRebootMinute = 0;          // Reboot minute
+
+	// Printer / Paper Handling
+	// =========================================================================
+	// Policy when the receipt printer reports out-of-paper (CtPrint.STATUS_NOPAPPER_ERR):
+	//   false (default) = allow the transaction to proceed receipt-less; the customer
+	//                     is warned on screen and the host is told Paper=0.
+	//   true            = block new transactions until paper is refilled (out-of-service
+	//                     behaviour). Use where a printed receipt is mandatory.
+	public static boolean atmBlockTxnWhenOutOfPaper = false;
+
+	// Live paper state, refreshed from the printer. Read by the host status builder
+	// (STD1 Field 12) and the receipt UI. True when the printer reports paper out.
+	public static boolean atmPrinterOutOfPaper = false;
 
 	// ATM Host Configuration
 	// =========================================================================

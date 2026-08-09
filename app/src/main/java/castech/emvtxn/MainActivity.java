@@ -265,6 +265,9 @@ public class MainActivity extends AppCompatActivity {
             if (!isRunningOnEmulator) {
                 Printer = new CTOS_Printer();
                 Printer.Init();
+                // NOTE: no background paper poll here — see refreshPaperStateSafely().
+                // The banner is driven from idle screens + the receipt print thread,
+                // never a timer (a concurrent poll crashed the CTOS service).
             }
         } catch (Exception e) {
             Log.e(TAG, "Error initializing printer: " + e.getMessage());
@@ -336,6 +339,72 @@ public class MainActivity extends AppCompatActivity {
             posOrchestrator = null;
         }
         super.onDestroy();
+    }
+
+    // ── Receipt paper awareness ───────────────────────────────────────────────
+    // Transactions are NEVER blocked by paper state (Hyosung/BlueVerse behaviour:
+    // RECEIPTONSCREEN / SELECTRECEIPT). A persistent banner is shown while out of
+    // paper, and receipts fall back to on-screen.
+    //
+    // IMPORTANT: the Castle SDK is single-threaded — every SDK call must happen on
+    // the one transaction thread, never concurrently. An earlier version polled
+    // Print.status() on a 15s background timer; a poll landing DURING a transaction
+    // crashed the whole CTOS service (DeadObjectException across all services,
+    // 2026-08-09). So there is NO timer. Paper is read only at points guaranteed
+    // not to overlap a transaction: idle/main-menu and the receipt print thread
+    // (which is already sequential with the transaction). Never call this while a
+    // transaction is in progress.
+
+    /**
+     * Reads paper state from the printer and updates the banner. MUST be called
+     * only when no transaction is running (idle screens / print thread). Returns
+     * false (paper OK) on any error, and refuses to touch the SDK if a transaction
+     * is in progress — so it can never race the EMV thread.
+     */
+    public boolean refreshPaperStateSafely() {
+        if (GlobalPara.atmTransactionInProgress) {
+            // Never touch the SDK concurrently with a live transaction.
+            return GlobalPara.atmPrinterOutOfPaper;
+        }
+        boolean outOfPaper = GlobalPara.atmPrinterOutOfPaper;
+        try {
+            CTOS_Printer printer = getPrinter();
+            if (printer != null) {
+                int status = printer.getStatus();
+                if (status >= 0) {
+                    outOfPaper = (status == CtPrint.STATUS_NOPAPPER_ERR);
+                }
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "Paper state read failed (assuming OK): " + t.getMessage());
+            outOfPaper = false;
+        }
+        if (outOfPaper != GlobalPara.atmPrinterOutOfPaper) {
+            Log.w(TAG, "Printer paper state changed: " + (outOfPaper ? "OUT OF PAPER" : "paper OK"));
+        }
+        GlobalPara.atmPrinterOutOfPaper = outOfPaper;
+        final boolean show = outOfPaper;
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                updatePaperBanner(show);
+            }
+        });
+        return outOfPaper;
+    }
+
+    /**
+     * Shows/hides the persistent bottom service banner. UI thread only.
+     */
+    public void updatePaperBanner(boolean outOfPaper) {
+        try {
+            android.widget.TextView banner = findViewById(R.id.txvServiceBanner);
+            if (banner != null) {
+                banner.setVisibility(outOfPaper ? View.VISIBLE : View.GONE);
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "Banner update failed: " + t.getMessage());
+        }
     }
 
     /**
@@ -809,15 +878,22 @@ public class MainActivity extends AppCompatActivity {
             @Override
             public void onRenewalFailed(final String error) {
                 Log.w(TAG, "Startup key renewal failed: " + error);
-                runOnUiThread(new Runnable() {
+                // The key usually arrives moments later via the normal init/open
+                // path — a warning here was flashing a raw exception at the customer
+                // even though the terminal ended up with a valid working key.
+                // Re-check after a grace period and only warn if it's STILL missing.
+                new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(new Runnable() {
                     @Override
                     public void run() {
-                        // Warn user - transactions may fail without working key
+                        if (atmHostService != null && atmHostService.hasValidWorkingKey()) {
+                            Log.d(TAG, "Working key arrived after startup-renewal failure — no warning shown");
+                            return;
+                        }
                         android.widget.Toast.makeText(MainActivity.this,
-                            "Warning: Working key not available - " + error,
+                            "Warning: Working key not available — transactions may fail",
                             android.widget.Toast.LENGTH_LONG).show();
                     }
-                });
+                }, 10000);
             }
         });
     }
@@ -2126,6 +2202,39 @@ public class MainActivity extends AppCompatActivity {
             ui_ShowMsg("ERROR: Txn already in progress\n");
             return 0;
         }
+
+        // Readiness gate: don't begin card processing until the host service is up
+        // and a working key is loaded. Starting a transaction too soon after boot
+        // (before the async Type 88 key download finishes) reached PIN encryption
+        // with no key and abended. Applies to the MKSK build only — a DUKPT build
+        // has its PIN key injected in hardware and needs no working-key download.
+        //
+        // The transaction page auto-starts in kiosk mode, so rather than dead-end on
+        // "please wait", poll until ready and then proceed automatically (bounded).
+        if (!isTransactionReady()) {
+            if (txnReadyRetryCount < TXN_READY_MAX_RETRIES) {
+                txnReadyRetryCount++;
+                Log.w(TAG, "Transaction not ready — waiting for key download (attempt "
+                        + txnReadyRetryCount + "/" + TXN_READY_MAX_RETRIES
+                        + ", hostReady=" + isAtmHostServiceReady()
+                        + ", workingKey=" + (atmHostService != null && atmHostService.hasWorkingKeys()) + ")");
+                ui_ShowMsg("Terminal starting up —\nplease wait...");
+                new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(new Runnable() {
+                    @Override
+                    public void run() {
+                        btnTransaction_Click(view);
+                    }
+                }, TXN_READY_RETRY_INTERVAL_MS);
+                return 0;
+            }
+            // Gave up after the retry window — surface a clear message, don't proceed.
+            Log.e(TAG, "Transaction blocked — terminal still not ready after "
+                    + TXN_READY_MAX_RETRIES + " retries");
+            txnReadyRetryCount = 0;
+            ui_ShowMsg("Terminal not ready —\nplease try again shortly");
+            return 0;
+        }
+        txnReadyRetryCount = 0;  // ready — reset for next time
 
         ui_ShowMsg("Starting transaction...\n");
 
@@ -3832,35 +3941,10 @@ public class MainActivity extends AppCompatActivity {
 
                                 long surchargeCents = (long)(GlobalPara.atmFlatFeeAmount * 100);
 
-                                // Check if Balance Inquiry or Withdrawal
-                                atmTransactionLatch = new java.util.concurrent.CountDownLatch(1);
-                                // Re-set transaction listener (may have been overwritten by admin screen)
-                                if (atmTransactionEventListener != null) {
-                                    atmHostService.setEventListener(atmTransactionEventListener);
-                                    Log.d(TAG, "ATM HOST (CL): Re-set transaction event listener");
-                                }
+                                // Send to host — loops PIN entry on "55 Incorrect PIN"
+                                // (see sendAtmHostRequestWithPinRetry / PIN_RETRY_ON_INCORRECT)
                                 String acctType = GlobalPara.getHyosungAccountType();
-                                if (GlobalPara.atmBalanceInquiryMode) {
-                                    Log.d(TAG, "ATM HOST (CL): Sending BALANCE INQUIRY, account=" + acctType);
-                                    atmHostService.performBalanceInquiry(cardData, acctType);
-                                } else {
-                                    Log.d(TAG, "ATM HOST (CL): Sending WITHDRAWAL - amount=" + amountCents + " cents, surcharge=" + surchargeCents + " cents, account=" + acctType);
-                                    atmHostService.performWithdrawal(cardData, amountCents, surchargeCents, acctType);
-                                }
-
-                                // Wait for response with 60 second timeout
-                                try {
-                                    boolean completed = atmTransactionLatch.await(60, java.util.concurrent.TimeUnit.SECONDS);
-                                    if (!completed) {
-                                        Log.e(TAG, "ATM HOST (CL): Transaction TIMEOUT after 60 seconds");
-                                        GlobalPara.atmHostCallSuccess = false;
-                                        GlobalPara.atmResponseMessage = "Transaction timeout";
-                                    }
-                                } catch (InterruptedException e) {
-                                    Log.e(TAG, "ATM HOST (CL): Transaction interrupted: " + e.getMessage());
-                                    GlobalPara.atmHostCallSuccess = false;
-                                    GlobalPara.atmResponseMessage = "Transaction interrupted";
-                                }
+                                sendAtmHostRequestWithPinRetry(cardData, amountCents, surchargeCents, acctType, "CL");
 
                                 // Check if transaction was approved
                                 if (GlobalPara.atmHostCallSuccess) {
@@ -3996,35 +4080,10 @@ public class MainActivity extends AppCompatActivity {
 
                                 long surchargeCents = (long)(GlobalPara.atmFlatFeeAmount * 100);
 
-                                // Check if Balance Inquiry or Withdrawal
-                                atmTransactionLatch = new java.util.concurrent.CountDownLatch(1);
-                                // Re-set transaction listener (may have been overwritten by admin screen)
-                                if (atmTransactionEventListener != null) {
-                                    atmHostService.setEventListener(atmTransactionEventListener);
-                                    Log.d(TAG, "ATM HOST (CT): Re-set transaction event listener");
-                                }
+                                // Send to host — loops PIN entry on "55 Incorrect PIN"
+                                // (see sendAtmHostRequestWithPinRetry / PIN_RETRY_ON_INCORRECT)
                                 String acctTypeCT = GlobalPara.getHyosungAccountType();
-                                if (GlobalPara.atmBalanceInquiryMode) {
-                                    Log.d(TAG, "ATM HOST (CT): Sending BALANCE INQUIRY, account=" + acctTypeCT);
-                                    atmHostService.performBalanceInquiry(cardData, acctTypeCT);
-                                } else {
-                                    Log.d(TAG, "ATM HOST (CT): Sending WITHDRAWAL - amount=" + amountCents + " cents, surcharge=" + surchargeCents + " cents, account=" + acctTypeCT);
-                                    atmHostService.performWithdrawal(cardData, amountCents, surchargeCents, acctTypeCT);
-                                }
-
-                                // Wait for response with 60 second timeout
-                                try {
-                                    boolean completed = atmTransactionLatch.await(60, java.util.concurrent.TimeUnit.SECONDS);
-                                    if (!completed) {
-                                        Log.e(TAG, "ATM HOST (CT): Transaction TIMEOUT after 60 seconds");
-                                        GlobalPara.atmHostCallSuccess = false;
-                                        GlobalPara.atmResponseMessage = "Transaction timeout";
-                                    }
-                                } catch (InterruptedException e) {
-                                    Log.e(TAG, "ATM HOST (CT): Transaction interrupted: " + e.getMessage());
-                                    GlobalPara.atmHostCallSuccess = false;
-                                    GlobalPara.atmResponseMessage = "Transaction interrupted";
-                                }
+                                sendAtmHostRequestWithPinRetry(cardData, amountCents, surchargeCents, acctTypeCT, "CT");
 
                                 // Complete EMV transaction with host response
                                 Debugger.addSTR("Debugger", "Input response data to EMV kernel to complete transaction");
@@ -4795,13 +4854,146 @@ public class MainActivity extends AppCompatActivity {
      *
      * @return true if PIN was successfully entered and encrypted
      */
+    /**
+     * True only when this APK was built as the DUKPT flavor.
+     *
+     * DUKPT is deprecated — MKSK is the shipping key model. This is a compile-time
+     * gate so no amount of stale SharedPreferences, settings migration, or partial
+     * initialization can route an MKSK build down the DUKPT PIN path.
+     */
+    private static boolean isDukptBuild() {
+        return "DUKPT".equals(BuildConfig.KEY_MODE);
+    }
+
+    // ── PIN retry on incorrect PIN (response code 55) ────────────────────────
+    // The STD1 spec marks code 55 as "Decline, allow retry": instead of ending the
+    // transaction, re-prompt the PIN and resubmit with the SAME card/EMV data and a
+    // NEW sequence number + PIN block. Capped at PIN_MAX_ATTEMPTS total tries; a 75
+    // (issuer PIN-tries-exceeded) or any other decline ends the transaction as today.
+    // Set PIN_RETRY_ON_INCORRECT = false to restore the previous single-attempt flow.
+    private static final boolean PIN_RETRY_ON_INCORRECT = true;
+    private static final int PIN_MAX_ATTEMPTS = 3;
+
+    /**
+     * Sends the request to the ATM host and, when the host answers "55 Incorrect
+     * PIN", loops: re-prompt PIN → new PIN block → resend. Runs on the transaction
+     * thread (blocks on the response latch exactly like the code it replaces).
+     * On return, GlobalPara.atmHostCallSuccess / atmResponseCode / atmResponseMessage
+     * reflect the FINAL attempt.
+     *
+     * @param pathTag "CL" or "CT" — used only for log continuity with the old code
+     */
+    private void sendAtmHostRequestWithPinRetry(CastleCardData cardData, long amountCents,
+            long surchargeCents, String acctType, String pathTag) {
+        int attempt = 1;
+        while (true) {
+            atmTransactionLatch = new java.util.concurrent.CountDownLatch(1);
+            // Re-set transaction listener (may have been overwritten by admin screen)
+            if (atmTransactionEventListener != null) {
+                atmHostService.setEventListener(atmTransactionEventListener);
+                Log.d(TAG, "ATM HOST (" + pathTag + "): Re-set transaction event listener");
+            }
+            if (GlobalPara.atmBalanceInquiryMode) {
+                Log.d(TAG, "ATM HOST (" + pathTag + "): Sending BALANCE INQUIRY, account=" + acctType
+                        + " (attempt " + attempt + ")");
+                atmHostService.performBalanceInquiry(cardData, acctType);
+            } else {
+                Log.d(TAG, "ATM HOST (" + pathTag + "): Sending WITHDRAWAL - amount=" + amountCents
+                        + " cents, surcharge=" + surchargeCents + " cents, account=" + acctType
+                        + " (attempt " + attempt + ")");
+                atmHostService.performWithdrawal(cardData, amountCents, surchargeCents, acctType);
+            }
+
+            // Wait for response with 60 second timeout
+            try {
+                boolean completed = atmTransactionLatch.await(60, java.util.concurrent.TimeUnit.SECONDS);
+                if (!completed) {
+                    Log.e(TAG, "ATM HOST (" + pathTag + "): Transaction TIMEOUT after 60 seconds");
+                    GlobalPara.atmHostCallSuccess = false;
+                    GlobalPara.atmResponseMessage = "Transaction timeout";
+                    return;
+                }
+            } catch (InterruptedException e) {
+                Log.e(TAG, "ATM HOST (" + pathTag + "): Transaction interrupted: " + e.getMessage());
+                GlobalPara.atmHostCallSuccess = false;
+                GlobalPara.atmResponseMessage = "Transaction interrupted";
+                return;
+            }
+
+            // Anything other than a retryable incorrect-PIN decline is final.
+            if (!PIN_RETRY_ON_INCORRECT
+                    || GlobalPara.atmHostCallSuccess
+                    || !castech.emvtxn.atm.host.HyosungProtocol.RESP_INCORRECT_PIN
+                            .equals(GlobalPara.atmResponseCode)) {
+                return;
+            }
+            if (attempt >= PIN_MAX_ATTEMPTS) {
+                Log.w(TAG, "ATM HOST (" + pathTag + "): Incorrect PIN — local attempt limit reached ("
+                        + PIN_MAX_ATTEMPTS + ")");
+                return;
+            }
+
+            attempt++;
+            int remaining = PIN_MAX_ATTEMPTS - attempt + 1;
+            Log.w(TAG, "ATM HOST (" + pathTag + "): Incorrect PIN — re-prompting ("
+                    + remaining + " attempt(s) remaining)");
+            ui_ShowMsg("Incorrect PIN — please try again\n(" + remaining + " attempt(s) remaining)");
+            MyUtility.sleep(1500);
+
+            boolean pinOK = requestATMPin();
+            if (!pinOK || GlobalPara.atmEncryptedPinBlock == null
+                    || GlobalPara.atmEncryptedPinBlock.isEmpty()) {
+                // Customer cancelled or PIN encryption failed — keep the 55 decline as final
+                Log.w(TAG, "ATM HOST (" + pathTag + "): PIN re-entry cancelled/failed — ending transaction");
+                return;
+            }
+            cardData.setEncryptedPinBlock(GlobalPara.atmEncryptedPinBlock);
+        }
+    }
+
+    /**
+     * When true, transactions are gated on host-service init + a loaded working key.
+     * Set false to restore the previous behavior (transaction starts immediately,
+     * even if the terminal is still booting).
+     */
+    private static final boolean REQUIRE_READY_BEFORE_TXN = true;
+    // Auto-retry window while the working key is still downloading (~30s total).
+    private static final int TXN_READY_MAX_RETRIES = 20;
+    private static final long TXN_READY_RETRY_INTERVAL_MS = 1500;
+    private int txnReadyRetryCount = 0;
+
+    /**
+     * True when the terminal is ready to take a transaction.
+     *
+     * MKSK build: requires the host service initialized AND a working key loaded
+     * (the Type 88 download completed). DUKPT build: the PIN key is injected in
+     * hardware — no working-key download — so only host-service init is required.
+     * Fails toward "ready" only when the gate is disabled via the flag.
+     */
+    private boolean isTransactionReady() {
+        if (!REQUIRE_READY_BEFORE_TXN) {
+            return true;
+        }
+        if (!isAtmHostServiceReady()) {
+            return false;
+        }
+        if (isDukptBuild()) {
+            return true;  // hardware-injected PIN key, no working-key download
+        }
+        return atmHostService != null && atmHostService.hasWorkingKeys();
+    }
+
     private boolean requestATMPin() {
-        Log.d(TAG, "requestATMPin() - Checking PIN format configuration...");
+        Log.d(TAG, "requestATMPin() - KEY_MODE=" + BuildConfig.KEY_MODE);
         Log.d(TAG, "  atmDukptEnabled: " + GlobalPara.atmDukptEnabled);
         Log.d(TAG, "  atmPinBlockFormat: " + GlobalPara.atmPinBlockFormat);
 
-        // Try DUKPT if enabled
-        if (GlobalPara.atmDukptEnabled || "DUKPT".equals(GlobalPara.atmPinBlockFormat)) {
+        // Try DUKPT only in a DUKPT build. The KEY_MODE gate is deliberate: stale
+        // prefs, the admin settings migration, or a failed AtmHostService init used
+        // to leave atmDukptEnabled=true in an MKSK build, which then encrypted the
+        // PIN at C000/0000 (no key → 0x2905) instead of using MKSK at C000/0010.
+        if (isDukptBuild()
+                && (GlobalPara.atmDukptEnabled || "DUKPT".equals(GlobalPara.atmPinBlockFormat))) {
             Log.d(TAG, "ATM PIN: Attempting DUKPT (Format 0) - MVP APPROACH...");
 
             // Use Castle MVP approach - standalone DUKPT PIN collection
@@ -4917,8 +5109,8 @@ public class MainActivity extends AppCompatActivity {
             Log.d(TAG, "ATM PIN: Clear PAN: " + clearPan.substring(0, 6) + "****");
             Log.d(TAG, "ATM PIN: DUKPT enabled: " + GlobalPara.atmDukptEnabled);
 
-            // Choose encryption method based on atmDukptEnabled flag
-            if (GlobalPara.atmDukptEnabled) {
+            // Choose encryption method — DUKPT only in a DUKPT build (see isDukptBuild)
+            if (isDukptBuild() && GlobalPara.atmDukptEnabled) {
                 // DUKPT encryption (requires IPEK at C001/1A)
                 Log.d(TAG, "ATM PIN: Using DUKPT encryption");
                 DukptEncryptedData encryptedData = encryptPinBlockWithDukpt(pin, clearPan);
@@ -5566,6 +5758,14 @@ public class MainActivity extends AppCompatActivity {
      * @return DukptEncryptedData containing encrypted data and KSN, or null on failure
      */
     public DukptEncryptedData encryptTrack2WithDukpt(String track2Data) {
+        // DUKPT only exists in a DUKPT build (same gate as the PIN path). In an MKSK
+        // build this used to attempt C000/0000 → 0x2905 on every transaction before
+        // falling back to clear track 2; skip straight to the fallback instead.
+        // Callers handle null by sending clear track 2 (ARQC provides security).
+        if (!isDukptBuild()) {
+            Log.d(TAG, "encryptTrack2: skipped — not a DUKPT build (clear track 2 + ARQC)");
+            return null;
+        }
         if (track2Data == null || track2Data.isEmpty()) {
             Log.w(TAG, "DUKPT encryptTrack2: No track 2 data to encrypt");
             return null;
@@ -7325,6 +7525,48 @@ public class MainActivity extends AppCompatActivity {
             Print = new CtPrint();
         }
 
+        /**
+         * Reads the raw CtPrint hardware status.
+         *
+         * @return status code (0 = OK), or -1 if the printer is unavailable.
+         *         Notable values: CtPrint.STATUS_NOPAPPER_ERR (3) = out of paper,
+         *         STATUS_HEADTEMP_ERR (2), STATUS_PLATENRELEASE_ERR (20).
+         */
+        public int getStatus() {
+            try {
+                if (Print == null) {
+                    Init();
+                }
+                return Print.status();
+            } catch (Exception e) {
+                Log.e(TAG, "Printer status read failed: " + e.getMessage());
+                return -1;
+            }
+        }
+
+        /**
+         * True when the printer reports it is out of paper.
+         * Used to warn the customer and to report honest paper state to the host.
+         */
+        public boolean isOutOfPaper() {
+            return getStatus() == CtPrint.STATUS_NOPAPPER_ERR;
+        }
+
+        /**
+         * Human-readable description of a CtPrint status code (for logs/UI).
+         */
+        public String getStatusText() {
+            int st = getStatus();
+            switch (st) {
+                case 0:                                return "OK";
+                case CtPrint.STATUS_NOPAPPER_ERR:      return "OUT OF PAPER";
+                case CtPrint.STATUS_HEADTEMP_ERR:      return "HEAD OVERHEATED";
+                case CtPrint.STATUS_PLATENRELEASE_ERR: return "PLATEN OPEN";
+                case -1:                               return "UNAVAILABLE";
+                default:                               return "ERROR (" + st + ")";
+            }
+        }
+
         public int goprintf() throws IOException {
 
             int page_len = 920;
@@ -7557,7 +7799,9 @@ public class MainActivity extends AppCompatActivity {
                 currentY += lineHeight;
             }
 
-            // Print the page
+            // Print the page. Kept on printPage() (the proven path) — paper-out is
+            // detected up-front via getStatus()/isOutOfPaper() rather than by
+            // interpreting a print return code whose contract is unverified.
             Print.printPage();
         }
     }

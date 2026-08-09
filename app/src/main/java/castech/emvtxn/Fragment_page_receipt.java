@@ -9,6 +9,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.TextView;
+import android.widget.Toast;
 import android.util.Log;
 
 import java.text.DecimalFormat;
@@ -534,10 +535,20 @@ public class Fragment_page_receipt extends Fragment {
                                 if (btnPrintReceipt != null) {
                                     if (printSuccess) {
                                         btnPrintReceipt.setText("Print Another Receipt");
+                                    } else if (GlobalPara.atmPrinterOutOfPaper) {
+                                        // Out of paper: the receipt shown on screen IS the
+                                        // receipt. Retrying will not help, so say so plainly.
+                                        btnPrintReceipt.setText("Out of Paper — Receipt On Screen");
                                     } else {
                                         btnPrintReceipt.setText("Print Failed — Tap to Retry");
                                     }
                                     btnPrintReceipt.setEnabled(true);
+                                }
+                                if (!printSuccess && GlobalPara.atmPrinterOutOfPaper
+                                        && getContext() != null) {
+                                    Toast.makeText(getContext(),
+                                            "Out of paper — your receipt is shown on screen. Please note your transaction details.",
+                                            Toast.LENGTH_LONG).show();
                                 }
                             }
                         });
@@ -675,6 +686,15 @@ public class Fragment_page_receipt extends Fragment {
                 MainActivity.CTOS_Printer printer = mainActivity.getPrinter();
                 Log.d(TAG, "getPrinter() returned: " + (printer != null ? "valid printer" : "NULL"));
                 if (printer != null) {
+                    // Check paper BEFORE printing so an empty roll is reported as
+                    // "out of paper" rather than a generic print failure. Also keeps
+                    // GlobalPara (and therefore the host status field) honest.
+                    boolean outOfPaper = printer.isOutOfPaper();
+                    GlobalPara.atmPrinterOutOfPaper = outOfPaper;
+                    if (outOfPaper) {
+                        Log.e(TAG, "Receipt NOT printed - printer is OUT OF PAPER");
+                        return false;
+                    }
                     Log.d(TAG, "Calling printer.printf() with " + receipt.length() + " chars");
                     // printf() is self-contained: initPage + drawText + printPage.
                     // Do NOT call goprintf() — that's a legacy SAMPLE RECEIPT demo, not a flush.

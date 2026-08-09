@@ -15,6 +15,8 @@ import CTOS.CtKMS2System;
 import CTOS.CtKMS2SymmetryKey;
 import CTOS.CtKMS2Dukpt;
 
+import castech.emvtxn.BuildConfig;
+
 import javax.crypto.Cipher;
 import javax.crypto.SecretKey;
 import javax.crypto.SecretKeyFactory;
@@ -52,6 +54,24 @@ public class CastleKeyManager {
     // Default location: CFFF/0000 (as per Key Injection Tool manual)
     public static final int DEFAULT_TMK_KEY_SET = 0x0000CFFF;
     public static final int DEFAULT_TMK_KEY_INDEX = 0x00000000;
+
+    // ── Gold-model safety switch (MKSK PIN path) ─────────────────────────────
+    // Controls whether the MKSK build attempts the CFFF/0000 FixedKey software
+    // decrypt BEFORE using the Master Key at C000/0010.
+    //
+    //   true  → MKSK build SKIPS the CFFF/0000 FixedKey attempt (when a Master Key
+    //           exists at C000/0010) and encrypts the PIN with hardware MKSK at
+    //           C000/0010 directly. Required for the KEK→MasterKey (ZMK→TMK)
+    //           hierarchy where CFFF holds a DIFFERENT key, and it removes the
+    //           non-compliant software-fallback landmine.
+    //   false → EXACT gold-model behavior: try CFFF/0000 FixedKey first, then fall
+    //           back to C000/0010. Flip to false to restore the original working
+    //           "gold" code path (git tag: gold-model-mksk).
+    //
+    // Affects the MKSK flavor only (BuildConfig.KEY_MODE == "MKSK") and only when
+    // C000/0010 actually holds a key. DUKPT flavor and the gold same-key injection
+    // are unaffected in outcome — both still reach C000/0010.
+    private static final boolean MKSK_SKIP_CFFF_FIXEDKEY = true;
 
     // Key persistence settings
     private static final String PREFS_NAME = "atm_key_storage";
@@ -354,6 +374,33 @@ public class CastleKeyManager {
         }
 
         Log.d(TAG, "  TMK exists - decrypting working key with hardware TMK");
+
+        // ── MKSK gold-model safety switch ────────────────────────────────────
+        // In the MKSK build with a Master Key present at C000/0010, skip the
+        // CFFF/0000 FixedKey software-decrypt and go straight to hardware MKSK at
+        // C000/0010. Supports the KEK→MasterKey hierarchy (CFFF holds a DIFFERENT
+        // key) and avoids the non-compliant software-encryption fallback.
+        // Set MKSK_SKIP_CFFF_FIXEDKEY = false to restore exact gold behavior.
+        boolean mkskMode = "MKSK".equals(BuildConfig.KEY_MODE);
+        boolean skipCfff = MKSK_SKIP_CFFF_FIXEDKEY && mkskMode
+                && checkKeyExists(MKSK_KEY_SET, MKSK_KEY_INDEX);
+
+        if (skipCfff) {
+            Log.d(TAG, "  MKSK mode: skipping CFFF/0000 FixedKey path — using Master Key at "
+                    + String.format("%04X/%04X", MKSK_KEY_SET, MKSK_KEY_INDEX) + " directly");
+            String mkskResult = decryptKeyPartsAtLocation(keyPartA, keyPartB, MKSK_KEY_SET, MKSK_KEY_INDEX);
+            if ("MKSK_SESSION_KEY".equals(mkskResult)) {
+                Log.d(TAG, "  MKSK session key loaded directly at "
+                        + String.format("%04X/%04X", MKSK_KEY_SET, MKSK_KEY_INDEX)
+                        + " — hardware PIN encryption ready");
+                return true;
+            }
+            // Do NOT silently fall back to the CFFF FixedKey software path — that
+            // would risk a non-compliant / garbage working key in MKSK mode.
+            Log.e(TAG, "  MKSK direct decrypt at C000/0010 FAILED; CFFF FixedKey fallback is "
+                    + "disabled in MKSK mode. Verify the Master Key (attr 0x40) at C000/0010.");
+            return false;
+        }
 
         String decryptedKey = decryptKeyPartsWithTmk(keyPartA, keyPartB);
         if (decryptedKey != null) {

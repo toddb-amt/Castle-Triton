@@ -14,4 +14,7 @@
     <string name="Support">ON</string>
     <string name="Not_Support">OFF</string>
 
+    <!-- Service banner shown while the receipt printer is out of paper -->
+    <string name="banner_out_of_paper">OUT OF PAPER — receipts shown on screen. Please note your transaction details.</string>
+
 </resources>

@@ -595,13 +595,20 @@ public class Fragment_page_admin_atm extends Fragment {
     private void loadSettings() {
         SharedPreferences prefs = getContext().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
 
-        // Migration: Enable DUKPT mode (injected key at C000/0000) - one-time reset
+        // Migration: one-time PIN-key reset. MUST follow the build flavor — this
+        // previously forced DUKPT at C000/0000 unconditionally, which broke the MKSK
+        // build on every fresh install (PIN encrypt at C000/0000 → 0x2905 key not
+        // exist; MKSK's master key lives at C000/0010).
         if (!prefs.getBoolean("migrated_to_dukpt_v2", false)) {
-            Log.d(TAG, "Migrating settings: Enabling DUKPT at C000/0000");
+            boolean dukptMode = "DUKPT".equals(BuildConfig.KEY_MODE);
+            Log.d(TAG, "Migrating settings: KEY_MODE=" + BuildConfig.KEY_MODE
+                    + " → dukpt_enabled=" + dukptMode);
             SharedPreferences.Editor editor = prefs.edit();
-            editor.putBoolean("dukpt_enabled", true);  // DUKPT ENABLED
-            editor.putInt("dukpt_key_set", 0x0000C000);  // C000
-            editor.putInt("dukpt_key_index", 0x00000000);  // 0000
+            editor.putBoolean("dukpt_enabled", dukptMode);
+            if (dukptMode) {
+                editor.putInt("dukpt_key_set", 0x0000C000);    // DUKPT IPEK at C000/0000
+                editor.putInt("dukpt_key_index", 0x00000000);
+            }
             editor.putString("pin_block_format", "FORMAT0");
             editor.putBoolean("migrated_to_dukpt_v2", true);
             editor.apply();

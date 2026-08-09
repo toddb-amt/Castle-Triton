@@ -49,5 +49,25 @@
             tools:visibility="visible" />
     </androidx.viewpager.widget.ViewPager>
 
+    <!--
+        Persistent service banner, pinned to the bottom and drawn above the
+        ViewPager so it stays visible on every screen. Currently used for the
+        out-of-paper notice (receipt shown on screen instead). Hidden by default;
+        toggled from MainActivity.updatePaperBanner().
+    -->
+    <TextView
+        android:id="@+id/txvServiceBanner"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom"
+        android:background="#D32F2F"
+        android:textColor="#FFFFFF"
+        android:textSize="14sp"
+        android:textStyle="bold"
+        android:gravity="center"
+        android:padding="8dp"
+        android:elevation="8dp"
+        android:visibility="gone"
+        android:text="@string/banner_out_of_paper" />
 
 </androidx.coordinatorlayout.widget.CoordinatorLayout>

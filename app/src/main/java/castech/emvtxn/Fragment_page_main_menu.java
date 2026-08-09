@@ -123,5 +123,23 @@ public class Fragment_page_main_menu extends Fragment {
         // This ensures clean state for next transaction
         GlobalPara.resetATMTransactionState();
         android.util.Log.d("MainMenu", "onResume - ATM state reset");
+
+        // Refresh the out-of-paper banner at idle (safe: no transaction running).
+        // One-shot on a background thread — NOT a timer. refreshPaperStateSafely()
+        // itself refuses to touch the SDK if a transaction is somehow in progress,
+        // so this can never race the EMV thread (which crashed the CTOS service
+        // when an earlier version polled on a timer).
+        if (mainActivity != null) {
+            new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        mainActivity.refreshPaperStateSafely();
+                    } catch (Throwable t) {
+                        android.util.Log.w(TAG, "Paper refresh failed: " + t.getMessage());
+                    }
+                }
+            }).start();
+        }
     }
 }

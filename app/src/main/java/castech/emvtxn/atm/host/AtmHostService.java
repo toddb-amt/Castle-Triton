@@ -359,11 +359,22 @@ public class AtmHostService {
             @Override
             public void run() {
                 try {
-                    // Clear any cached key state so the download fully refreshes
+                    // Snapshot the manager: a re-init/shutdown on another thread can
+                    // null the field between ensureInitialized() and here (this was
+                    // NPE-ing on startup and painting a raw exception on screen even
+                    // though the fresh instance downloaded the key fine seconds later).
+                    AtmTransactionManager tm = transactionManager;
+                    if (tm == null) {
+                        Log.w(TAG, "Startup key renewal skipped: service re-initialized "
+                                + "mid-renewal — the new instance handles the download");
+                        return;  // no error callback: not a real failure, just a stale instance
+                    }
+                    // Clear any cached key state so the download fully refreshes.
+                    // (After the null check — never clear a key we can't re-download.)
                     if (keyManager != null) {
                         keyManager.clearWorkingKey();
                     }
-                    transactionManager.downloadKeysSync();
+                    tm.downloadKeysSync();
                     Log.d(TAG, "Startup key renewal completed successfully");
                     if (callback != null) {
                         callback.onRenewalSuccess(keyManager.getKeyStatus());
@@ -677,6 +688,11 @@ public class AtmHostService {
             triggerReversalDrain();
             return;
         }
+
+        // NOTE: out-of-paper does NOT block transactions. Matching Hyosung/BlueVerse
+        // behaviour (RECEIPTONSCREEN / SELECTRECEIPT), the terminal keeps trading and
+        // falls back to an on-screen receipt, with a persistent banner shown until
+        // paper is replaced. See MainActivity.updatePaperBanner().
 
         // Open flow with bounded retry (tasks #12 + #14): ensure host session + working
         // key before transaction. On all-attempts failure, terminal goes OUT_OF_SERVICE.

@@ -45,6 +45,20 @@ public class AtmTransactionManager {
     // Reversal tracking state
     private volatile boolean requestSentToHost;      // True after request sent, before response
     private volatile boolean approvalReceived;       // True if host approved the transaction
+    private volatile boolean currentIsBalanceInquiry; // True while a balance inquiry is in flight
+
+    /**
+     * Whether balance inquiries may generate reversals.
+     *
+     * FALSE (current): only cash withdrawals reverse. A balance inquiry moves no
+     * money, so there is nothing to unwind; emitting a Type 86 for one produced a
+     * reversal storm on 2026-08-09 (5 failed drain attempts) that then blocked
+     * subsequent customer transactions.
+     *
+     * Set TRUE to restore the previous "reversals are generic across all
+     * transaction types" behaviour (BlueVerse IsReversalCondition() parity).
+     */
+    private static final boolean REVERSALS_FOR_BALANCE_INQUIRY = false;
     private long currentAmountCents;                 // Amount for current transaction
     private long currentSurchargeCents;              // Surcharge for current transaction
 
@@ -128,6 +142,15 @@ public class AtmTransactionManager {
         currentAmountCents = 0;
         currentSurchargeCents = 0;
         currentPreSendReversal = null;
+        currentIsBalanceInquiry = false;
+    }
+
+    /**
+     * True when the in-flight transaction must never produce a reversal.
+     * Balance inquiries move no money, so there is nothing to unwind.
+     */
+    private boolean reversalsSuppressedForCurrentTxn() {
+        return currentIsBalanceInquiry && !REVERSALS_FOR_BALANCE_INQUIRY;
     }
 
     /**
@@ -163,6 +186,13 @@ public class AtmTransactionManager {
      * @param reason reversal reason code (see {@link HyosungProtocol})
      */
     private void promoteOrCreatePendingReversal(String reason) {
+        // Balance inquiries never reverse — nothing to unwind.
+        if (reversalsSuppressedForCurrentTxn()) {
+            Log.d(TAG, "Balance inquiry failed (" + reason + ") — no reversal generated");
+            currentPreSendReversal = null;
+            return;
+        }
+
         ReversalPersistenceManager.PendingReversal preSend = currentPreSendReversal;
         if (preSend != null && reversalManager != null) {
             // Update auth data from response if we now have one
@@ -206,6 +236,12 @@ public class AtmTransactionManager {
      * @param reason Reversal reason code (see HyosungProtocol.REV_REASON_*)
      */
     private void storePendingReversalIfNeeded(String reason) {
+        // Balance inquiries never reverse — nothing to unwind.
+        if (reversalsSuppressedForCurrentTxn()) {
+            Log.d(TAG, "Balance inquiry (" + reason + ") — no pending reversal stored");
+            return;
+        }
+
         if (reversalManager == null) {
             Log.w(TAG, "No reversal manager set - cannot store reversal");
             return;
@@ -474,9 +510,12 @@ public class AtmTransactionManager {
         }
 
         // Reset reversal tracking — same pattern as performCashWithdrawal.
-        // BlueVerse architecture parity: the reversal mechanism is generic across all
-        // transaction types (see IsReversalCondition() — state-based, not type-based).
+        // NOTE: balance inquiries do NOT generate reversals (see
+        // REVERSALS_FOR_BALANCE_INQUIRY). Nothing moves money, so there is nothing
+        // to unwind; the previous "generic across all transaction types" behaviour
+        // (BlueVerse IsReversalCondition() parity) caused a reversal storm.
         resetReversalState();
+        currentIsBalanceInquiry = true;
 
         // transactionInProgress already set by compareAndSet above
         notifyProgress("Checking balance...");
@@ -567,7 +606,7 @@ public class AtmTransactionManager {
                     // Amount = 0 because BI doesn't move money — the Type 86 still echoes the original
                     // Type 85 fields (including the BI account-type) which is what the processor needs
                     // to identify and unwind the orphan approval.
-                    if (reversalManager != null) {
+                    if (reversalManager != null && REVERSALS_FOR_BALANCE_INQUIRY) {
                         // See withdrawal path for the EFX/Pulse TC86 layout rationale.
                         String retrievalRef = ReversalRequest.buildRetrievalReference(
                                 new java.util.Date(), request.getSequenceNumber());
@@ -583,6 +622,8 @@ public class AtmTransactionManager {
                             + request.getSequenceNumber()
                             + " (id=" + currentPreSendReversal.getTransactionId()
                             + ", rrn=" + retrievalRef + ")");
+                    } else {
+                        Log.d(TAG, "Balance inquiry — no reversal record armed (BI does not reverse)");
                     }
 
                     // Mark that we're sending to host - if we fail after this, may need reversal
