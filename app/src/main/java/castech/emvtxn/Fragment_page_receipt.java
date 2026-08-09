@@ -635,7 +635,7 @@ public class Fragment_page_receipt extends Fragment {
             receipt.append("Date/Time: ").append(dateTime).append("\n");
 
             String txnId = GlobalPara.atmTransactionId != null ? GlobalPara.atmTransactionId : "";
-            receipt.append("Transaction ID: ").append(txnId).append("\n");
+            receipt.append("TransID: ").append(txnId).append("\n");
 
             // Print authorization code if available
             String authCode = GlobalPara.atmAuthCode;

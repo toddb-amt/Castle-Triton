@@ -2994,16 +2994,10 @@ public class MainActivity extends AppCompatActivity {
                             Log.d(TAG, "AID contact value :" + Converter.byteArray2HexString(tlvData.value, tlvData.len));
                         }
 
-                        String strAID = Converter.byteArray2HexString(tlvData.value, 5);
-                        Log.d(TAG, strAID);
-
-                        if (strAID.equals("A000000003")) {
-                            GlobalPara.cardType = "VISA";
-                        } else if (strAID.equals("A000000004")) {
-                            GlobalPara.cardType = "MASTERCARD";
-                        } else {
-                            GlobalPara.cardType = "UNKNOWN CARD";
-                        }
+                        String strAID = Converter.byteArray2HexString(tlvData.value, 5);   // RID
+                        String fullAID = Converter.byteArray2HexString(tlvData.value, tlvData.len);
+                        Log.d(TAG, "AID=" + fullAID + " (RID=" + strAID + ")");
+                        GlobalPara.cardType = cardBrandFromAid(fullAID);
 
                         if (GlobalPara.isQuickChipTransaction == true) {
                             //Set Floor limit to 0
@@ -3413,13 +3407,7 @@ public class MainActivity extends AppCompatActivity {
                                 Log.d(TAG, "ATM PIN (MSR): PIN entry successful");
                             }
 
-                            if (new String(maskedPAN).indexOf('4') == 0) {
-                                GlobalPara.cardType = "VISA";
-                            } else if (new String(maskedPAN).indexOf('5') == 0) {
-                                GlobalPara.cardType = "MASTERCARD";
-                            } else {
-                                GlobalPara.cardType = "UNKNOWN CARD";
-                            }
+                            GlobalPara.cardType = cardBrandFromPan(new String(maskedPAN));
 
 
                             Log.d(TAG, "getMaskedTracks***********************************************");
@@ -3653,8 +3641,10 @@ public class MainActivity extends AppCompatActivity {
                                 cardType = "CardType No Def.";
                                 break;
                         }
-                        Log.d(TAG, "cardType:" + cardType);
-                        GlobalPara.cardType = cardType;
+                        Log.d(TAG, "CL kernel type: " + cardType);
+                        // GlobalPara.cardType (printed on the receipt) is set from the
+                        // card BRAND (AID tag 4F) below via cardBrandFromAid, so it reads
+                        // VISA/MC/DEBIT rather than the verbose contactless kernel type.
 
                         TLVData.version = 1;
                         TLVData.value = new byte[256];
@@ -3668,6 +3658,18 @@ public class MainActivity extends AppCompatActivity {
                         Log.d(TAG, "rcData.track2Data  : " + Converter.byteArray2HexString(rcData.track2Data, rcData.track2Len));
                         Log.d(TAG, "rcData.chipData    : " + Converter.byteArray2HexString(rcData.chipData, rcData.chipDataLen));
                         Log.d(TAG, "rcData.addData     : " + Converter.byteArray2HexString(rcData.additionalData, rcData.additionalDataLen));
+
+                        // Card brand (abbreviated) for the receipt, from AID tag 4F.
+                        TLVData.tag = 0x4F;
+                        TLVData.len = 256;
+                        TLVData.value = new byte[256];
+                        if (tlvUtility.TLVDataGet(TLVData) == 0 && TLVData.len > 0) {
+                            String clAid = Converter.byteArray2HexString(TLVData.value, TLVData.len);
+                            GlobalPara.cardType = cardBrandFromAid(clAid);
+                            Log.d(TAG, "CL AID=" + clAid + " brand=" + GlobalPara.cardType);
+                        } else {
+                            GlobalPara.cardType = "CARD";
+                        }
 
                         // Store EMV data for ATM host transaction (CL)
                         if (GlobalPara.atmMode && tlvUtility.intTLVDataBaseLen > 0) {
@@ -4863,6 +4865,47 @@ public class MainActivity extends AppCompatActivity {
      */
     private static boolean isDukptBuild() {
         return "DUKPT".equals(BuildConfig.KEY_MODE);
+    }
+
+    /**
+     * Short card-brand label for the receipt, derived from the EMV AID (tag 84/4F).
+     * Checks the network-agnostic US Common Debit AIDs first, then the RID (first
+     * 5 bytes). Cards that aren't credit Visa/MC used to fall through to the alarming
+     * "UNKNOWN CARD" — a normal US debit card selects the Common Debit AID
+     * (A0000000980840) and now reads "DEBIT". Truly unknown apps read "CARD".
+     */
+    private static String cardBrandFromAid(String aidHex) {
+        if (aidHex == null || aidHex.isEmpty()) return "CARD";
+        String aid = aidHex.toUpperCase().replace(" ", "");
+        // US Common Debit (network-agnostic debit routing)
+        if (aid.startsWith("A0000000980840")) return "DEBIT";   // Visa US Common Debit
+        if (aid.startsWith("A0000000042203")) return "DEBIT";   // MC US Common Debit
+        String rid = aid.length() >= 10 ? aid.substring(0, 10) : aid;
+        switch (rid) {
+            case "A000000003": return "VISA";
+            case "A000000004": return "MC";
+            case "A000000025": return "AMEX";
+            case "A000000152": return "DISC";
+            case "A000000324": return "DISC";
+            case "A000000277": return "INTERAC";
+            case "A000000098": return "DEBIT";   // Visa USA debit
+            default:           return "CARD";
+        }
+    }
+
+    /**
+     * Short card-brand label from the (masked) PAN IIN — used on the MSR path,
+     * where no AID is available. Unknown ranges read "CARD".
+     */
+    private static String cardBrandFromPan(String pan) {
+        if (pan == null || pan.isEmpty()) return "CARD";
+        char c0 = pan.charAt(0);
+        String p2 = pan.length() >= 2 ? pan.substring(0, 2) : "";
+        if (c0 == '4') return "VISA";
+        if (c0 == '5') return "MC";
+        if (p2.equals("34") || p2.equals("37")) return "AMEX";
+        if (c0 == '6') return "DISC";
+        return "CARD";
     }
 
     // ── PIN retry on incorrect PIN (response code 55) ────────────────────────
@@ -7767,6 +7810,28 @@ public class MainActivity extends AppCompatActivity {
          * Print text content - simple text-based printing for ATM receipts
          * @param text The text to print (use \n for line breaks)
          */
+        /**
+         * A "separator" line is one made up only of '=' or '-' (the full-width
+         * rules on the receipt). These print at the small font so they keep
+         * spanning the paper; everything else prints larger.
+         */
+        private boolean isSeparatorLine(String line) {
+            if (line == null) {
+                return false;
+            }
+            String t = line.trim();
+            if (t.length() < 5) {
+                return false;
+            }
+            for (int i = 0; i < t.length(); i++) {
+                char c = t.charAt(i);
+                if (c != '=' && c != '-') {
+                    return false;
+                }
+            }
+            return true;
+        }
+
         public void printf(String text) throws IOException {
             if (Print == null) {
                 Init();
@@ -7780,23 +7845,37 @@ public class MainActivity extends AppCompatActivity {
             // Split text by newlines
             String[] lines = text.split("\n", -1);
 
-            // Calculate page height based on number of lines
-            int lineHeight = 20;
-            int pageHeight = lines.length * lineHeight + 100;
+            // Font sizing. Text lines print LARGER for readability; the full-width
+            // "====="/"-----" separators stay at the small font so they don't run
+            // off the 384-dot paper (drawText clips, it does not wrap). Tune the two
+            // FONT_* / LINE_* constants together — text char width grows with font,
+            // so very long data lines (e.g. Transaction ID) are the width limit.
+            final int FONT_TEXT       = 26;   // larger, readable body text
+            final int FONT_SEPARATOR  = 16;   // keep separators full-width & compact
+            final int LINE_H_TEXT     = 34;
+            final int LINE_H_SEP      = 22;
+            final int leftMargin      = 25;
+            final boolean PRINT_TEXT_BOLD = true;  // body text bold; separators light
 
+            // First pass: total page height (per-line, since line heights differ).
+            int pageHeight = 40;  // top/bottom padding
+            for (String line : lines) {
+                pageHeight += isSeparatorLine(line) ? LINE_H_SEP : LINE_H_TEXT;
+            }
             Print.initPage(pageHeight);
 
+            // Second pass: draw each line. Body text prints BOLD for legibility;
+            // separators stay light. 9-arg overload per SDK Print_demo example:
+            // drawText(x, y, text, fontSize, widthScale, bold, angle, underline, reverse)
             int currentY = 20;
-            int leftMargin = 25;
-            int fontSize = 16;
-
-            // Print each line
             for (String line : lines) {
-                // Print even empty lines (to preserve spacing), but skip null
+                boolean sep = isSeparatorLine(line);
                 if (line != null) {
-                    Print.drawText(leftMargin, currentY, line, fontSize);
+                    int font = sep ? FONT_SEPARATOR : FONT_TEXT;
+                    boolean bold = !sep && PRINT_TEXT_BOLD;
+                    Print.drawText(leftMargin, currentY, line, font, 1, bold, (float) 0, false, false);
                 }
-                currentY += lineHeight;
+                currentY += sep ? LINE_H_SEP : LINE_H_TEXT;
             }
 
             // Print the page. Kept on printPage() (the proven path) — paper-out is

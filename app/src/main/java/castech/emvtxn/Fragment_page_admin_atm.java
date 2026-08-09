@@ -1293,12 +1293,29 @@ public class Fragment_page_admin_atm extends Fragment {
             try {
                 MainActivity.CTOS_Printer printer = mainActivity.getPrinter();
                 if (printer != null) {
-                    printer.printf("=== PRINTER TEST ===\n");
-                    printer.printf("ATM Version: " + MainActivity.APP_VERSION + "\n");
-                    printer.printf("Date: " + new java.text.SimpleDateFormat("MM/dd/yyyy HH:mm:ss").format(new java.util.Date()) + "\n");
-                    printer.printf("Terminal ID: " + edtTerminalId.getText().toString() + "\n");
-                    printer.printf("===================\n\n\n");
-                    printer.goprintf();
+                    // Build ONE page and print it in a single printf() call.
+                    // (printf is self-contained: initPage + drawText + printPage.
+                    // Calling it per-line printed a separate page each time, and
+                    // goprintf() printed the legacy hard-coded SAMPLE RECEIPT.)
+                    // This exercises the real receipt print path so the test shows
+                    // exactly the font/bold/width a live receipt will have.
+                    String test =
+                        "================================\n" +
+                        "         PRINTER TEST           \n" +
+                        "================================\n" +
+                        "\n" +
+                        "ATM Version: " + MainActivity.APP_VERSION + "\n" +
+                        "Date: " + new java.text.SimpleDateFormat("MM/dd/yyyy HH:mm:ss")
+                                .format(new java.util.Date()) + "\n" +
+                        "Terminal ID: " + edtTerminalId.getText().toString() + "\n" +
+                        "--------------------------------\n" +
+                        "Withdrawal Amount: $100.00\n" +
+                        "Service Fee:       $3.00\n" +
+                        "Total Charged:     $103.00\n" +
+                        "TransID: TXN1786284020883\n" +
+                        "================================\n" +
+                        "\n\n\n";
+                    printer.printf(test);
                     Toast.makeText(getContext(), "Printer test successful", Toast.LENGTH_SHORT).show();
                 } else {
                     Toast.makeText(getContext(), "Printer not available", Toast.LENGTH_SHORT).show();
