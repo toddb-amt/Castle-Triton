@@ -28,6 +28,13 @@ public class Fragment_page_main_menu extends Fragment {
         mainActivity = activity;
     }
 
+    // Required no-arg constructor: Android re-instantiates fragments via reflection
+    // when the activity is recreated (e.g. an orientation change from handling the
+    // terminal to change paper). Without this the restore crashed with
+    // NoSuchMethodException. mainActivity is static, so it survives recreation.
+    public Fragment_page_main_menu() {
+    }
+
     @Override
     public View onCreateView(LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
         try {

@@ -121,6 +121,12 @@ public class Fragment_page_admin_atm extends Fragment {
         mainActivity = activity;
     }
 
+    // Required no-arg constructor for Android fragment restoration on activity
+    // recreation (see Fragment_page_main_menu). mainActivity is static so it
+    // survives. Without this, recreation crashed with NoSuchMethodException.
+    public Fragment_page_admin_atm() {
+    }
+
     @Override
     public View onCreateView(LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
         try {

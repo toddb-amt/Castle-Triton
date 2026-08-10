@@ -1103,59 +1103,78 @@ public class MainActivity extends AppCompatActivity {
     }
 
     /**
-     * Prints a batch close receipt with host totals summary.
-     * @param response The HostTotalsResponse containing batch totals
+     * Prints a host-totals receipt. Builds ONE page and prints it via a single
+     * printf() on a background thread — NOT per-line printf() + goprintf(), which
+     * printed ~20 separate pages plus the legacy SAMPLE RECEIPT. Runs off the UI
+     * thread to avoid ANR; host totals is an admin action (never during a txn), so
+     * there is no SDK-thread contention.
+     *
+     * @param response    the host totals
+     * @param batchClosed true for the Close-Batch (reset) receipt, false for a query
      */
-    private void printBatchCloseReceipt(castech.emvtxn.atm.host.HostTotalsResponse response) {
+    private void printHostTotalsReceipt(final castech.emvtxn.atm.host.HostTotalsResponse response,
+            final boolean batchClosed) {
         if (Printer == null) {
-            Log.e(TAG, "Printer not available for batch close receipt");
+            Log.e(TAG, "Printer not available for host totals receipt");
+            return;
+        }
+        if (response == null) {
+            Log.e(TAG, "No host totals to print");
             return;
         }
 
-        try {
-            // Print header
-            Printer.printf("================================\n");
-            Printer.printf("      BATCH CLOSE REPORT\n");
-            Printer.printf("================================\n\n");
+        StringBuilder r = new StringBuilder();
+        r.append("================================\n");
+        r.append(batchClosed ? "      BATCH CLOSE REPORT\n" : "         HOST TOTALS\n");
+        r.append("================================\n");
+        r.append("\n");
 
-            // Print date/time
-            java.text.SimpleDateFormat sdf = new java.text.SimpleDateFormat("MM/dd/yyyy HH:mm:ss", java.util.Locale.US);
-            String dateTime = sdf.format(new java.util.Date());
-            Printer.printf("Date: " + dateTime + "\n\n");
-
-            // Print terminal ID
-            String terminalId = response.getTerminalId();
-            if (terminalId != null && !terminalId.isEmpty()) {
-                Printer.printf("Terminal: " + terminalId + "\n\n");
-            }
-
-            // Print transaction counts
-            Printer.printf("--- TRANSACTION COUNTS ---\n");
-            Printer.printf("Withdrawals:       " + String.format("%4d", response.getWithdrawalCount()) + "\n");
-            Printer.printf("Balance Inquiries: " + String.format("%4d", response.getBalanceInquiryCount()) + "\n");
-            Printer.printf("Transfers:         " + String.format("%4d", response.getTransferCount()) + "\n");
-            Printer.printf("Non-Cash:          " + String.format("%4d", response.getNonCashCount()) + "\n");
-            Printer.printf("                   ----\n");
-            Printer.printf("TOTAL:             " + String.format("%4d", response.getTotalTransactionCount()) + "\n\n");
-
-            // Print amounts
-            Printer.printf("--- AMOUNTS ---\n");
-            Printer.printf("Cash Dispensed: " + response.getTotalCashDispensedFormatted() + "\n");
-            Printer.printf("Non-Cash:       " + response.getTotalNonCashFormatted() + "\n");
-            Printer.printf("Surcharges:     " + response.getTotalSurchargesFormatted() + "\n\n");
-
-            // Print footer
-            Printer.printf("--------------------------------\n");
-            Printer.printf("     BATCH CLOSED SUCCESSFULLY\n");
-            Printer.printf("--------------------------------\n\n\n\n");
-
-            // Execute print
-            Printer.goprintf();
-
-            Log.d(TAG, "Batch close receipt printed successfully");
-        } catch (Exception e) {
-            Log.e(TAG, "Error printing batch close receipt: " + e.getMessage());
+        java.text.SimpleDateFormat sdf =
+                new java.text.SimpleDateFormat("MM/dd/yyyy HH:mm:ss", java.util.Locale.US);
+        r.append("Date: ").append(sdf.format(new java.util.Date())).append("\n");
+        String terminalId = response.getTerminalId();
+        if (terminalId != null && !terminalId.isEmpty()) {
+            r.append("Terminal: ").append(terminalId).append("\n");
         }
+        r.append("\n");
+
+        r.append("--------------------------------\n");
+        r.append("COUNTS\n");
+        r.append("--------------------------------\n");
+        r.append("Withdrawals: ").append(String.format("%6d", response.getWithdrawalCount())).append("\n");
+        r.append("Bal Inquiry: ").append(String.format("%6d", response.getBalanceInquiryCount())).append("\n");
+        r.append("Transfers:   ").append(String.format("%6d", response.getTransferCount())).append("\n");
+        r.append("Non-Cash:    ").append(String.format("%6d", response.getNonCashCount())).append("\n");
+        r.append("TOTAL:       ").append(String.format("%6d", response.getTotalTransactionCount())).append("\n");
+        r.append("\n");
+
+        r.append("--------------------------------\n");
+        r.append("AMOUNTS\n");
+        r.append("--------------------------------\n");
+        r.append("Cash Disp:  ").append(response.getTotalCashDispensedFormatted()).append("\n");
+        r.append("Non-Cash:   ").append(response.getTotalNonCashFormatted()).append("\n");
+        r.append("Surcharges: ").append(response.getTotalSurchargesFormatted()).append("\n");
+        r.append("\n");
+
+        r.append("================================\n");
+        if (batchClosed) {
+            r.append("   BATCH CLOSED SUCCESSFULLY\n");
+            r.append("================================\n");
+        }
+        r.append("\n\n\n");
+
+        final String receipt = r.toString();
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    Printer.printf(receipt);   // self-contained: initPage + drawText + printPage
+                    Log.d(TAG, "Host totals receipt printed" + (batchClosed ? " (batch closed)" : ""));
+                } catch (Exception e) {
+                    Log.e(TAG, "Error printing host totals receipt: " + e.getMessage());
+                }
+            }
+        }).start();
     }
 
     // =========================================================================
@@ -1791,12 +1810,16 @@ public class MainActivity extends AppCompatActivity {
                     progressDialog.dismiss();
 
                     if (response.isSuccess()) {
-                        // Show totals in dialog
+                        // Print the totals, then show them in a dialog.
+                        printHostTotalsReceipt(response, false);
                         new AlertDialog.Builder(MainActivity.this)
                             .setTitle("Host Totals")
                             .setMessage(response.getSummary())
                             .setPositiveButton("OK", null)
-                            .setNeutralButton("Close Batch", (dialog, which) -> {
+                            .setNeutralButton("Reprint", (dialog, which) -> {
+                                printHostTotalsReceipt(response, false);
+                            })
+                            .setNegativeButton("Close Batch", (dialog, which) -> {
                                 // Request totals with reset flag (closes batch on processor)
                                 requestHostTotalsWithReset();
                             })
@@ -1848,7 +1871,7 @@ public class MainActivity extends AppCompatActivity {
                             if (response.isSuccess()) {
                                 // Print batch close receipt on background thread to avoid ANR
                                 new Thread(() -> {
-                                    printBatchCloseReceipt(response);
+                                    printHostTotalsReceipt(response, true);
                                     runOnUiThread(() -> {
                                         new AlertDialog.Builder(MainActivity.this)
                                             .setTitle("Batch Closed")
