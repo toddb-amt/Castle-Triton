@@ -191,6 +191,54 @@ public class CastleKeyManager {
     }
 
     /**
+     * Logs the Key Check Value (KCV) of the injected key slots so the terminal's
+     * master-key KCV can be compared against the MUX's atm_key KCV. The master key
+     * at C000/0010 MUST have the same KCV as the MUX's TMK for this terminal — if
+     * not, the working key unwraps to a different session key and the host rejects
+     * the PIN with Key Sync Error (76). Right slot + right attribute is not enough;
+     * the VALUE must match.
+     */
+    public void logKeySlotKcvs() {
+        Log.w(TAG, "===== KEY SLOT KCVs (compare C000/0010 to MUX atm_key KCV) =====");
+        logSlotKcv(MKSK_KEY_SET, MKSK_KEY_INDEX, "C000/0010 MASTER (must match MUX atm_key)");
+        logSlotKcv(tmkKeySet, tmkKeyIndex, "CFFF/0000 ZMK");
+        Log.w(TAG, "================================================================");
+    }
+
+    private void logSlotKcv(int keySet, int keyIndex, String label) {
+        try {
+            CtKMS2Key key = new CtKMS2Key();
+            key.selectKey(keySet, keyIndex);
+
+            String kcv = null;
+            try {
+                byte[] cv = key.getCV(CtKMS2Key.KCV_METHOD_KCV, 3);
+                if (cv != null && cv.length > 0) kcv = bytesToHexString(cv).toUpperCase();
+            } catch (Throwable t1) {
+                try {
+                    byte[] cv = key.getCV(3);
+                    if (cv != null && cv.length > 0) kcv = bytesToHexString(cv).toUpperCase();
+                } catch (Throwable t2) {
+                    Log.w(TAG, "  getCV failed both overloads for " + label + ": " + t2.getMessage());
+                }
+            }
+
+            int attr = 0;
+            byte type = 0;
+            try { key.getKeyInfo(); attr = key.getKeyAttribute(); type = key.getKeyType(); } catch (Throwable ignore) {}
+
+            Log.w(TAG, "  " + String.format("%04X/%04X", keySet, keyIndex)
+                    + "  KCV=" + kcv
+                    + "  Type=0x" + String.format("%02X", type)
+                    + "  Attr=0x" + String.format("%08X", attr)
+                    + "  (" + label + ")");
+        } catch (Throwable e) {
+            Log.w(TAG, "  KCV read failed for " + label + " @ "
+                    + String.format("%04X/%04X", keySet, keyIndex) + ": " + e.getMessage());
+        }
+    }
+
+    /**
      * Initializes the key manager.
      * Must be called before any key operations.
      * Attempts to load persisted key if available and not expired.
@@ -209,6 +257,10 @@ public class CastleKeyManager {
             } catch (CtKMS2Exception e) {
                 Log.w(TAG, "KMS2 init: " + String.format("0x%08X", e.getError()));
             }
+
+            // Log the KCV of each key slot so we can compare the C000/0010 master
+            // key against the MUX's atm_key KCV (Key Sync Error 76 diagnosis).
+            logKeySlotKcvs();
 
             // Check configured key locations
             boolean tmkExists = checkKeyExists(tmkKeySet, tmkKeyIndex);

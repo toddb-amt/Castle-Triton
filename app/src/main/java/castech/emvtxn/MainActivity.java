@@ -275,6 +275,26 @@ public class MainActivity extends AppCompatActivity {
 
         GlobalPara.tag = TAG;
 
+        // Key-slot KCV diagnostic at EVERY startup, independent of host config.
+        // (Previously it only ran inside AtmHostService init, so a freshly-reset
+        // terminal with no host configured never printed it.) Background thread +
+        // delay so the KMS2 service is up; read-only, never touches key material.
+        if (!isRunningOnEmulator) {
+            new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        Thread.sleep(4000);  // let KMS2/secure service come up
+                        castech.emvtxn.atm.host.CastleKeyManager km =
+                                new castech.emvtxn.atm.host.CastleKeyManager(MainActivity.this);
+                        km.logKeySlotKcvs();
+                    } catch (Throwable t) {
+                        Log.w(TAG, "Startup KCV diagnostic failed: " + t.getMessage());
+                    }
+                }
+            }).start();
+        }
+
         // EMV Cryptogram Diagnostic Test DISABLED — causes ANR/crash on some terminals
         // if (!isRunningOnEmulator) {
         //     runEmvDiagnosticTest();
