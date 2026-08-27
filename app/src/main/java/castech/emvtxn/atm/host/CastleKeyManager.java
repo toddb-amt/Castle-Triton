@@ -78,22 +78,35 @@ public class CastleKeyManager {
     private static final String PREF_KEY_DATA = "working_key";
     private static final String PREF_KEY_TIMESTAMP = "key_timestamp";
     private static final String PREF_KEY_KCV = "key_kcv";
+    /** MKSK session key as delivered by the host — ciphertext under the master key. */
+    private static final String PREF_KEY_MKSK_BLOB = "mksk_session_blob";
     private static final long KEY_EXPIRY_MS = 4 * 60 * 60 * 1000; // 4 hours in milliseconds
     private static final long KEY_RENEWAL_THRESHOLD_MS = 30 * 60 * 1000; // 30 minutes - renew proactively
 
     // Key states
     private boolean initialized;
-    private boolean workingKeyLoaded;
-    private String currentWorkingKeyCheckValue;
+    // ── PROCESS-WIDE KEY STATE ───────────────────────────────────────────────
+    // STATIC on purpose. The terminal has ONE secure element and ONE working key,
+    // but the app constructs many CastleKeyManager instances (MainActivity's
+    // diagnostics, every AtmHostService re-init on a settings re-apply). With
+    // per-instance fields, the instance that DOWNLOADED the key wasn't the
+    // instance the PIN flow ENCRYPTED with: the encryptor saw "MKSK session key
+    // not loaded", fell back to an empty legacy slot, and the customer's PIN —
+    // and the whole transaction — failed even though a valid key had just been
+    // delivered. The in-memory mirror of hardware key state must be as global as
+    // the hardware it mirrors.
+    private static volatile boolean workingKeyLoaded;
+    private static volatile String currentWorkingKeyCheckValue;
 
-    // Encrypted working key (for MKSK approach)
+    // Encrypted working key (for MKSK approach) — process-wide, see block above
     // Instead of storing decrypted key, we store encrypted and use MKSK to decrypt on-the-fly
-    private byte[] encryptedWorkingKey;
+    private static volatile byte[] encryptedWorkingKey;
 
     // Clear working key for software-based encryption (fallback when KMS2 fails)
     // NOTE: Less secure than hardware - use only when KMS2 key attributes block hardware crypto
-    private byte[] softwareWorkingKey;
-    private boolean useSoftwareEncryption = false;
+    // Process-wide, see block above.
+    private static volatile byte[] softwareWorkingKey;
+    private static volatile boolean useSoftwareEncryption = false;
 
     // Software TMK for decrypting working keys when KMS2 TMK has wrong attribute
     // The TMK is XOR of Key Part A and Key Part B from processor
@@ -124,7 +137,10 @@ public class CastleKeyManager {
         this.tmkKeySet = DEFAULT_TMK_KEY_SET;
         this.tmkKeyIndex = DEFAULT_TMK_KEY_INDEX;
         this.initialized = false;
-        this.workingKeyLoaded = false;
+        // Deliberately NOT resetting workingKeyLoaded (or any other key-state
+        // field) here: that state is process-wide/static, mirroring the secure
+        // element. Constructing a fresh manager instance — which happens on every
+        // host-service re-init — must not erase the key another instance loaded.
     }
 
     /**
@@ -288,6 +304,16 @@ public class CastleKeyManager {
                     Log.d(TAG, "Restored working key from persistence");
                     notifyKeyLoaded();
                 }
+            }
+
+            // Hardware (MKSK) session keys live in the secure element, so there are
+            // no key bytes to restore — but the session key IS still loaded there.
+            // Without this, every re-init (e.g. opening the Admin screen, which
+            // re-applies settings and rebuilds the host service) reported "No key
+            // loaded" and triggered a fresh Type 88 against the host for a key the
+            // terminal already had. Restore the flag from the persisted metadata.
+            if (!workingKeyLoaded && mkskExists) {
+                restoreHardwareKeyStateFromPrefs();
             }
 
             initialized = true;
@@ -681,10 +707,14 @@ public class CastleKeyManager {
     }
 
     // MKSK key location for session key operations (set after successful setSK)
-    private int mkskKeySet = -1;
-    private int mkskKeyIndex = -1;
-    private boolean mkskSessionKeyLoaded = false;
-    private String mkskEncryptedSessionKey = null;
+    // MKSK session-key state — PROCESS-WIDE (see the key-state block at the top
+    // of the class). encryptPinBlockWithMksk() re-runs setSK with the encrypted
+    // blob on every PIN, so the blob is the load-bearing piece of state: any
+    // instance that lacks it cannot encrypt, whatever the flags say.
+    private static volatile int mkskKeySet = -1;
+    private static volatile int mkskKeyIndex = -1;
+    private static volatile boolean mkskSessionKeyLoaded = false;
+    private static volatile String mkskEncryptedSessionKey = null;
 
     private String decryptKeyPartsWithMksk(String keyPartA, String keyPartB, int keySet, int keyIndex) {
         try {
@@ -1572,7 +1602,42 @@ public class CastleKeyManager {
      */
     private void saveKeyToPrefs() {
         if (softwareWorkingKey == null || !useSoftwareEncryption) {
-            Log.d(TAG, "No software key to persist");
+            // Hardware-backed key (MKSK/DUKPT): the key material itself lives in the
+            // secure element and must never be written to prefs. But the METADATA
+            // still has to be, because expiry is computed purely from
+            // PREF_KEY_TIMESTAMP. Returning outright left the timestamp at 0, so
+            // getKeyExpiryMinutes() returned -1 → isKeyMissingOrExpired() reported
+            // "Key expired" for a key that had JUST loaded → the app requested
+            // another one → an endless ~52s Type 88 loop against the host (which
+            // looked like the terminal "rejecting" every key it was sent).
+            if (workingKeyLoaded) {
+                try {
+                    SharedPreferences prefs =
+                            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+                    SharedPreferences.Editor ed = prefs.edit()
+                            .remove(PREF_KEY_DATA)   // never clear-key bytes for hardware keys
+                            .putLong(PREF_KEY_TIMESTAMP, System.currentTimeMillis())
+                            .putString(PREF_KEY_KCV, currentWorkingKeyCheckValue);
+                    // Persist the ENCRYPTED session-key blob (ciphertext under the
+                    // master key — the same bytes the host sent on the wire). PIN
+                    // encryption re-runs setSK with this blob every time, so without
+                    // it a restarted app cannot encrypt a PIN until a fresh (slow)
+                    // Type 88 completes. With it, the terminal is transaction-ready
+                    // immediately after restart, using the key the host still holds.
+                    if (mkskSessionKeyLoaded && mkskEncryptedSessionKey != null) {
+                        ed.putString(PREF_KEY_MKSK_BLOB, mkskEncryptedSessionKey);
+                    } else {
+                        ed.remove(PREF_KEY_MKSK_BLOB);
+                    }
+                    ed.apply();
+                    Log.d(TAG, "Hardware key state persisted (KCV=" + currentWorkingKeyCheckValue
+                            + ", blob=" + (mkskEncryptedSessionKey != null) + ", valid for 4 hours)");
+                } catch (Exception e) {
+                    Log.e(TAG, "Failed to persist hardware key state: " + e.getMessage());
+                }
+            } else {
+                Log.d(TAG, "No software key to persist");
+            }
             return;
         }
 
@@ -1593,6 +1658,70 @@ public class CastleKeyManager {
 
         } catch (Exception e) {
             Log.e(TAG, "Failed to persist key: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Restores the in-memory state for a HARDWARE-backed (MKSK) session key after a
+     * re-init, using the metadata written by {@link #saveKeyToPrefs()}.
+     *
+     * <p>There are no key bytes to restore — the session key is in the secure
+     * element at C000/0010 and survives an app-object rebuild. All that is lost is
+     * this object's {@code workingKeyLoaded} flag, and without restoring it the app
+     * believes it has no key and re-requests one from the host unnecessarily.</p>
+     *
+     * <p>Only restores within the 4-hour key lifetime; an expired record is ignored
+     * so a genuinely stale key still triggers a real renewal.</p>
+     *
+     * @return true if hardware key state was restored
+     */
+    boolean resyncHardwareKeyState() {
+        if (workingKeyLoaded) {
+            return true;
+        }
+        return restoreHardwareKeyStateFromPrefs();
+    }
+
+    private boolean restoreHardwareKeyStateFromPrefs() {
+        try {
+            SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+            long timestamp = prefs.getLong(PREF_KEY_TIMESTAMP, 0);
+            String kcv = prefs.getString(PREF_KEY_KCV, null);
+            String blob = prefs.getString(PREF_KEY_MKSK_BLOB, null);
+            if (timestamp == 0 || kcv == null) {
+                return false;
+            }
+            // The encrypted session-key blob is REQUIRED: encryptPinBlockWithMksk()
+            // re-runs setSK with it on every PIN. Restoring the flags without the
+            // blob previously made the terminal claim "ready" and then fail the
+            // customer's PIN with "MKSK session key not loaded".
+            if (blob == null || blob.isEmpty()) {
+                Log.d(TAG, "No persisted MKSK blob — cannot restore an encrypt-capable "
+                        + "key state; a fresh key download is needed");
+                return false;
+            }
+            long elapsed = System.currentTimeMillis() - timestamp;
+            if (elapsed > KEY_EXPIRY_MS) {
+                Log.d(TAG, "Persisted hardware key state expired (" + (elapsed / 60000)
+                        + " min old) — a fresh key download is needed");
+                return false;
+            }
+
+            mkskKeySet = MKSK_KEY_SET;
+            mkskKeyIndex = MKSK_KEY_INDEX;
+            mkskEncryptedSessionKey = blob;
+            mkskSessionKeyLoaded = true;
+            useSoftwareEncryption = false;
+            currentWorkingKeyCheckValue = kcv;
+            workingKeyLoaded = true;
+
+            Log.d(TAG, "Restored hardware (MKSK) key state incl. blob: KCV=" + kcv + ", "
+                    + ((KEY_EXPIRY_MS - elapsed) / 60000) + " min remaining");
+            notifyKeyLoaded();
+            return true;
+        } catch (Exception e) {
+            Log.w(TAG, "Failed to restore hardware key state: " + e.getMessage());
+            return false;
         }
     }
 

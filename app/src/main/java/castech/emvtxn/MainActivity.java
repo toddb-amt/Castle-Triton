@@ -121,7 +121,9 @@ import castech.emvtxn.callback.MyManualEntryEvent;
 public class MainActivity extends AppCompatActivity {
     public static String TAG = "EMV_AP";
     public static String APP_TITLE = "MyView";
-    public static String APP_VERSION = "6.1-ATM";  // DUKPT support with Format 1 fallback
+    // Single source of truth: gradle versionName (see app/build.gradle). Shown in
+    // the title bar, receipts, and admin — always matches the APK filename version.
+    public static String APP_VERSION = BuildConfig.VERSION_NAME;
     public static String DATE_STR = "20200812";
     public static String BUILD_NUM = "0001";
 
@@ -175,6 +177,20 @@ public class MainActivity extends AppCompatActivity {
     // Package-private for access from MyEMVSPEvent callback
     public AtmHostService atmHostService = null;
     private final Object atmHostLock = new Object();
+
+    /**
+     * Config the running ATM host service was built with. Guarded by atmHostLock.
+     * Used to make initializeAtmHostService() idempotent: identical config keeps
+     * the running service (and its key state) instead of tearing it down.
+     */
+    private String atmHostServiceConfigSignature = null;
+
+    /** Signature of the host settings that matter for service construction. */
+    private String currentHostConfigSignature() {
+        return GlobalPara.atmProcessorType + "|" + GlobalPara.atmHostAddress + "|"
+                + GlobalPara.atmHostPort + "|" + GlobalPara.atmTerminalId + "|"
+                + GlobalPara.atmUseTls + "|" + GlobalPara.atmProtocolType;
+    }
     private volatile java.util.concurrent.CountDownLatch atmTransactionLatch = null;
 
     // ATM Transaction Event Listener - stored so we can re-set before each transaction
@@ -288,6 +304,11 @@ public class MainActivity extends AppCompatActivity {
                         castech.emvtxn.atm.host.CastleKeyManager km =
                                 new castech.emvtxn.atm.host.CastleKeyManager(MainActivity.this);
                         km.logKeySlotKcvs();
+                        // Central config from CasHUB is applied at startup by
+                        // AtmSettingsManager.loadSettings(). Here we only register the
+                        // live-update receiver: if CasHUB pushes a new parameter while
+                        // the app is running, re-apply it without waiting for a reboot.
+                        CasHubParams.registerParameterReceiver(MainActivity.this);
                     } catch (Throwable t) {
                         Log.w(TAG, "Startup KCV diagnostic failed: " + t.getMessage());
                     }
@@ -491,10 +512,29 @@ public class MainActivity extends AppCompatActivity {
                 Log.d(TAG, "Kiosk: Set default app to " + getPackageName());
             }
 
-            // Disable Home, Back, Search navigation buttons
+            // Disable Home, Back, Search navigation buttons.
+            //
+            // Toggle ENABLE then DISABLE rather than a plain disable: applying
+            // "disable" alone at boot (a no-op when nav was already disabled from
+            // the previous session) left the window with stale nav-bar insets and
+            // clipped the bottom row of the on-screen keyboard. Cycling the state
+            // — exactly what fixing it manually via admin kiosk off/on does —
+            // forces the system to re-layout. Off the UI thread (binder calls).
             if (GlobalPara.atmDisableNavButtons) {
-                ctSettings.setNavigation(false, false, false);
-                Log.d(TAG, "Kiosk: Navigation buttons disabled");
+                new Thread(new Runnable() {
+                    @Override
+                    public void run() {
+                        try {
+                            CtSettings s = new CtSettings();
+                            s.setNavigation(true, true, true);
+                            Thread.sleep(500);
+                            s.setNavigation(false, false, false);
+                            Log.d(TAG, "Kiosk: Navigation buttons disabled (enable→disable toggle)");
+                        } catch (Throwable t) {
+                            Log.e(TAG, "Kiosk nav toggle failed: " + t.getMessage());
+                        }
+                    }
+                }).start();
             }
 
             // Keep screen always on (no timeout)
@@ -596,9 +636,23 @@ public class MainActivity extends AppCompatActivity {
         }
 
         synchronized (atmHostLock) {
+            // IDEMPOTENT: if a service is already running with the SAME config,
+            // keep it. Every caller of this method (startup sequencing, Admin
+            // screen re-apply, CasHUB parameter apply, host-totals fallback) used
+            // to tear the service down and rebuild it — each rebuild constructed a
+            // fresh manager/key-manager and kicked a startup key renewal, i.e. a
+            // redundant Type 88 that also made the host rotate the working key.
+            // Rebuild only when the host config actually changed.
+            if (atmHostService != null && atmHostService.isInitialized()
+                    && atmHostServiceConfigSignature != null
+                    && atmHostServiceConfigSignature.equals(currentHostConfigSignature())) {
+                Log.d(TAG, "ATM Host Service already running with identical config — keeping it");
+                return;
+            }
+
             // Shutdown existing service if any
             if (atmHostService != null) {
-                Log.d(TAG, "Shutting down existing ATM Host Service");
+                Log.d(TAG, "Shutting down existing ATM Host Service (config changed)");
                 atmHostService.shutdown();
                 atmHostService = null;
             }
@@ -659,6 +713,7 @@ public class MainActivity extends AppCompatActivity {
                 atmHostService = new AtmHostService(this);
                 if (atmHostService.initialize(config)) {
                     Log.d(TAG, "ATM Host Service initialized successfully");
+                    atmHostServiceConfigSignature = currentHostConfigSignature();
 
                     // Set up event listener to receive transaction results
                     // Store in member variable so we can re-set it before each transaction
@@ -4990,11 +5045,17 @@ public class MainActivity extends AppCompatActivity {
                 atmHostService.performWithdrawal(cardData, amountCents, surchargeCents, acctType);
             }
 
-            // Wait for response with 60 second timeout
+            // Wait for the host result. MUST outlast the connection layer's own
+            // response timeout (120s for EFX/busy-MUX paths): the socket layer is
+            // the authority on giving up, and every outcome it produces (response,
+            // timeout, error) releases this latch via the listener callbacks. When
+            // this latch was 60s it fired FIRST on a ~50-120s host, abandoning an
+            // in-flight authorization the host then answered "after the fact" —
+            // the customer saw a timeout while the host approved/declined for real.
             try {
-                boolean completed = atmTransactionLatch.await(60, java.util.concurrent.TimeUnit.SECONDS);
+                boolean completed = atmTransactionLatch.await(130, java.util.concurrent.TimeUnit.SECONDS);
                 if (!completed) {
-                    Log.e(TAG, "ATM HOST (" + pathTag + "): Transaction TIMEOUT after 60 seconds");
+                    Log.e(TAG, "ATM HOST (" + pathTag + "): Transaction TIMEOUT after 130 seconds");
                     GlobalPara.atmHostCallSuccess = false;
                     GlobalPara.atmResponseMessage = "Transaction timeout";
                     return;
@@ -5043,8 +5104,12 @@ public class MainActivity extends AppCompatActivity {
      * even if the terminal is still booting).
      */
     private static final boolean REQUIRE_READY_BEFORE_TXN = true;
-    // Auto-retry window while the working key is still downloading (~30s total).
-    private static final int TXN_READY_MAX_RETRIES = 20;
+    // Auto-retry window while the working key is still downloading (~150s total).
+    // Was 20 x 1.5s = 30s, which expired long before a slow host answered: EFX takes
+    // ~50-57s for a Type 88 and can retry once (see ProcessorConfig.forEfx), so the
+    // customer hit "Terminal starting up" and the transaction dead-ended even though
+    // the key landed moments later. Sized to outlast a slow download plus one retry.
+    private static final int TXN_READY_MAX_RETRIES = 100;
     private static final long TXN_READY_RETRY_INTERVAL_MS = 1500;
     private int txnReadyRetryCount = 0;
 

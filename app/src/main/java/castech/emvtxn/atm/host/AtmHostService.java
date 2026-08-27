@@ -253,10 +253,31 @@ public class AtmHostService {
 
     /**
      * Downloads working keys from the host.
+     *
+     * <p>Shares the {@link #keyDownloadInProgress} guard with
+     * {@link #requestNewWorkingKey()} and {@link #performStartupKeyRenewal}: the
+     * admin screen exposes this as a separate "Download Keys" button, and without
+     * the guard it put a second Type 88 on the wire alongside an in-flight one.
+     * The host answers only one; the loser times out and its retries clear the key
+     * the winner just loaded.</p>
      */
     public void downloadKeys() {
         ensureInitialized();
-        transactionManager.downloadKeys();
+        synchronized (this) {
+            keyDownloadInProgress = true;
+        }
+        new Thread(() -> {
+            try {
+                transactionManager.downloadKeysSync();
+            } catch (Exception e) {
+                Log.e(TAG, "Key download error: " + e.getMessage());
+                notifyError("Key download failed: " + e.getMessage());
+            } finally {
+                synchronized (AtmHostService.this) {
+                    keyDownloadInProgress = false;
+                }
+            }
+        }, "KeyDownload").start();
     }
 
     /**
@@ -353,7 +374,32 @@ public class AtmHostService {
         // Like a deployed ATM: ALWAYS attempt a fresh key request at startup,
         // regardless of whether the persisted key looks valid. This catches
         // host-side key rotation that happened while the terminal was off.
-        Log.d(TAG, "Startup key request: forcing fresh Type 88 download (ATM startup pattern)");
+        // If a usable, unexpired key is already loaded (key state is process-wide
+        // and survives restarts via the persisted MKSK blob), DON'T force another
+        // download. The old always-force behavior, combined with the host-service
+        // re-initializing on every settings re-apply, sent a Type 88 on each
+        // re-init — and every Type 88 makes the host ROTATE the working key, so
+        // the terminal was endlessly chasing its own tail (and on a busy MUX each
+        // chase costs 50-120s of keyless downtime). A genuinely stale/absent key
+        // still downloads; a host-side rotation we missed self-heals via the
+        // RC-76 key-sync path on the first transaction.
+        if (keyManager.isWorkingKeyLoaded() && !keyManager.isKeyMissingOrExpired()) {
+            Log.d(TAG, "Startup key check: usable key already loaded ("
+                    + keyManager.getKeyStatus() + ") — skipping forced download");
+            if (callback != null) {
+                callback.onRenewalSuccess(keyManager.getKeyStatus());
+            }
+            return;
+        }
+
+        // Serialization/coalescing happens in downloadKeysSync() (the single choke
+        // point). This flag only reflects "a download is running" for status; it
+        // must not early-return, or a caller is left with no completion callback.
+        synchronized (this) {
+            keyDownloadInProgress = true;
+        }
+
+        Log.d(TAG, "Startup key request: fresh Type 88 download (no usable key)");
 
         new Thread(new Runnable() {
             @Override
@@ -369,20 +415,35 @@ public class AtmHostService {
                                 + "mid-renewal — the new instance handles the download");
                         return;  // no error callback: not a real failure, just a stale instance
                     }
-                    // Clear any cached key state so the download fully refreshes.
-                    // (After the null check — never clear a key we can't re-download.)
-                    if (keyManager != null) {
-                        keyManager.clearWorkingKey();
-                    }
+                    // Do NOT pre-clear the key here. downloadKeysSync() decides
+                    // whether a fresh Type 88 is needed and clears/replaces the key
+                    // itself; clearing first destroyed a valid key and also defeated
+                    // the coalescing check (which requires a loaded key to know the
+                    // request is already satisfied), so a concurrent caller would
+                    // still put a redundant request on the wire.
                     tm.downloadKeysSync();
                     Log.d(TAG, "Startup key renewal completed successfully");
                     if (callback != null) {
-                        callback.onRenewalSuccess(keyManager.getKeyStatus());
+                        // Snapshot the manager the same way tm was snapshotted above: a
+                        // re-init on another thread can null the field between the
+                        // download and here. Dereferencing it directly threw an NPE that
+                        // the catch below reported as a renewal FAILURE — even though the
+                        // key had just loaded — which cleared the key and re-downloaded on
+                        // a loop, leaving the terminal keyless between cycles.
+                        CastleKeyManager km = keyManager;
+                        callback.onRenewalSuccess(km != null ? km.getKeyStatus()
+                                : "Working key loaded");
                     }
                 } catch (Exception e) {
                     Log.e(TAG, "Startup key renewal failed: " + e.getMessage());
                     if (callback != null) {
                         callback.onRenewalFailed(e.getMessage());
+                    }
+                } finally {
+                    // Always release the shared download guard — including the
+                    // early return above — or no further key download could run.
+                    synchronized (AtmHostService.this) {
+                        keyDownloadInProgress = false;
                     }
                 }
             }
@@ -498,22 +559,35 @@ public class AtmHostService {
         boolean isDukpt = castech.emvtxn.GlobalPara.atmDukptEnabled;
         if (isDukpt) {
             Log.d(TAG, "DUKPT mode — sending Type 88 to host for KSN sync (no working key load)");
-        } else {
+        }
+
+        // Take the guard BEFORE touching the key. Previously the key was cleared
+        // first and the guard checked after, so a duplicate request that was then
+        // correctly rejected had ALREADY destroyed a perfectly good working key.
+        // The guard is also shared with performStartupKeyRenewal(), so a manual
+        // request can no longer race the startup download: the host answers only
+        // one Type 88, the other request times out, retries, and each retry used
+        // to clear the key again — wiping the key the winning request had just
+        // loaded and leaving the terminal "not ready" (observed on EFX, whose
+        // ~50s response time makes the overlap window large).
+        // NOTE: no early-return here. Concurrency is handled at the single choke
+        // point — AtmTransactionManager.downloadKeysSync() serializes callers and
+        // coalesces a request that a just-finished download already satisfied. An
+        // early return here instead left the admin screen stuck on "Key download
+        // already in progress" with no completion callback, so a manual request
+        // now always runs: it either waits for the in-flight download and reports
+        // its result, or performs a fresh one.
+        synchronized (this) {
+            keyDownloadInProgress = true;
+        }
+
+        if (!isDukpt) {
             Log.d(TAG, "Requesting new working key...");
-            // Clear the current key first (MKSK only)
+            // Clear the current key (MKSK only) now that we own the download slot.
             if (keyManager != null) {
                 keyManager.clearWorkingKey();
                 Log.d(TAG, "Current working key cleared");
             }
-        }
-
-        // Request new key from host — single sync path, guarded against concurrent calls
-        synchronized (this) {
-            if (keyDownloadInProgress) {
-                Log.w(TAG, "Key download already in progress — skipping duplicate request");
-                return;
-            }
-            keyDownloadInProgress = true;
         }
 
         new Thread(() -> {

@@ -86,6 +86,16 @@ public class Fragment_page_admin_atm extends Fragment {
     private Button btnDownloadKeys;
     private Button btnRequestNewKey;
     private Button btnTestPrinter;
+
+    // WiFi configuration
+    private android.widget.EditText edtWifiSsid;
+    private android.widget.EditText edtWifiPassword;
+    private android.widget.Spinner spinnerWifiSecurity;
+    private TextView txvWifiStatus;
+    private Button btnWifiConnect;
+    private Button btnWifiStatus;
+    private Button btnWifiScan;
+    private static final int REQ_WIFI_SCAN_PERMISSION = 4711;
     private Button btnTestCardReader;
     private Button btnSaveSettings;
     private Button btnExit;
@@ -271,9 +281,338 @@ public class Fragment_page_admin_atm extends Fragment {
         switchAutoReboot = rootView.findViewById(R.id.switchAutoReboot);
         btnApplyKiosk = rootView.findViewById(R.id.btnApplyKiosk);
 
+        // WiFi configuration
+        edtWifiSsid = rootView.findViewById(R.id.edtWifiSsid);
+        edtWifiPassword = rootView.findViewById(R.id.edtWifiPassword);
+        spinnerWifiSecurity = rootView.findViewById(R.id.spinnerWifiSecurity);
+        txvWifiStatus = rootView.findViewById(R.id.txvWifiStatus);
+        btnWifiConnect = rootView.findViewById(R.id.btnWifiConnect);
+        btnWifiStatus = rootView.findViewById(R.id.btnWifiStatus);
+        btnWifiScan = rootView.findViewById(R.id.btnWifiScan);
+        setupWifiSection();
+
         // Setup processor and protocol spinners
         setupProcessorSpinner();
         setupProtocolSpinner();
+    }
+
+    // ==================== WiFi Configuration ====================
+    // Uses Castle CtSettings (settings service). Security `type` per the Castles
+    // Android API Reference v5.0: 1=NOPASS, 2=WEP, 3=WPA/WPA2. All CtSettings
+    // calls run off the UI thread (binder calls into the settings service).
+
+    /** Spinner order — index maps to CtSettings type via WIFI_TYPE_VALUES. */
+    private static final String[] WIFI_TYPE_LABELS = {"WPA/WPA2", "WEP", "Open (no password)"};
+    private static final int[] WIFI_TYPE_VALUES = {3, 2, 1};
+
+    private void setupWifiSection() {
+        if (spinnerWifiSecurity != null) {
+            android.widget.ArrayAdapter<String> adapter = new android.widget.ArrayAdapter<>(
+                    getContext(), android.R.layout.simple_spinner_item, WIFI_TYPE_LABELS);
+            adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+            spinnerWifiSecurity.setAdapter(adapter);
+            spinnerWifiSecurity.setSelection(0);  // WPA/WPA2 default
+        }
+        if (btnWifiConnect != null) {
+            btnWifiConnect.setOnClickListener(v -> connectWifi());
+        }
+        if (btnWifiStatus != null) {
+            btnWifiStatus.setOnClickListener(v -> refreshWifiStatus());
+        }
+        if (btnWifiScan != null) {
+            btnWifiScan.setOnClickListener(v -> scanWifiNetworks());
+        }
+        // Show current state when the admin screen opens
+        refreshWifiStatus();
+    }
+
+    /**
+     * Scans for visible WiFi networks and shows a pick-list. Android gates scan
+     * RESULTS behind location permission, so request it on first use (one-time
+     * system dialog on the admin screen).
+     */
+    private void scanWifiNetworks() {
+        if (getContext() == null) return;
+        if (androidx.core.content.ContextCompat.checkSelfPermission(getContext(),
+                android.Manifest.permission.ACCESS_FINE_LOCATION)
+                != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{android.Manifest.permission.ACCESS_FINE_LOCATION},
+                    REQ_WIFI_SCAN_PERMISSION);
+            return;  // continues in onRequestPermissionsResult
+        }
+        // Android suppresses scan RESULTS system-wide when Location Services are
+        // off (even with the permission granted) — detect that up front and give
+        // the admin a one-tap path to the system toggle instead of an empty list.
+        if (!isLocationEnabled()) {
+            new android.app.AlertDialog.Builder(getContext())
+                    .setTitle("Location Services Off")
+                    .setMessage("Android requires Location Services to be ON to list WiFi "
+                            + "networks (system rule). Turn it on, then scan again.")
+                    .setPositiveButton("Open Location Settings", (d, w) -> {
+                        try {
+                            startActivity(new android.content.Intent(
+                                    android.provider.Settings.ACTION_LOCATION_SOURCE_SETTINGS));
+                        } catch (Throwable t) {
+                            Toast.makeText(getContext(), "Could not open settings: " + t.getMessage(),
+                                    Toast.LENGTH_LONG).show();
+                        }
+                    })
+                    .setNegativeButton("Cancel", null)
+                    .show();
+            return;
+        }
+        doWifiScan();
+    }
+
+    private boolean isLocationEnabled() {
+        try {
+            int mode = android.provider.Settings.Secure.getInt(
+                    requireContext().getContentResolver(),
+                    android.provider.Settings.Secure.LOCATION_MODE,
+                    android.provider.Settings.Secure.LOCATION_MODE_OFF);
+            return mode != android.provider.Settings.Secure.LOCATION_MODE_OFF;
+        } catch (Throwable t) {
+            return true;  // can't tell — let the scan try rather than block it
+        }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == REQ_WIFI_SCAN_PERMISSION) {
+            if (grantResults.length > 0
+                    && grantResults[0] == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                doWifiScan();
+            } else {
+                Toast.makeText(getContext(),
+                        "Location permission is required by Android to list WiFi networks",
+                        Toast.LENGTH_LONG).show();
+            }
+        }
+    }
+
+    private void doWifiScan() {
+        setWifiStatusText("Scanning for networks...");
+        if (btnWifiScan != null) btnWifiScan.setEnabled(false);
+
+        new Thread(() -> {
+            java.util.List<android.net.wifi.ScanResult> results = null;
+            String error = null;
+            try {
+                // Make sure the radio is on (Castle settings service; app can't
+                // toggle WiFi itself on targetSdk >= 29)
+                try { new CTOS.CtSettings().openWifi(); } catch (Throwable ignore) {}
+
+                android.net.wifi.WifiManager wm = (android.net.wifi.WifiManager)
+                        requireContext().getApplicationContext()
+                                .getSystemService(android.content.Context.WIFI_SERVICE);
+                wm.startScan();  // may be throttled — cached results still work
+                Thread.sleep(2500);
+                results = wm.getScanResults();
+            } catch (SecurityException se) {
+                error = "Permission denied reading scan results";
+            } catch (Throwable t) {
+                error = "Scan failed: " + t.getMessage();
+            }
+
+            // Dedupe by SSID keeping the strongest signal, drop hidden/empty SSIDs
+            final java.util.List<android.net.wifi.ScanResult> networks = new java.util.ArrayList<>();
+            if (results != null) {
+                java.util.Map<String, android.net.wifi.ScanResult> best = new java.util.LinkedHashMap<>();
+                for (android.net.wifi.ScanResult r : results) {
+                    if (r.SSID == null || r.SSID.isEmpty()) continue;
+                    android.net.wifi.ScanResult prev = best.get(r.SSID);
+                    if (prev == null || r.level > prev.level) best.put(r.SSID, r);
+                }
+                networks.addAll(best.values());
+                java.util.Collections.sort(networks, (a, b) -> b.level - a.level);
+            }
+
+            final String err = error;
+            if (getActivity() == null) return;
+            getActivity().runOnUiThread(() -> {
+                if (btnWifiScan != null) btnWifiScan.setEnabled(true);
+                if (err != null) {
+                    setWifiStatusText(err);
+                    return;
+                }
+                if (networks.isEmpty()) {
+                    setWifiStatusText("No networks found. If WiFi is on, check that "
+                            + "Location Services are enabled (Android requires them for scans).");
+                    return;
+                }
+                showWifiPickList(networks);
+                refreshWifiStatus();
+            });
+        }).start();
+    }
+
+    /** Signal bars + security label per network; tap fills SSID + security type. */
+    private void showWifiPickList(final java.util.List<android.net.wifi.ScanResult> networks) {
+        String[] items = new String[networks.size()];
+        for (int i = 0; i < networks.size(); i++) {
+            android.net.wifi.ScanResult r = networks.get(i);
+            items[i] = wifiSignalBars(r.level) + "  " + r.SSID
+                    + "  (" + wifiSecurityLabel(r.capabilities) + ")";
+        }
+        new android.app.AlertDialog.Builder(getContext())
+                .setTitle("Select WiFi Network (" + networks.size() + " found)")
+                .setItems(items, (dialog, which) -> {
+                    android.net.wifi.ScanResult picked = networks.get(which);
+                    if (edtWifiSsid != null) edtWifiSsid.setText(picked.SSID);
+                    if (spinnerWifiSecurity != null) {
+                        spinnerWifiSecurity.setSelection(wifiSecuritySpinnerIndex(picked.capabilities));
+                    }
+                    if (edtWifiPassword != null) {
+                        edtWifiPassword.setText("");
+                        edtWifiPassword.requestFocus();
+                    }
+                    Toast.makeText(getContext(),
+                            "Selected \"" + picked.SSID + "\" — enter the password and tap Connect",
+                            Toast.LENGTH_LONG).show();
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private String wifiSignalBars(int dbm) {
+        if (dbm >= -55) return "▂▄▆█";
+        if (dbm >= -66) return "▂▄▆ ";
+        if (dbm >= -77) return "▂▄  ";
+        return "▂   ";
+    }
+
+    private String wifiSecurityLabel(String caps) {
+        if (caps == null) return "Open";
+        if (caps.contains("WPA")) return caps.contains("WPA3") ? "WPA3" : "WPA/WPA2";
+        if (caps.contains("WEP")) return "WEP";
+        return "Open";
+    }
+
+    /** Maps ScanResult capabilities to the security spinner index (WPA / WEP / Open). */
+    private int wifiSecuritySpinnerIndex(String caps) {
+        if (caps != null && caps.contains("WPA")) return 0;
+        if (caps != null && caps.contains("WEP")) return 1;
+        if (caps == null || caps.contains("ESS") && !caps.contains("WPA") && !caps.contains("WEP")) return 2;
+        return 0;
+    }
+
+    private void connectWifi() {
+        final String ssid = edtWifiSsid != null ? edtWifiSsid.getText().toString().trim() : "";
+        final String password = edtWifiPassword != null ? edtWifiPassword.getText().toString() : "";
+        final int typeIdx = spinnerWifiSecurity != null ? spinnerWifiSecurity.getSelectedItemPosition() : 0;
+        final int type = WIFI_TYPE_VALUES[Math.max(0, Math.min(typeIdx, WIFI_TYPE_VALUES.length - 1))];
+
+        if (ssid.isEmpty()) {
+            Toast.makeText(getContext(), "Enter an SSID", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (type != 1 && password.isEmpty()) {
+            Toast.makeText(getContext(), "Enter the WiFi password (or choose Open)", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        setWifiStatusText("Connecting to \"" + ssid + "\" ...");
+        if (btnWifiConnect != null) btnWifiConnect.setEnabled(false);
+
+        new Thread(() -> {
+            String result;
+            try {
+                CTOS.CtSettings settings = new CTOS.CtSettings();
+                settings.openWifi();
+                // DHCP connect; returns a success/failure message string
+                String ret = settings.setDhcpWifi(ssid, password, type);
+                result = "Connect result: " + (ret != null ? ret : "(no response)");
+                Log.d(TAG, "WiFi setDhcpWifi(\"" + ssid + "\", type=" + type + ") -> " + ret);
+            } catch (Throwable t) {
+                result = "WiFi connect failed: " + t.getMessage();
+                Log.e(TAG, "WiFi connect error", t);
+            }
+            final String msg = result;
+            if (getActivity() != null) {
+                getActivity().runOnUiThread(() -> {
+                    if (btnWifiConnect != null) btnWifiConnect.setEnabled(true);
+                    Toast.makeText(getContext(), msg, Toast.LENGTH_LONG).show();
+                });
+            }
+            // Give the association a moment, then show the resulting state
+            try { Thread.sleep(3000); } catch (InterruptedException ignored) {}
+            refreshWifiStatus();
+        }).start();
+    }
+
+    private void refreshWifiStatus() {
+        new Thread(() -> {
+            String status;
+            String currentSsid = null;
+            try {
+                CTOS.CtSettings settings = new CTOS.CtSettings();
+                java.util.Map<?, ?> cfg = settings.getWifiConfig();
+                if (cfg == null || cfg.isEmpty()) {
+                    status = "WiFi: no configuration returned";
+                } else {
+                    StringBuilder sb = new StringBuilder();
+                    for (java.util.Map.Entry<?, ?> e : cfg.entrySet()) {
+                        sb.append(e.getKey()).append(": ").append(e.getValue()).append("\n");
+                        // Remember the connected SSID so we can prefill the field
+                        String k = String.valueOf(e.getKey()).toLowerCase();
+                        if (k.contains("ssid") && e.getValue() != null) {
+                            currentSsid = String.valueOf(e.getValue())
+                                    .replace("\"", "").trim();
+                        }
+                    }
+                    status = sb.toString().trim();
+                }
+            } catch (Throwable t) {
+                status = "WiFi status unavailable: " + t.getMessage();
+                Log.w(TAG, "getWifiConfig failed: " + t.getMessage());
+            }
+
+            // Fallback for the current SSID: WifiManager connection info (works
+            // when the Castles config map doesn't include an ssid field)
+            if (currentSsid == null || currentSsid.isEmpty()
+                    || "<unknown ssid>".equalsIgnoreCase(currentSsid)) {
+                try {
+                    android.net.wifi.WifiManager wm = (android.net.wifi.WifiManager)
+                            requireContext().getApplicationContext()
+                                    .getSystemService(android.content.Context.WIFI_SERVICE);
+                    android.net.wifi.WifiInfo info = wm.getConnectionInfo();
+                    if (info != null && info.getSSID() != null) {
+                        String s = info.getSSID().replace("\"", "").trim();
+                        if (!s.isEmpty() && !"<unknown ssid>".equalsIgnoreCase(s)) {
+                            currentSsid = s;
+                        }
+                    }
+                } catch (Throwable ignore) {}
+            }
+
+            final String st = status;
+            final String ssid = currentSsid;
+            if (getActivity() != null) {
+                getActivity().runOnUiThread(() -> {
+                    if (txvWifiStatus != null) {
+                        txvWifiStatus.setText(ssid != null && !ssid.isEmpty()
+                                ? "Connected: " + ssid + "\n" + st : st);
+                    }
+                    // Prefill the SSID field with the current network — only if the
+                    // admin hasn't typed anything (never clobber their input)
+                    if (edtWifiSsid != null && ssid != null && !ssid.isEmpty()
+                            && edtWifiSsid.getText().toString().trim().isEmpty()) {
+                        edtWifiSsid.setText(ssid);
+                    }
+                });
+            }
+        }).start();
+    }
+
+    private void setWifiStatusText(final String text) {
+        if (getActivity() != null) {
+            getActivity().runOnUiThread(() -> {
+                if (txvWifiStatus != null) {
+                    txvWifiStatus.setText(text);
+                }
+            });
+        }
     }
 
     private void setupProcessorSpinner() {

@@ -15,5 +15,6 @@ Thumbs.db
 # Sensitive
 *.jks
 *.keystore
+keystore.properties
 google-vision-key.json
 *.env

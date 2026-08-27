@@ -689,14 +689,38 @@ public class AtmHostConnection {
     }
 
     /**
-     * Completes the handshake by sending ACK and waiting for EOT.
+     * Test seam: injects the socket streams so handshake behaviour can be
+     * unit-tested without a live socket. Package-private on purpose.
      */
-    private void completeHandshake() throws ConnectionException {
+    void injectStreamsForTest(OutputStream out, InputStream in) {
+        this.outputStream = out;
+        this.inputStream = in;
+    }
+
+    /**
+     * Completes the handshake by sending ACK and waiting for EOT.
+     *
+     * <p>Package-private so {@code AtmHostConnectionHandshakeTest} can verify it
+     * never invalidates an already-received response.</p>
+     */
+    void completeHandshake() throws ConnectionException {
+        // CRITICAL: this runs AFTER the host's transaction/reversal response has
+        // already been received and parsed — that response is the authoritative
+        // outcome. The ACK/EOT below is courtesy cleanup. A failure here (e.g. the
+        // host closed the socket immediately after responding — the normal
+        // "connection per transaction" behaviour) must NEVER invalidate a response
+        // we already hold. Throwing used to unwind into the transaction manager's
+        // catch block, which promoted the pre-send reversal and REVERSED APPROVED
+        // WITHDRAWALS. So every handshake error here is logged and swallowed —
+        // matching completeTritonHandshake(). The caller still declares
+        // ConnectionException for API symmetry; this method no longer throws it.
         try {
             // Capture local references (W6 fix)
             OutputStream out = outputStream;
             if (out == null) {
-                throw new ConnectionException("Output stream null during handshake");
+                // Host already gone — nothing to ACK. The response still stands.
+                log("Handshake: output stream null (host already closed) — skipping ACK");
+                return;
             }
 
             // Send ACK — use protocol if available, fallback to builder
@@ -722,8 +746,12 @@ public class AtmHostConnection {
             // EOT timeout is not critical
             log("EOT timeout (non-critical)");
         } catch (IOException e) {
-            // W9 fix: propagate ACK send failure as ConnectionException
-            throw new ConnectionException("Handshake completion error: " + e.getMessage(), e);
+            // Was: throw new ConnectionException(...). That discarded an approval we
+            // had already received and reversed approved withdrawals (host closes
+            // the socket right after responding, so the ACK write hits a broken
+            // pipe). The response is authoritative; log the cleanup failure and move on.
+            log("Handshake completion error (non-critical, response already received): "
+                    + e.getMessage());
         }
     }
 

@@ -1,5 +1,17 @@
 apply plugin: 'com.android.application'
 
+// Release signing is loaded from keystore.properties (project root) which holds
+// the keystore path + passwords. That file and the .jks are kept OUT of the APK
+// and out of version control — back them up separately; losing the key means no
+// future update can be installed over a release-signed terminal. If the file is
+// absent (e.g. a fresh checkout without the key), release builds stay unsigned so
+// the project still configures.
+def keystorePropsFile = rootProject.file("keystore.properties")
+def keystoreProps = new Properties()
+if (keystorePropsFile.exists()) {
+    keystoreProps.load(new FileInputStream(keystorePropsFile))
+}
+
 android {
     namespace "castech.emvtxn"
     compileSdkVersion 31
@@ -8,13 +20,39 @@ android {
         applicationId "castech.emvtxn"
         minSdkVersion 24
         targetSdkVersion 31
-        versionCode 61
-        versionName "6.1"
+        // Single source of truth for the app version. MainActivity.APP_VERSION
+        // reads BuildConfig.VERSION_NAME, and the APK filename carries it (see
+        // applicationVariants below) so fleet pushes (CashHub) are identifiable.
+        versionCode 64
+        versionName "6.2.2"
         testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
         multiDexEnabled true
     }
+    signingConfigs {
+        release {
+            if (keystorePropsFile.exists()) {
+                storeFile rootProject.file(keystoreProps['storeFile'])
+                storePassword keystoreProps['storePassword']
+                keyAlias keystoreProps['keyAlias']
+                keyPassword keystoreProps['keyPassword']
+                // The S1F4 PRO terminal runs Android 13 (API 33); the v2 APK
+                // Signature Scheme (AGP's default for minSdk >= 24) is what it
+                // uses. v1/JAR signing is intentionally left off — it is legacy,
+                // unnecessary here, and rejected as a sole scheme on API 30+. The
+                // debug build (also v2-only) already installs fine via CasHUB.
+                enableV2Signing true
+            }
+        }
+    }
     buildTypes {
         release {
+            // Only attach the signing config when the keystore is present, so a
+            // keyless checkout still builds (an unsigned release APK). Also skip
+            // signing when built with -Punsigned, to hand Castle an UNSIGNED APK
+            // for them to sign/wrap with the customer key (trusted CAP).
+            if (keystorePropsFile.exists() && !project.hasProperty('unsigned')) {
+                signingConfig signingConfigs.release
+            }
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
@@ -42,6 +80,29 @@ android {
     lintOptions {
         abortOnError false
         checkReleaseBuilds false
+    }
+
+    // Versioned APK filenames for fleet distribution (CashHub):
+    //   production (mksk release): S1FP-TFI-v6.2.0.apk
+    //   debug builds keep a "-debug" marker so a debuggable APK can never be
+    //   mistaken for the production one; the deprecated dukpt flavor keeps a
+    //   "-dukpt" marker for the same reason.
+    applicationVariants.all { variant ->
+        variant.outputs.all {
+            String name = "S1FP-TFI-v${variant.versionName}"
+            if (variant.flavorName != "mksk") {
+                name += "-${variant.flavorName}"
+            }
+            if (variant.buildType.name != "release") {
+                name += "-${variant.buildType.name}"
+            }
+            // Mark an unsigned build so it can never be mistaken for the signed
+            // production APK (it is NOT installable as-is; it's for Castle to sign).
+            if (project.hasProperty('unsigned')) {
+                name += "-unsigned"
+            }
+            outputFileName = name + ".apk"
+        }
     }
     testOptions {
         unitTests.returnDefaultValues = true

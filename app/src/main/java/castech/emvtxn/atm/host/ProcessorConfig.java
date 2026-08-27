@@ -152,6 +152,13 @@ public class ProcessorConfig {
         config.setRoutingId("000000");
         config.setTerminalId(terminalId);
         config.setHealthCheckEnabled(true);
+        // EFX answers a Type 88 key request in ~50-57s (measured 2026-08-27), which
+        // sits right on the 60s default — a normal-but-slow reply was being treated
+        // as a failure, burning a retry and leaving the terminal keyless for minutes.
+        // Network congestion pushes it higher still, so allow 120s here. This is
+        // EFX-specific on purpose: other processors answer in well under a second
+        // and should keep failing fast.
+        config.setResponseTimeout(120000);   // 2 minutes
         return config;
     }
 

@@ -1,10 +1,23 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- Android 11+ package visibility: allow this app to see/reach the CasHUB
+         agent's ParameterContentProvider so we can read centrally-pushed config.
+         Without this, query()/call() to the agent fail with "Unknown authority". -->
+    <queries>
+        <package android:name="com.castlestech.cashub.agent" />
+        <provider android:authorities="com.castlestech.cashub.agent" />
+    </queries>
+
     <!-- Network permissions for ATM host connectivity -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <!-- WiFi scanning from the admin screen: CHANGE_WIFI_STATE for startScan(),
+         and location because Android gates WiFi scan RESULTS behind it -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
     <application
         android:allowBackup="true"

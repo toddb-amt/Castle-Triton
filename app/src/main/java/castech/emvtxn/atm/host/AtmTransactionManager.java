@@ -774,11 +774,62 @@ public class AtmTransactionManager {
      *
      * @throws Exception if key download fails after all retries
      */
-    private final Object keyDownloadLock = new Object();
+    /**
+     * STATIC on purpose: MainActivity re-initializes the host service on settings
+     * re-apply (opening the Admin screen, CasHUB config, startup sequencing), and
+     * each re-init constructs a NEW AtmTransactionManager. With an instance-level
+     * lock, every instance serialized only against itself — three instances put
+     * three parallel Type 88s on the wire (observed as request bursts on the MUX).
+     * One process talks to one host: the download slot is app-wide.
+     */
+    private static final Object keyDownloadLock = new Object();
 
+    /**
+     * Window in which a just-completed key download satisfies a queued caller.
+     * Sized well under any key lifetime — this only collapses the pile-up of
+     * concurrent requests, it never suppresses a genuinely later refresh.
+     * Static for the same reason as the lock.
+     */
+    private static final long KEY_DOWNLOAD_COALESCE_MS = 30_000L;
+    private static volatile long lastKeyDownloadSuccessMs = 0L;
+
+    /**
+     * Downloads working keys, coalescing concurrent requests.
+     *
+     * <p>This lock is the ONE choke point every key download passes through —
+     * startup renewal, the admin "Download Keys" and "Request New Key" buttons,
+     * openSession(), scheduled renewal and RC-76 key-sync all land here. It used
+     * to only {@code synchronized} around the download, which QUEUES rather than
+     * rejects: the second caller waited its turn and then sent its own redundant
+     * Type 88. The host answers one, the other times out and its retries clear the
+     * key the winner just loaded — the terminal ends up keyless and "not ready".
+     * (Very visible on EFX, where a response takes ~50s.)</p>
+     *
+     * <p>So once inside the lock we re-check: if a download succeeded moments ago,
+     * this request is already satisfied and returns without touching the wire.</p>
+     */
     public void downloadKeysSync() throws Exception {
         synchronized (keyDownloadLock) {
+            long sinceSuccess = System.currentTimeMillis() - lastKeyDownloadSuccessMs;
+            if (lastKeyDownloadSuccessMs > 0 && sinceSuccess < KEY_DOWNLOAD_COALESCE_MS
+                    && keyManager != null) {
+                // Another instance may have completed the download (the manager is
+                // recreated on every settings re-apply), so THIS instance's flag can
+                // lag reality. The session key itself is in the secure element —
+                // re-sync our in-memory state from the persisted metadata before
+                // deciding a redundant Type 88 is needed.
+                boolean loaded = keyManager.isWorkingKeyLoaded()
+                        || keyManager.resyncHardwareKeyState();
+                if (loaded) {
+                    Log.d(TAG, "Key download coalesced: a working key loaded " + sinceSuccess
+                            + "ms ago — skipping redundant Type 88");
+                    return;
+                }
+            }
             downloadKeysSyncInternal();
+            if (keyManager != null && keyManager.isWorkingKeyLoaded()) {
+                lastKeyDownloadSuccessMs = System.currentTimeMillis();
+            }
         }
     }
 
