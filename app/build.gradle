@@ -23,8 +23,8 @@ android {
         // Single source of truth for the app version. MainActivity.APP_VERSION
         // reads BuildConfig.VERSION_NAME, and the APK filename carries it (see
         // applicationVariants below) so fleet pushes (CashHub) are identifiable.
-        versionCode 64
-        versionName "6.2.2"
+        versionCode 65
+        versionName "6.2.3"
         testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
         multiDexEnabled true
     }

@@ -288,6 +288,15 @@ public class AtmHostService {
     }
 
     /**
+     * True while a key download is running. Lets callers (the transaction
+     * readiness gate) kick a renewal when the key is missing WITHOUT piling
+     * threads onto an already-running download.
+     */
+    public boolean isKeyDownloadInProgress() {
+        return keyDownloadInProgress;
+    }
+
+    /**
      * Gets the key manager for diagnostics.
      */
     public CastleKeyManager getKeyManager() {

@@ -185,6 +185,12 @@ public class MainActivity extends AppCompatActivity {
      */
     private String atmHostServiceConfigSignature = null;
 
+    // Key-renewal retry chain (boot/network race): see onRenewalFailed.
+    private static final long KEY_RENEWAL_RETRY_INITIAL_MS = 15_000L;
+    private static final long KEY_RENEWAL_RETRY_MAX_MS = 300_000L;
+    private volatile long keyRenewalRetryDelayMs = KEY_RENEWAL_RETRY_INITIAL_MS;
+    private volatile boolean keyRenewalRetryScheduled = false;
+
     /** Signature of the host settings that matter for service construction. */
     private String currentHostConfigSignature() {
         return GlobalPara.atmProcessorType + "|" + GlobalPara.atmHostAddress + "|"
@@ -941,6 +947,7 @@ public class MainActivity extends AppCompatActivity {
             @Override
             public void onRenewalSuccess(final String keyStatus) {
                 Log.d(TAG, "Startup key renewal success: " + keyStatus);
+                keyRenewalRetryDelayMs = KEY_RENEWAL_RETRY_INITIAL_MS;  // reset backoff
                 runOnUiThread(new Runnable() {
                     @Override
                     public void run() {
@@ -953,6 +960,36 @@ public class MainActivity extends AppCompatActivity {
             @Override
             public void onRenewalFailed(final String error) {
                 Log.w(TAG, "Startup key renewal failed: " + error);
+
+                // KEEP TRYING — like a deployed ATM. On a normal (e.g. midnight)
+                // reboot the app comes up BEFORE WiFi has associated, so the boot
+                // download fails in seconds with ENETUNREACH... and previously
+                // nothing ever retried: the terminal sat keyless until someone
+                // restarted the app, and every customer hit "Terminal starting
+                // up" -> "Not started, try again later". Exponential backoff,
+                // 15s -> 5min cap, unbounded; the download choke point coalesces
+                // any overlap with gate-triggered kicks.
+                if (!keyRenewalRetryScheduled) {
+                    keyRenewalRetryScheduled = true;
+                    final long delay = keyRenewalRetryDelayMs;
+                    keyRenewalRetryDelayMs = Math.min(keyRenewalRetryDelayMs * 2,
+                            KEY_RENEWAL_RETRY_MAX_MS);
+                    Log.w(TAG, "Scheduling key renewal retry in " + (delay / 1000) + "s");
+                    new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(
+                            new Runnable() {
+                                @Override
+                                public void run() {
+                                    keyRenewalRetryScheduled = false;
+                                    if (atmHostService != null
+                                            && atmHostService.hasValidWorkingKey()) {
+                                        Log.d(TAG, "Key renewal retry: key already present — done");
+                                        keyRenewalRetryDelayMs = KEY_RENEWAL_RETRY_INITIAL_MS;
+                                        return;
+                                    }
+                                    performStartupKeyRenewal();
+                                }
+                            }, delay);
+                }
                 // The key usually arrives moments later via the normal init/open
                 // path — a warning here was flashing a raw exception at the customer
                 // even though the terminal ended up with a valid working key.
@@ -2316,6 +2353,21 @@ public class MainActivity extends AppCompatActivity {
                         + txnReadyRetryCount + "/" + TXN_READY_MAX_RETRIES
                         + ", hostReady=" + isAtmHostServiceReady()
                         + ", workingKey=" + (atmHostService != null && atmHostService.hasWorkingKeys()) + ")");
+
+                // ACTIVELY kick the key download rather than only polling for it.
+                // After a midnight reboot the boot-time download fails (WiFi not up
+                // yet) and, without this, the gate polled for a key NOBODY was
+                // fetching and dead-ended at "not ready, try again". Kicking here
+                // means a customer's button press starts the fetch the moment it's
+                // possible; guarded so a 120s in-flight download isn't piled on,
+                // and the service-level skip/coalesce dedupes everything else.
+                if (atmHostService != null && atmHostService.isInitialized()
+                        && !atmHostService.hasValidWorkingKey()
+                        && !atmHostService.isKeyDownloadInProgress()) {
+                    Log.w(TAG, "Readiness gate: no working key and no download running — kicking renewal");
+                    performStartupKeyRenewal();
+                }
+
                 ui_ShowMsg("Terminal starting up —\nplease wait...");
                 new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(new Runnable() {
                     @Override
