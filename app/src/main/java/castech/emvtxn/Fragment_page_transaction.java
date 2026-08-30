@@ -830,6 +830,15 @@ public class Fragment_page_transaction extends Fragment
 	private void cancelTransaction() {
 		android.util.Log.d("Fragment_Txn", "cancelTransaction() called");
 
+		// If this transaction was POS-initiated, answer the waiting POS caller
+		// immediately and free the single POS slot — otherwise the proxy waits
+		// out its full timeout on a transaction the operator already abandoned,
+		// and every later POS command is rejected with terminal_busy until
+		// something else clears the slot. No-op when the transaction wasn't
+		// POS-driven (observer not armed).
+		castech.emvtxn.pos.PosTransactionObserver.notifyDeclined(
+				"user_cancelled", "cancelled at terminal", false);
+
 		// Full reset of ATM state
 		GlobalPara.resetATMTransactionState();
 

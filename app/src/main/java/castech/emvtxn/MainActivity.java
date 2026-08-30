@@ -892,6 +892,51 @@ public class MainActivity extends AppCompatActivity {
      * Cashless ATM app and the new POS proxy client. All POS-specific code lives
      * in {@code castech.emvtxn.pos.*}.
      */
+    /** Cached hardware serial — the CtSystem binder read is done once. */
+    private String cachedHardwareSerial = null;
+
+    /**
+     * Reads the Castle hardware serial number via the CTOS SDK (CtSystem).
+     * This is the label / CasHUB "hardware SN" (e.g. 000195250201680) — NOT
+     * Android's Build serial, which is a different value on these terminals.
+     * Returns "" on any failure (emulator, binder not ready, SDK error).
+     */
+    public String getHardwareSerialNumber() {
+        if (cachedHardwareSerial != null) return cachedHardwareSerial;
+        try {
+            CTOS.CtSystem sys = new CTOS.CtSystem();
+            if (!sys.isReady()) {
+                sys.init();
+            }
+            // The FACTORY serial is the label / CasHUB "hardware SN"
+            // (e.g. 000195250201680). NOTE: getSerialNumber() returns a
+            // different value (a 16-hex chip id) — not what fleet tooling uses.
+            String sn = "";
+            try {
+                sn = sys.getFactorySNEx();
+            } catch (Throwable ignored) { /* fall through to byte variant */ }
+            if (sn == null || sn.trim().isEmpty()) {
+                byte[] raw = sys.getFactorySN();
+                if (raw != null) {
+                    int len = 0;
+                    while (len < raw.length && raw[len] != 0) len++;
+                    sn = new String(raw, 0, len, java.nio.charset.StandardCharsets.US_ASCII);
+                }
+            }
+            sn = sn == null ? "" : sn.trim();
+            if (!sn.isEmpty()) {
+                cachedHardwareSerial = sn;
+                Log.d(TAG, "Hardware (factory) serial: " + sn);
+            } else {
+                Log.w(TAG, "CtSystem factory SN empty");
+            }
+            return sn;
+        } catch (Throwable t) {
+            Log.w(TAG, "CtSystem serial read unavailable: " + t.getMessage());
+            return "";
+        }
+    }
+
     private void startPosModeIfEnabled() {
         castech.emvtxn.pos.PosConfig posConfig = new castech.emvtxn.pos.PosConfig(this);
         if (!posConfig.isEnabled()) {
@@ -907,7 +952,16 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
 
-        String terminalSerial = atmSettingsManager == null ? "" : GlobalPara.atmTerminalId;
+        // TSN = the Castle HARDWARE serial (the label / CasHUB "hardware SN",
+        // e.g. 000195250201680) — the terminal's permanent identity on the POS
+        // proxy. Decided 2026-08-30: the proxy has a separate field for the
+        // processor TID, so tsn must not carry it. Falls back to the TID only
+        // if the SDK serial read fails, so registration still works.
+        String terminalSerial = getHardwareSerialNumber();
+        if (terminalSerial.isEmpty()) {
+            terminalSerial = atmSettingsManager == null ? "" : GlobalPara.atmTerminalId;
+            Log.w(TAG, "Hardware serial unavailable — registering with TID fallback: " + terminalSerial);
+        }
         String appVersion = BuildConfig.VERSION_NAME;
         String deviceModel = android.os.Build.MODEL;
 

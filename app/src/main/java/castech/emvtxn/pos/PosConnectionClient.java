@@ -181,8 +181,15 @@ public final class PosConnectionClient {
                 public void onFailed(String code, String message) {
                     Log.e(TAG, "registration failed: " + code + " " + message);
                     if (isTerminalFailure(code)) {
+                        // Surface to the operator, but do NOT park forever: these
+                        // rejections are often fixed server-side moments later (key
+                        // re-issued, TSN binding cleared) — proven live 2026-08-30
+                        // when a bind_conflict was cleared seconds after the client
+                        // had stopped itself. Retry on a slow cadence so an
+                        // unattended terminal recovers without hammering the proxy
+                        // with a credential it may never accept.
                         listener.onTerminalError("registration failed: " + code + " " + message);
-                        stop();
+                        scheduleReconnect(CREDENTIAL_RETRY_MILLIS);
                     } else {
                         scheduleReconnect();
                     }
@@ -223,10 +230,21 @@ public final class PosConnectionClient {
         socket.set(ws);
     }
 
+    /**
+     * Slow retry cadence for credential-class registration rejections
+     * (unknown_terminal / invalid_credentials, incl. bind_conflict). Slow
+     * enough not to hammer the proxy with a credential it may never accept,
+     * frequent enough that a server-side fix is picked up unattended.
+     */
+    static final long CREDENTIAL_RETRY_MILLIS = 5 * 60_000L;
+
     private void scheduleReconnect() {
+        scheduleReconnect(backoffMillis[Math.min(reconnectAttempt, backoffMillis.length - 1)]);
+    }
+
+    private void scheduleReconnect(long delayMillis) {
         if (state.get() == State.STOPPED) return;
         state.set(State.RECONNECTING);
-        long delayMillis = backoffMillis[Math.min(reconnectAttempt, backoffMillis.length - 1)];
         reconnectAttempt++;
         Log.d(TAG, "Scheduling reconnect #" + reconnectAttempt + " in " + delayMillis + "ms");
         synchronized (scheduleLock) {
@@ -387,8 +405,11 @@ public final class PosConnectionClient {
         void onEnvelope(PosEnvelope env);
 
         /**
-         * Unrecoverable failure (e.g. {@code unknown_terminal}, {@code invalid_credentials}).
-         * Client has stopped — operator intervention required.
+         * Credential-class registration failure (e.g. {@code unknown_terminal},
+         * {@code invalid_credentials}). Surfaced for the operator, but the client
+         * keeps retrying on a slow cadence ({@link #CREDENTIAL_RETRY_MILLIS}) so a
+         * server-side fix (re-issued key, cleared TSN binding) is picked up
+         * without an app restart.
          */
         void onTerminalError(String message);
     }

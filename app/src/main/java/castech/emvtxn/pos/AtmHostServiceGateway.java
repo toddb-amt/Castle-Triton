@@ -54,8 +54,13 @@ public final class AtmHostServiceGateway implements PosTerminalGateway {
 
     @Override
     public boolean isReady() {
+        // Deliberately NO isConnected() conjunct: the processor socket is opened
+        // per-transaction (keep-alive off — the host closes it after each txn), so
+        // at idle there is never a live socket and a connection check would reject
+        // every POS-driven transaction on a healthy terminal. The transaction path
+        // dials on demand in both keep-alive modes; a real connectivity failure
+        // surfaces from the transaction itself as host_unreachable.
         return hostService.isInitialized()
-            && hostService.isConnected()
             && hostService.hasValidWorkingKey()
             && !hostService.isTransactionInProgress();
     }
@@ -63,7 +68,6 @@ public final class AtmHostServiceGateway implements PosTerminalGateway {
     @Override
     public String getNotReadyReason() {
         if (!hostService.isInitialized())          return "host service not initialized";
-        if (!hostService.isConnected())            return "not connected to processor";
         if (!hostService.hasValidWorkingKey())     return "no working key loaded";
         if (hostService.isTransactionInProgress()) return "transaction in progress";
         return "";

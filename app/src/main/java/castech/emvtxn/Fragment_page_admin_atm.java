@@ -1211,8 +1211,11 @@ public class Fragment_page_admin_atm extends Fragment {
     }
 
     private String getDeviceSerial() {
-        // TODO: Get actual serial from Castle SDK
-        return "ATM-" + System.currentTimeMillis() % 10000;
+        if (GlobalPara.mainActivity != null) {
+            String sn = GlobalPara.mainActivity.getHardwareSerialNumber();
+            if (!sn.isEmpty()) return sn;
+        }
+        return "(unavailable)";
     }
 
     // ==================== Host Operations ====================

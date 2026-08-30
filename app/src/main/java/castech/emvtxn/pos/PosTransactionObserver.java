@@ -2,6 +2,9 @@ package castech.emvtxn.pos;
 
 import android.util.Log;
 
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -32,18 +35,65 @@ public final class PosTransactionObserver {
 
     private static final AtomicReference<Callback> active = new AtomicReference<>();
 
+    /**
+     * Watchdog: releases a wedged slot if no result arrives within this window.
+     * Sized to comfortably outlast the slowest legitimate transaction (the host
+     * transaction latch waits up to 130s on the busy-MUX path, plus card/PIN
+     * entry time). This is slot RECOVERY, not caller feedback — the proxy
+     * abandons the flow after its own 90s window and safely discards late
+     * frames; the point is that one wedged transaction must never require an
+     * app restart (or a site visit) before the next POS command can run.
+     */
+    static final long WATCHDOG_MILLIS = 180_000L;
+
+    private static final ScheduledExecutorService watchdog =
+            Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "PosTxnObserver-watchdog");
+                t.setDaemon(true);
+                return t;
+            });
+
     private PosTransactionObserver() {}
 
     /**
      * Arms the observer with a callback. Returns the previously-armed callback
-     * (or null) so callers can verify nothing was overwritten.
+     * (or null) so callers can verify nothing was overwritten. A watchdog
+     * releases the slot (firing {@code onError} on the armed callback) if no
+     * result arrives within {@link #WATCHDOG_MILLIS}.
      */
     public static Callback arm(Callback callback) {
+        return arm(callback, WATCHDOG_MILLIS);
+    }
+
+    /** Test seam: arm with a custom watchdog window. */
+    static Callback arm(Callback callback, long watchdogMillis) {
         Callback prev = active.getAndSet(callback);
         if (prev != null) {
             Log.w(TAG, "arm() overwrote an active callback — possible txn overlap");
         }
+        scheduleWatchdog(callback, watchdogMillis);
         return prev;
+    }
+
+    private static void scheduleWatchdog(final Callback armed, final long delayMillis) {
+        watchdog.schedule(new Runnable() {
+            @Override
+            public void run() {
+                // Only fires when the SAME transaction is still armed — if the
+                // transaction completed, was cancelled, or a new one was armed,
+                // the CAS fails and this is a no-op.
+                if (active.compareAndSet(armed, null)) {
+                    Log.w(TAG, "watchdog: POS transaction produced no result in "
+                            + delayMillis + "ms — releasing slot");
+                    try {
+                        armed.onError("watchdog: no result within "
+                                + (delayMillis / 1000) + "s — slot released");
+                    } catch (Throwable t) {
+                        Log.e(TAG, "watchdog callback threw: " + t.getMessage(), t);
+                    }
+                }
+            }
+        }, delayMillis, TimeUnit.MILLISECONDS);
     }
 
     /** Explicitly clear the active callback without firing it. */
