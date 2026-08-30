@@ -1,0 +1,4 @@
+# Holds the API secret and portal password — never commit.
+config.json
+# Cached access token / authid.
+.cashub-state.json

@@ -1,0 +1,19 @@
+{
+  "target_app": "castech.emvtxn",
+  "defaults": {
+    "processor_type": "EFX",
+    "protocol_type": "HYOSUNG",
+    "host_address": "18.189.225.36",
+    "host_port": 9020,
+    "min_amount": 10,
+    "max_amount": 500,
+    "use_flat_fee": true,
+    "flat_fee": 3.5
+  },
+  "terminals": [
+    {
+      "match": "REPLACE — CasHUB terminal name, hardware serial, or self-defined ID",
+      "params": { "terminal_id": "MS008623" }
+    }
+  ]
+}
