@@ -90,6 +90,7 @@ import castech.emvtxn.atm.host.AtmHostService;
 import castech.emvtxn.atm.host.CastleCardData;
 import castech.emvtxn.atm.host.CastleKeyManager;
 import castech.emvtxn.atm.host.PinBlockFormatter;
+import castech.emvtxn.atm.host.Track2PanExtractor;
 import castech.emvtxn.atm.host.ProcessorConfig;
 import castech.emvtxn.atm.host.HyosungProtocol;
 import castech.emvtxn.test.EmvCryptogramTest;
@@ -3960,24 +3961,33 @@ public class MainActivity extends AppCompatActivity {
                             Log.d(TAG, "ATM MODE (CL): Requesting PIN entry (Format 1 - no clear PAN)...");
                             GlobalPara.atmEntryMode = 2; // Contactless
 
-                            // Extract PAN from Track 2 for display and DUKPT Format 0
-                            String clPan = null;
-                            if (rcData.track2Len > 0) {
-                                String track2Hex = Converter.byteArray2HexString(rcData.track2Data, rcData.track2Len);
-                                int sepIdx = track2Hex.indexOf("D");
-                                if (sepIdx > 0) {
-                                    clPan = track2Hex.substring(0, sepIdx).replaceAll("[Ff]+$", "");
+                            // Receipt/display PAN. Prefer the clear PAN from Tag 5A
+                            // (already stored in atmClearPan just above); fall back to a
+                            // correctly-decoded Track 2 only if 5A was absent.
+                            //
+                            // NOTE: the contactless rcData.track2Data is ASCII-encoded
+                            // (";PAN=...?"), not BCD-packed. The old code hex-dumped it and
+                            // cut at the first 'D', which in ASCII is the 'D' inside the
+                            // '=' separator's byte (0x3D) — landing mid-byte and yielding a
+                            // WRONG receipt last-4 (the PIN block was correct because it uses
+                            // Tag 5A). Reproduced on S1F4 PRO 2026-09-02. Track2PanExtractor
+                            // decodes both encodings; asciiPAN is stored MASKED because it is
+                            // printed on the receipt and used as a last-resort clear-PAN.
+                            String clearPanForDisplay = GlobalPara.atmClearPan;
+                            if (clearPanForDisplay == null || clearPanForDisplay.isEmpty()) {
+                                clearPanForDisplay = Track2PanExtractor.extractPan(
+                                        rcData.track2Data, rcData.track2Len);
+                                if (clearPanForDisplay != null && clearPanForDisplay.length() >= 13) {
+                                    GlobalPara.atmClearPan = clearPanForDisplay; // keep for PIN/host if 5A missing
+                                    Log.d(TAG, "ATM CL: CLEAR PAN from Track2 stored: "
+                                            + clearPanForDisplay.substring(0, Math.min(6, clearPanForDisplay.length())) + "****");
                                 }
                             }
-                            if (clPan != null && clPan.length() >= 4) {
-                                GlobalPara.asciiPAN = clPan;
-                                GlobalPara.atmLastFourDigits = clPan.substring(clPan.length() - 4);
+                            if (clearPanForDisplay != null && clearPanForDisplay.length() >= 4) {
+                                GlobalPara.atmLastFourDigits =
+                                        clearPanForDisplay.substring(clearPanForDisplay.length() - 4);
+                                GlobalPara.asciiPAN = Track2PanExtractor.maskPan(clearPanForDisplay);
                                 Log.d(TAG, "ATM CL: Stored last 4 digits: " + GlobalPara.atmLastFourDigits);
-                                // Also store as clear PAN if not already set from Tag 5A
-                                if ((GlobalPara.atmClearPan == null || GlobalPara.atmClearPan.isEmpty()) && clPan.length() >= 13) {
-                                    GlobalPara.atmClearPan = clPan;
-                                    Log.d(TAG, "ATM CL: CLEAR PAN from Track2 stored: " + clPan.substring(0, Math.min(6, clPan.length())) + "****");
-                                }
                             }
 
                             // Request PIN entry (DUKPT or Format 1)
