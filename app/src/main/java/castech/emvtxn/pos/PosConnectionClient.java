@@ -67,7 +67,47 @@ public final class PosConnectionClient {
     private ScheduledExecutorService scheduler;
     private ScheduledFuture<?> heartbeatTask;
     private ScheduledFuture<?> reconnectTask;
+    private ScheduledFuture<?> supervisorTask;
     private int reconnectAttempt = 0;
+
+    // ---- Stall supervisor -------------------------------------------------------
+    // Defect 5 (2026-09-01): after a proxy restart the client went COMPLETELY
+    // silent — no reconnect, no registration — until the app was restarted.
+    // Whatever the wedge (an upgrade response that never arrives under
+    // readTimeout(0), a callback lost mid-transition, a bailed schedule), the
+    // cure is structural: every non-CONNECTED state carries a DEADLINE by which
+    // some progress event must have occurred; a periodic supervisor on the same
+    // scheduler thread force-recovers (cancel socket, clear JWT, re-register)
+    // when the deadline passes. Being deadline-driven, it never fires during a
+    // legitimately long wait (the 5-min credential retry sets a 5-min deadline).
+
+    /** When the current non-CONNECTED state must have made progress by. */
+    private volatile long staleDeadlineMs = Long.MAX_VALUE;
+    /** Supervisor check period (package-private for tests). */
+    long supervisorPeriodMillis = 30_000L;
+    /** Grace added to every expected-progress deadline (package-private for tests). */
+    long staleGraceMillis = 60_000L;
+
+    private void armDeadline(long expectedActionDelayMillis) {
+        staleDeadlineMs = System.currentTimeMillis() + expectedActionDelayMillis + staleGraceMillis;
+    }
+
+    private void superviseConnection() {
+        State s = state.get();
+        if (s == State.STOPPED || s == State.CONNECTED) return;
+        if (System.currentTimeMillis() <= staleDeadlineMs) return;
+        Log.w(TAG, "supervisor: connection stalled in state " + s
+                + " past its deadline — forcing recovery (cancel socket, clear JWT, re-register)");
+        WebSocket ws = socket.getAndSet(null);
+        if (ws != null) {
+            try { ws.cancel(); } catch (Exception ignored) {}
+        }
+        // The stalled attempt may have been token-poisoned; re-register from scratch.
+        config.clearJwt();
+        armDeadline(PosWire.REGISTRATION_TIMEOUT_MILLIS);
+        state.set(State.CONNECTING);
+        connectNow();
+    }
 
     // ---- Construction ---------------------------------------------------------
 
@@ -118,7 +158,10 @@ public final class PosConnectionClient {
                     return t;
                 });
             }
+            supervisorTask = scheduler.scheduleAtFixedRate(this::superviseConnection,
+                    supervisorPeriodMillis, supervisorPeriodMillis, TimeUnit.MILLISECONDS);
         }
+        armDeadline(PosWire.REGISTRATION_TIMEOUT_MILLIS);
         connectNow();
     }
 
@@ -226,6 +269,10 @@ public final class PosConnectionClient {
                 .build();
 
         Log.d(TAG, "Opening connection socket to " + url);
+        // The upgrade must resolve (onOpen/onFailure) within the grace window —
+        // with readTimeout(0) a server that accepts TCP but never answers the
+        // upgrade would otherwise hang this attempt forever.
+        armDeadline(0);
         WebSocket ws = httpClient.newWebSocket(request, new ConnectionWebSocketListener());
         socket.set(ws);
     }
@@ -246,6 +293,9 @@ public final class PosConnectionClient {
         if (state.get() == State.STOPPED) return;
         state.set(State.RECONNECTING);
         reconnectAttempt++;
+        // The scheduled attempt itself, plus a registration round if the JWT is
+        // gone, must complete inside this window or the supervisor recovers.
+        armDeadline(delayMillis + PosWire.REGISTRATION_TIMEOUT_MILLIS);
         Log.d(TAG, "Scheduling reconnect #" + reconnectAttempt + " in " + delayMillis + "ms");
         synchronized (scheduleLock) {
             if (scheduler == null || scheduler.isShutdown()) return;
@@ -271,6 +321,7 @@ public final class PosConnectionClient {
         synchronized (scheduleLock) {
             if (heartbeatTask != null) { heartbeatTask.cancel(false); heartbeatTask = null; }
             if (reconnectTask != null) { reconnectTask.cancel(false); reconnectTask = null; }
+            if (supervisorTask != null) { supervisorTask.cancel(false); supervisorTask = null; }
         }
     }
 
@@ -302,6 +353,7 @@ public final class PosConnectionClient {
             }
             Log.d(TAG, "Connection socket open");
             reconnectAttempt = 0;
+            staleDeadlineMs = Long.MAX_VALUE;  // CONNECTED has no progress deadline
             scheduleHeartbeat();
             listener.onConnected();
         }
@@ -342,9 +394,14 @@ public final class PosConnectionClient {
             cancelHeartbeat();
             socket.compareAndSet(webSocket, null);
             if (state.get() == State.STOPPED) return;
-            // 401/403 → JWT may have been revoked; clear cached JWT so next attempt re-registers.
-            if (response != null && (response.code() == 401 || response.code() == 403)) {
-                Log.w(TAG, "Auth rejected (HTTP " + response.code() + ") — clearing JWT and reconnecting");
+            // The server ANSWERED with an HTTP status instead of upgrading —
+            // whatever the code, this token did not get us in. Clear it so the
+            // next attempt re-registers (defect 5: token-expiry rejections are
+            // the NORMAL reconnect case with 15-minute proxy tokens, and are
+            // not guaranteed to arrive as 401/403). The terminal holds its
+            // access key, so it can always re-register unattended.
+            if (response != null) {
+                Log.w(TAG, "Upgrade rejected (HTTP " + response.code() + ") — clearing JWT to force re-registration");
                 config.clearJwt();
             }
             listener.onDisconnected("failure: " + (t.getMessage() == null ? "(no message)" : t.getMessage()));
