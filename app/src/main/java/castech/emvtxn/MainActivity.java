@@ -235,6 +235,7 @@ public class MainActivity extends AppCompatActivity {
 
         Toolbar toolbar = (Toolbar) findViewById(R.id.toolbar);
         setSupportActionBar(toolbar);
+        initStatusBar();
 
         mSectionsPagerAdapter = new SectionsPagerAdapter(getSupportFragmentManager(), this);
 
@@ -386,6 +387,7 @@ public class MainActivity extends AppCompatActivity {
             }
             posOrchestrator = null;
         }
+        teardownStatusBar();
         super.onDestroy();
     }
 
@@ -452,6 +454,179 @@ public class MainActivity extends AppCompatActivity {
             }
         } catch (Throwable t) {
             Log.w(TAG, "Banner update failed: " + t.getMessage());
+        }
+    }
+
+    // ── Toolbar status: WiFi signal + battery level/charging ──────────────────
+    // Uses ONLY Android system APIs (BatteryManager / WifiManager /
+    // ConnectivityManager) — never the CTOS SDK, which is single-threaded and
+    // must not be touched off the transaction thread.
+    private android.content.BroadcastReceiver batteryReceiver;
+    private android.net.ConnectivityManager.NetworkCallback wifiNetworkCallback;
+    private final android.os.Handler statusHandler =
+            new android.os.Handler(android.os.Looper.getMainLooper());
+    private final Runnable wifiRefreshTask = new Runnable() {
+        @Override public void run() {
+            updateSignalIcon();
+            statusHandler.postDelayed(this, 20000); // periodic safety refresh (RSSI changes aren't always broadcast)
+        }
+    };
+
+    private void initStatusBar() {
+        try {
+            batteryReceiver = new android.content.BroadcastReceiver() {
+                @Override public void onReceive(android.content.Context c, Intent i) { updateBatteryIcon(i); }
+            };
+            Intent sticky = registerReceiver(batteryReceiver, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
+            updateBatteryIcon(sticky); // initial paint from the sticky broadcast
+
+            android.net.ConnectivityManager cm =
+                    (android.net.ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+            if (cm != null) {
+                wifiNetworkCallback = new android.net.ConnectivityManager.NetworkCallback() {
+                    @Override public void onAvailable(android.net.Network n) { runOnUiThread(() -> updateSignalIcon()); }
+                    @Override public void onLost(android.net.Network n) { runOnUiThread(() -> updateSignalIcon()); }
+                    @Override public void onCapabilitiesChanged(android.net.Network n,
+                            android.net.NetworkCapabilities caps) { runOnUiThread(() -> updateSignalIcon()); }
+                };
+                try { cm.registerDefaultNetworkCallback(wifiNetworkCallback); }
+                catch (Throwable t) { Log.w(TAG, "wifi callback register failed: " + t.getMessage()); }
+            }
+            statusHandler.post(wifiRefreshTask);
+        } catch (Throwable t) {
+            Log.w(TAG, "initStatusBar failed: " + t.getMessage());
+        }
+    }
+
+    /** Battery level → 5-step icon + exact %, with a charging bolt when plugged in. */
+    private void updateBatteryIcon(Intent batteryIntent) {
+        try {
+            ImageView img = findViewById(R.id.imgBatteryStatus);
+            ImageView bolt = findViewById(R.id.imgCharging);
+            TextView pctText = findViewById(R.id.txvBatteryPct);
+            if (img == null || batteryIntent == null) return;
+            int level = batteryIntent.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1);
+            int scale = batteryIntent.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, -1);
+            int pct = (level >= 0 && scale > 0) ? Math.round(level * 100f / scale) : -1;
+            int status = batteryIntent.getIntExtra(android.os.BatteryManager.EXTRA_STATUS, -1);
+            boolean charging = status == android.os.BatteryManager.BATTERY_STATUS_CHARGING
+                    || status == android.os.BatteryManager.BATTERY_STATUS_FULL;
+            int lvlIdx;
+            if (pct < 0) lvlIdx = 0;
+            else if (pct >= 88) lvlIdx = 4;
+            else if (pct >= 63) lvlIdx = 3;
+            else if (pct >= 38) lvlIdx = 2;
+            else if (pct >= 13) lvlIdx = 1;
+            else lvlIdx = 0;
+            img.setImageLevel(lvlIdx);
+            if (bolt != null) bolt.setVisibility(charging ? View.VISIBLE : View.GONE);
+            if (pctText != null) pctText.setText(pct < 0 ? "--%" : pct + "%");
+        } catch (Throwable t) {
+            Log.w(TAG, "battery update failed: " + t.getMessage());
+        }
+    }
+
+    /** Tracks which glyph set (wifi fan vs cell bars) is currently shown, so the
+     *  drawable is only swapped when the active transport changes. */
+    private int currentSignalRes = 0;
+
+    /**
+     * Adaptive network indicator: shows the WiFi fan when connected over WiFi and
+     * the cell bars when connected over cellular (whichever transport is active),
+     * with its signal level. When nothing is connected it shows an empty glyph for
+     * the transport the unit has (cellular if a SIM is present, else WiFi).
+     */
+    private void updateSignalIcon() {
+        try {
+            ImageView img = findViewById(R.id.imgSignalStatus);
+            if (img == null) return;
+
+            boolean wifi = false, cell = false;
+            android.net.ConnectivityManager cm =
+                    (android.net.ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+            if (cm != null) {
+                android.net.Network n = cm.getActiveNetwork();
+                android.net.NetworkCapabilities caps = (n != null) ? cm.getNetworkCapabilities(n) : null;
+                if (caps != null) {
+                    wifi = caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI);
+                    cell = caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR);
+                }
+            }
+
+            int res, level;
+            if (wifi) {
+                res = R.drawable.ic_wifi_level; level = wifiSignalLevel();
+            } else if (cell) {
+                res = R.drawable.ic_cell_level; level = cellSignalLevel();
+            } else {
+                res = hasSim() ? R.drawable.ic_cell_level : R.drawable.ic_wifi_level; level = 0;
+            }
+            if (res != currentSignalRes) {   // only reload the drawable on a transport change
+                img.setImageResource(res);
+                currentSignalRes = res;
+            }
+            img.setImageLevel(level);
+        } catch (Throwable t) {
+            Log.w(TAG, "signal update failed: " + t.getMessage());
+        }
+    }
+
+    /** WiFi RSSI → 0-4 bars (0 when off/disconnected). */
+    private int wifiSignalLevel() {
+        try {
+            android.net.wifi.WifiManager wm = (android.net.wifi.WifiManager)
+                    getApplicationContext().getSystemService(WIFI_SERVICE);
+            if (wm != null && wm.isWifiEnabled()) {
+                android.net.wifi.WifiInfo info = wm.getConnectionInfo();
+                if (info != null && info.getNetworkId() != -1) {
+                    return Math.max(0, Math.min(4,
+                            android.net.wifi.WifiManager.calculateSignalLevel(info.getRssi(), 5)));
+                }
+            }
+        } catch (Throwable ignore) {}
+        return 0;
+    }
+
+    /** Cellular signal → 0-4 (SignalStrength.getLevel, API 28+); a healthy default
+     *  when connected but the exact level isn't readable. */
+    private int cellSignalLevel() {
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+                android.telephony.TelephonyManager tm =
+                        (android.telephony.TelephonyManager) getSystemService(TELEPHONY_SERVICE);
+                if (tm != null) {
+                    android.telephony.SignalStrength ss = tm.getSignalStrength();
+                    if (ss != null) return Math.max(0, Math.min(4, ss.getLevel()));
+                }
+            }
+        } catch (Throwable ignore) {}
+        return 3; // connected, level unknown → show a healthy default
+    }
+
+    /** True if a SIM is present and ready (drives the empty-state glyph choice). */
+    private boolean hasSim() {
+        try {
+            android.telephony.TelephonyManager tm =
+                    (android.telephony.TelephonyManager) getSystemService(TELEPHONY_SERVICE);
+            return tm != null && tm.getSimState() == android.telephony.TelephonyManager.SIM_STATE_READY;
+        } catch (Throwable ignore) {
+            return false;
+        }
+    }
+
+    private void teardownStatusBar() {
+        try { statusHandler.removeCallbacks(wifiRefreshTask); } catch (Throwable ignore) {}
+        if (batteryReceiver != null) {
+            try { unregisterReceiver(batteryReceiver); } catch (Throwable ignore) {}
+            batteryReceiver = null;
+        }
+        if (wifiNetworkCallback != null) {
+            try {
+                android.net.ConnectivityManager cm =
+                        (android.net.ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+                if (cm != null) cm.unregisterNetworkCallback(wifiNetworkCallback);
+            } catch (Throwable ignore) {}
+            wifiNetworkCallback = null;
         }
     }
 
