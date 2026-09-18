@@ -518,7 +518,18 @@ public class AtmHostConnection {
             disconnect();
             throw new ConnectionException("Connection lost - streams became null", e);
         } catch (SocketTimeoutException e) {
+            // The host went silent mid-exchange; the socket's state is unknown and
+            // any late bytes would corrupt the next exchange. Drop it so the next
+            // operation opens a fresh connection instead of reusing this one.
+            disconnect();
             throw new ConnectionException("Response timeout", e);
+        } catch (ConnectionException e) {
+            // readResponse() signals "connection closed by host" (read() == -1) and
+            // bad framing as ConnectionException, which is NOT an IOException and
+            // used to bypass the disconnect below — leaving a half-closed socket
+            // that isConnected() still reported as live.
+            disconnect();
+            throw e;
         } catch (IOException e) {
             disconnect();
             throw new ConnectionException("Communication error: " + e.getMessage(), e);
@@ -843,6 +854,28 @@ public class AtmHostConnection {
         if (!isConnected()) {
             connect();
         }
+    }
+
+    /**
+     * Drops any existing socket and opens a new one.
+     *
+     * <p>Use this at the start of a customer transaction instead of
+     * {@link #ensureConnected()}. The host closes its side after every exchange
+     * (see {@link #completeHandshake()}), but {@link java.net.Socket#isConnected()}
+     * stays true after the peer's FIN and {@link java.net.Socket#isClosed()} only
+     * reflects a local close — so a socket left open by an earlier operation
+     * (a health check, a status probe) passes {@link #isConnected()} and the 85
+     * is written into a dead pipe. That surfaced as a ConnectionException with
+     * requestSentToHost already true, i.e. a reversal for a request the host
+     * never saw. One TCP/TLS setup per transaction is the price of never reusing
+     * a socket whose far end we cannot observe.</p>
+     */
+    public synchronized void connectFresh() throws ConnectionException {
+        if (connected || socket != null) {
+            log("connectFresh: dropping existing socket before reconnecting");
+            disconnect();
+        }
+        connect();
     }
 
     // =========================================================================
