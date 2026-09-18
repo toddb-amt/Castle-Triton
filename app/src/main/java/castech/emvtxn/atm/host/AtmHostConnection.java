@@ -707,6 +707,15 @@ public class AtmHostConnection {
     }
 
     /**
+     * Test seam: injects the socket so the EOT-wait path (which sets SO_TIMEOUT
+     * on it) can be exercised. An unconnected {@code new Socket()} is enough —
+     * setSoTimeout() needs no peer. Package-private on purpose.
+     */
+    void injectSocketForTest(java.net.Socket s) {
+        this.socket = s;
+    }
+
+    /**
      * Completes the handshake by sending ACK and waiting for EOT.
      *
      * <p>Package-private so {@code AtmHostConnectionHandshakeTest} can verify it
@@ -738,8 +747,14 @@ public class AtmHostConnection {
             out.flush();
             log("Sent ACK");
 
-            // Wait for EOT
-            socket.setSoTimeout(config.getEotTimeout());
+            // Wait for EOT. Capture the socket locally too: a concurrent
+            // disconnect() nulls the field, and an NPE here is not an IOException.
+            java.net.Socket s = socket;
+            if (s == null) {
+                log("Handshake: socket already closed — skipping EOT wait");
+                return;
+            }
+            s.setSoTimeout(config.getEotTimeout());
             byte[] eotResponse = readResponse();
 
             if (!parser.isEot(eotResponse)) {
@@ -749,18 +764,20 @@ public class AtmHostConnection {
             }
 
             // Restore normal timeout
-            socket.setSoTimeout(config.getResponseTimeout());
+            s.setSoTimeout(config.getResponseTimeout());
 
         } catch (SocketTimeoutException e) {
             // EOT timeout is not critical
             log("EOT timeout (non-critical)");
-        } catch (IOException e) {
-            // Was: throw new ConnectionException(...). That discarded an approval we
-            // had already received and reversed approved withdrawals (host closes
-            // the socket right after responding, so the ACK write hits a broken
-            // pipe). The response is authoritative; log the cleanup failure and move on.
+        } catch (Exception e) {
+            // Was: catch (IOException) only. That still let two failures escape
+            // and reverse approved withdrawals: readResponse() throws
+            // ConnectionException (not an IOException) when the host closes the
+            // socket without sending EOT — read() returns -1 — and setSoTimeout()
+            // NPEs if disconnect() raced us. The response is authoritative;
+            // NOTHING thrown from this cleanup may propagate.
             log("Handshake completion error (non-critical, response already received): "
-                    + e.getMessage());
+                    + e.getClass().getSimpleName() + " - " + e.getMessage());
         }
     }
 
