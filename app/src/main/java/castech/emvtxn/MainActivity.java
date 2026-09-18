@@ -3284,7 +3284,7 @@ public class MainActivity extends AppCompatActivity {
 
                                 Log.d(TAG, "tag :" + "0xDF32 (PAN mask)");
                                 Log.d(TAG, "value :" + Converter.byteArray2HexString(TLVData.value, TLVData.len));
-                                Log.d(TAG, "ASCII :" + GlobalPara.asciiPAN);
+                                Log.d(TAG, "ASCII :" + LogMask.pan(GlobalPara.asciiPAN));
                                 ui_ShowMsg("PAN :" + GlobalPara.asciiPAN);
                                 // Removed 1.3s sleep - PAN visible during PIN entry
                             } else {
@@ -3375,7 +3375,7 @@ public class MainActivity extends AppCompatActivity {
                                 // Store encrypted Track 2 for ATM host transactions (chip cards)
                                 if (GlobalPara.atmTrack2Data == null || GlobalPara.atmTrack2Data.isEmpty() || GlobalPara.atmTrack2Data.contains("*")) {
                                     GlobalPara.atmTrack2Data = "E:" + Converter.byteArray2HexString(TLVData.value, TLVData.len);
-                                    Log.d(TAG, "Stored ATM Track2 Data (CT encrypted): " + GlobalPara.atmTrack2Data);
+                                    Log.d(TAG, "Stored ATM Track2 Data (CT encrypted): " + LogMask.len(GlobalPara.atmTrack2Data));
                                 }
                             } else {
                                 Log.d(TAG, "NoTag(DF33) or empty, trying DF32 (masked)");
@@ -3564,7 +3564,7 @@ public class MainActivity extends AppCompatActivity {
                                 Log.d(TAG, "ATM MODE (CT): Tag 57 dataGet returned: " + String.format("0x%08X", tag57Rtn) + ", len=" + tag57.len);
                                 if (tag57Rtn == 0 && tag57.len > 0) {
                                     String track2Hex = Converter.byteArray2HexString(tag57.value, tag57.len);
-                                    Log.d(TAG, "ATM MODE (CT): Tag 57 raw: " + track2Hex);
+                                    Log.d(TAG, "ATM MODE (CT): Tag 57 raw: " + LogMask.track2(track2Hex));
                                     // BCD encoded - PAN is before 'D' separator
                                     int sepIdx = track2Hex.toUpperCase().indexOf("D");
                                     if (sepIdx > 0) {
@@ -3620,7 +3620,7 @@ public class MainActivity extends AppCompatActivity {
                             Log.d(TAG, "ATM PIN: PIN entry successful (POST-TRANSACTION, No-CVM approach)");
                             GlobalPara.atmPinCollectedPostTransaction = true;  // Mark as post-cryptogram PIN
                         } else if (GlobalPara.atmMode) {
-                            Log.d(TAG, "ATM MODE (CT): PIN collected via EMV callback (ISO-0): " + GlobalPara.atmEncryptedPinBlock);
+                            Log.d(TAG, "ATM MODE (CT): PIN collected via EMV callback (ISO-0): " + LogMask.pinBlock(GlobalPara.atmEncryptedPinBlock));
                             GlobalPara.atmPinCollectedPostTransaction = false;  // PIN was collected during EMV flow
                         }
                         if (GlobalPara.scrnBrdcstRecver != null) {
@@ -3636,7 +3636,7 @@ public class MainActivity extends AppCompatActivity {
                             // BUT if we collected PIN manually via DUKPT, we can continue!
                             if (GlobalPara.atmEncryptedPinBlock != null && !GlobalPara.atmEncryptedPinBlock.isEmpty()) {
                                 Log.w(TAG, ">>> ATM: SDK PIN failed (0x1003) but manual DUKPT PIN collected - CONTINUING");
-                                Log.d(TAG, ">>> ATM: PIN block = " + GlobalPara.atmEncryptedPinBlock);
+                                Log.d(TAG, ">>> ATM: PIN block = " + LogMask.pinBlock(GlobalPara.atmEncryptedPinBlock));
                                 Log.d(TAG, ">>> ATM: KSN = " + GlobalPara.atmDukptKsn);
                                 // CRITICAL: Set transaction result to "Go Online" so host authorization proceeds
                                 GlobalPara.transactionResult = 0x0004;  // Go Online
@@ -3906,13 +3906,13 @@ public class MainActivity extends AppCompatActivity {
                                 Log.d(TAG, "KSN Track1 : " + Converter.byteArray2HexString(encryptedTracks.track1KSN, encryptedTracks.track1KSNLen));
                             }
                             if (encryptedTracks.track2EncryptedDataLen > 0) {
-                                Log.d(TAG, "Encrypted Track2 : " + Converter.byteArray2HexString(encryptedTracks.track2EncryptedData, encryptedTracks.track2EncryptedDataLen));
+                                Log.d(TAG, "Encrypted Track2 : [" + encryptedTracks.track2EncryptedDataLen + " bytes]");
                                 Log.d(TAG, "Checksum Track2 : " + Converter.byteArray2HexString(encryptedTracks.track2Checksum, encryptedTracks.track2ChecksumLen));
                                 Log.d(TAG, "KSN Track2 : " + Converter.byteArray2HexString(encryptedTracks.track2KSN, encryptedTracks.track2KSNLen));
 
                                 // Store encrypted track 2 for ATM transactions
                                 GlobalPara.atmTrack2Data = Converter.byteArray2HexString(encryptedTracks.track2EncryptedData, encryptedTracks.track2EncryptedDataLen);
-                                Log.d(TAG, "Stored ATM Track2 Data: " + GlobalPara.atmTrack2Data);
+                                Log.d(TAG, "Stored ATM Track2 Data: " + LogMask.track2(GlobalPara.atmTrack2Data));
                             }
                             if (encryptedTracks.track3EncryptedDataLen > 0) {
                                 Log.d(TAG, "Encrypted Track3 : " + Converter.byteArray2HexString(encryptedTracks.track3EncryptedData, encryptedTracks.track3EncryptedDataLen));
@@ -4104,7 +4104,7 @@ public class MainActivity extends AppCompatActivity {
                         tlvUtility.TLVDataParse(rcData.additionalData, rcData.additionalDataLen);
                         Log.d(TAG, "TLVData(UtilityDB) : " + Converter.byteArray2HexString(tlvUtility.TLVDataBase, tlvUtility.intTLVDataBaseLen));
                         Log.d(TAG, "rcData.track1Data  : " + Converter.byteArray2HexString(rcData.track1Data, rcData.track1Len));
-                        Log.d(TAG, "rcData.track2Data  : " + Converter.byteArray2HexString(rcData.track2Data, rcData.track2Len));
+                        Log.d(TAG, "rcData.track2Data  : [" + rcData.track2Len + " bytes]");
                         Log.d(TAG, "rcData.chipData    : " + Converter.byteArray2HexString(rcData.chipData, rcData.chipDataLen));
                         Log.d(TAG, "rcData.addData     : " + Converter.byteArray2HexString(rcData.additionalData, rcData.additionalDataLen));
 
@@ -4324,8 +4324,8 @@ public class MainActivity extends AppCompatActivity {
                                     track2Hex = track2Hex.toUpperCase().replaceAll("F+$", "");
                                     String track2Ascii = ";" + track2Hex.replace("D", "=") + "?";
 
-                                    Log.d(TAG, "ATM HOST (CL): Track2 raw hex: " + track2Hex);
-                                    Log.d(TAG, "ATM HOST (CL): Track2 ASCII: " + track2Ascii);
+                                    Log.d(TAG, "ATM HOST (CL): Track2 raw hex: " + LogMask.len(track2Hex));
+                                    Log.d(TAG, "ATM HOST (CL): Track2 ASCII: " + LogMask.track2(track2Ascii));
 
                                     // Try to encrypt track 2 with DUKPT
                                     DukptEncryptedData encryptedTrack2 = encryptTrack2WithDukpt(track2Ascii);
@@ -4334,7 +4334,7 @@ public class MainActivity extends AppCompatActivity {
                                         cardData.setEncryptedTrack2(Converter.hexString2ByteArray(encryptedTrack2.encryptedData));
                                         cardData.setTrack2KSN(Converter.hexString2ByteArray(encryptedTrack2.ksn));
                                         Log.d(TAG, "ATM HOST (CL): Track2 ENCRYPTED with DUKPT");
-                                        Log.d(TAG, "  Encrypted: " + encryptedTrack2.encryptedData);
+                                        Log.d(TAG, "  Encrypted: " + LogMask.len(encryptedTrack2.encryptedData));
                                         Log.d(TAG, "  KSN: " + encryptedTrack2.ksn);
 
                                         // Also set clear track 2 for processor (if not masked)
@@ -4358,7 +4358,7 @@ public class MainActivity extends AppCompatActivity {
                                 // Set encrypted PIN block and PIN KSN
                                 if (GlobalPara.atmEncryptedPinBlock != null && !GlobalPara.atmEncryptedPinBlock.isEmpty()) {
                                     cardData.setEncryptedPinBlock(GlobalPara.atmEncryptedPinBlock);
-                                    Log.d(TAG, "ATM HOST (CL): PIN block set: " + GlobalPara.atmEncryptedPinBlock);
+                                    Log.d(TAG, "ATM HOST (CL): PIN block set: " + LogMask.pinBlock(GlobalPara.atmEncryptedPinBlock));
                                     // Set PIN KSN separately for DUKPT PIN decryption
                                     if (GlobalPara.atmDukptKsn != null && !GlobalPara.atmDukptKsn.isEmpty()) {
                                         cardData.setPinBlockKSN(Converter.hexString2ByteArray(GlobalPara.atmDukptKsn));
@@ -4445,7 +4445,7 @@ public class MainActivity extends AppCompatActivity {
                                         track2Hex = track2Hex.toUpperCase().replaceAll("F+$", "");
                                         track2AsciiCT = ";" + track2Hex.replace("D", "=") + "?";
                                         Log.d(TAG, "ATM HOST (CT): Track2 from tag 57, len=" + TLVData.len);
-                                        Log.d(TAG, "ATM HOST (CT): Track2 ASCII: " + track2AsciiCT);
+                                        Log.d(TAG, "ATM HOST (CT): Track2 ASCII: " + LogMask.track2(track2AsciiCT));
                                     } else {
                                         // Tag 57 not available (Castle masks for PCI), check stored track 2
                                         Log.w(TAG, "ATM HOST (CT): Tag 57 not available, checking GlobalPara.atmTrack2Data");
@@ -4494,7 +4494,7 @@ public class MainActivity extends AppCompatActivity {
                                 // Set encrypted PIN block and PIN KSN
                                 if (GlobalPara.atmEncryptedPinBlock != null && !GlobalPara.atmEncryptedPinBlock.isEmpty()) {
                                     cardData.setEncryptedPinBlock(GlobalPara.atmEncryptedPinBlock);
-                                    Log.d(TAG, "ATM HOST (CT): PIN block set: " + GlobalPara.atmEncryptedPinBlock);
+                                    Log.d(TAG, "ATM HOST (CT): PIN block set: " + LogMask.pinBlock(GlobalPara.atmEncryptedPinBlock));
                                     // Set PIN KSN separately for DUKPT PIN decryption
                                     if (GlobalPara.atmDukptKsn != null && !GlobalPara.atmDukptKsn.isEmpty()) {
                                         cardData.setPinBlockKSN(Converter.hexString2ByteArray(GlobalPara.atmDukptKsn));
@@ -5548,7 +5548,7 @@ public class MainActivity extends AppCompatActivity {
             boolean dukptOK = requestATMPinEntryDukptMvp();
 
             if (dukptOK) {
-                Log.d(TAG, "ATM PIN: DUKPT successful - PIN block: " + GlobalPara.atmEncryptedPinBlock);
+                Log.d(TAG, "ATM PIN: DUKPT successful - PIN block: " + LogMask.pinBlock(GlobalPara.atmEncryptedPinBlock));
                 Log.d(TAG, "ATM PIN: KSN: " + GlobalPara.atmDukptKsn);
                 return true;
             } else {
@@ -5891,7 +5891,7 @@ public class MainActivity extends AppCompatActivity {
 
             if (encryptedBlock != null && encryptedBlock.length >= 8) {
                 GlobalPara.atmEncryptedPinBlock = Converter.byteArray2HexString(encryptedBlock, 8);
-                Log.d(TAG, "DUKPT: Encrypted PIN block: " + GlobalPara.atmEncryptedPinBlock);
+                Log.d(TAG, "DUKPT: Encrypted PIN block: " + LogMask.pinBlock(GlobalPara.atmEncryptedPinBlock));
             }
 
             if (ksn != null && ksn.length > 0) {
@@ -6241,7 +6241,7 @@ public class MainActivity extends AppCompatActivity {
             // Process results
             if (encryptedBlock != null && encryptedBlock.length >= 8) {
                 GlobalPara.atmEncryptedPinBlock = Converter.byteArray2HexString(encryptedBlock, 8);
-                Log.d(TAG, ">>> MVP: Encrypted PIN block: " + GlobalPara.atmEncryptedPinBlock);
+                Log.d(TAG, ">>> MVP: Encrypted PIN block: " + LogMask.pinBlock(GlobalPara.atmEncryptedPinBlock));
             } else {
                 Log.e(TAG, ">>> MVP: encryptedBlock is null or too short");
             }
@@ -9340,10 +9340,10 @@ public class MainActivity extends AppCompatActivity {
 
             // Log what we have in GlobalPara
             Log.d(TAG, "--- GlobalPara State ---");
-            Log.d(TAG, "  asciiPAN = " + GlobalPara.asciiPAN);
-            Log.d(TAG, "  atmTrack2Data = " + GlobalPara.atmTrack2Data);
+            Log.d(TAG, "  asciiPAN = " + LogMask.pan(GlobalPara.asciiPAN));
+            Log.d(TAG, "  atmTrack2Data = " + LogMask.track2(GlobalPara.atmTrack2Data));
             Log.d(TAG, "  atmClearPan = " + GlobalPara.atmClearPan);
-            Log.d(TAG, "  atmEncryptedPinBlock = " + GlobalPara.atmEncryptedPinBlock);
+            Log.d(TAG, "  atmEncryptedPinBlock = " + LogMask.pinBlock(GlobalPara.atmEncryptedPinBlock));
 
             Log.d(TAG, "=== END EMV TAG DUMP ===");
 
@@ -9384,7 +9384,7 @@ public class MainActivity extends AppCompatActivity {
 
             // If we have a PIN block from the SDK, compare
             if (GlobalPara.atmEncryptedPinBlock != null && !GlobalPara.atmEncryptedPinBlock.isEmpty()) {
-                Log.d(TAG, "Current SDK PIN block: " + GlobalPara.atmEncryptedPinBlock);
+                Log.d(TAG, "Current SDK PIN block: " + LogMask.pinBlock(GlobalPara.atmEncryptedPinBlock));
                 Log.d(TAG, "(Note: SDK block is encrypted, can't compare directly)");
             } else {
                 Log.d(TAG, "No PIN block in GlobalPara yet");
