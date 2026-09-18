@@ -3,7 +3,7 @@
 Pre-release review of the v6.2.5 delta plus the runtime subsystems it depends on
 (ATM host/network layer, key management, POS proxy client, MainActivity lifecycle,
 admin access tiers). Reviewed 2026-09-18 against branch `mksk-cfff-key`
-(6.2.5 = `10187bf`, working delta uncommitted).
+(6.2.5 = `10187bf`). Fixes land on branch `release/v6.2.6`; each ticket is its own commit.
 
 **How to use this file.** Each item is a ticket. Check the box when the fix has shipped
 in a versioned PR and add the version in the line (e.g. `— shipped 6.2.6`). Items are
@@ -26,52 +26,52 @@ reordering, or a deletion. HOST-04 is the one item that wants a real end-to-end
 transaction on the terminal before merge. The POS proxy items that also gate go-live
 are in the next group (R1-POS) — D2 was decided YES on 2026-09-18.
 
-- [ ] **ADM-01** · HIGH · ✔ · `Fragment_page_admin_atm.java:1766,1771` (`updateReversalStatus`), `:1839` (`clearPendingReversals`)
+- [x] **ADM-01** · HIGH · ✔ · `Fragment_page_admin_atm.java:1766,1771` (`updateReversalStatus`), `:1839` (`clearPendingReversals`) — **in release/v6.2.6 `f8d23b1` · on-device verification pending**
   **Defect:** `updateReversalStatus()` unconditionally re-enables and un-hides `btnClearReversals`, overriding the tier greying applied at login; `clearPendingReversals()` has no tier check.
   **Fails when:** Normal admin taps the allowed *Process Pending Reversals* while the host is unreachable → reversals stay pending → `onProcessingComplete` (`:1827`) re-enables the Super-only button → tap → confirm → `clearAllPendingReversals()` deletes unsent reversal records. Greying holds at login; this is a two-step bypass. Also reachable via *Request New Working Key* (`:1587`).
   **Fix:** `btnClearReversals.setEnabled(pendingCount > 0 && accessLevel == ACCESS_SUPER)`; guard the top of `clearPendingReversals()` with `accessLevel == ACCESS_SUPER`.
 
-- [ ] **SEC-01** · HIGH · ● · `atm/host/CastleKeyManager.java:1514` (+ `:444-445, :674, :802, :1358, :1520, :2020`)
+- [x] **SEC-01** · HIGH · ● · `atm/host/CastleKeyManager.java:1514` (+ `:444-445, :674, :802, :1358, :1520, :2020`) — **in release/v6.2.6 `650bfc4` · on-device verification pending**
   **Defect:** `Log.d(..., "Clear PIN block: " + maskKey(clearPinBlock))` — for an ISO 9564 Format-0 block the first four nibbles are `0, PIN-length, PIN[0], PIN[1]`, which the PAN block does **not** mask (its first four nibbles are `0000`). `maskKey`'s `substring(0,4)` therefore logs the PIN length and first two PIN digits in clear. The other lines log full encrypted PIN blocks, encrypted key parts, and a known-plaintext ciphertext under the master key at every init. `minifyEnabled false` → these ship in production logcat.
   **Fails when:** anyone with logcat access (adb is now enabled on terminal …680) reads a customer's PIN prefix. PCI exposure regardless of exploitation.
   **Fix:** delete all listed log lines. Log at most a KCV for keys and nothing for PIN blocks.
 
-- [ ] **HOST-01** · HIGH · ✔ · `atm/host/AtmTransactionManager.java:429` (flag) vs `:436` / `:444` (connect)
+- [x] **HOST-01** · HIGH · ✔ · `atm/host/AtmTransactionManager.java:429` (flag) vs `:436` / `:444` (connect) — **in release/v6.2.6 `7f7da6c` · on-device verification pending**
   **Defect:** `requestSentToHost = true` is set *before* `ensureConnected()` runs (explicitly on the Triton branch, inside `connection.sendTransaction()` on the Hyosung branch).
   **Fails when:** host down, "Connection timeout after 30000ms", or TLS failure → catch at `:452` sees `requestSentToHost == true` → promotes the pre-send reversal (TIMEOUT or HOST_ERROR) for a request that was **never transmitted** → drain retries a Type 86 the host never saw → 15 attempts → `STATUS_FAILED` → `sessionState.outOfService()`. **A single connect-time blip takes the terminal out of service.**
   **Fix:** call `connection.ensureConnected()` explicitly first; on connect failure `clearPreSendReversal()` and report a plain connection error (no reversal); set `requestSentToHost = true` immediately before the write.
 
-- [ ] **HOST-02** · HIGH · ✔ · `atm/host/AtmHostConnection.java:706-756` (`completeHandshake`)
+- [x] **HOST-02** · HIGH · ✔ · `atm/host/AtmHostConnection.java:706-756` (`completeHandshake`) — **in release/v6.2.6 `49718d5` · on-device verification pending**
   **Defect:** catches only `SocketTimeoutException` / `IOException` (`:745, :748`), but `readResponse()` throws `ConnectionException` (extends `Exception`, `:870`) on EOF (`:532`) or a non-STX byte (`:610`), and `socket.setSoTimeout()` (`:733, :743`) NPEs if a concurrent `disconnect()` nulled `socket`. Both escape before `currentResponse = response` (`AtmTransactionManager.java:446`).
   **Fails when:** a host/MUX closes the socket *without* sending EOT right after responding (normal for a MUX restart) → exception unwinds into the catch at `:452` with `requestSentToHost && currentResponse == null` → RECONNECT_AND_REVERSE → customer shown "Connection error" while the host approved. This is the exact regression the comment at `:707-716` says was fixed; the fix only covered `IOException`. Latent — testing hasn't hit it because test hosts send EOT.
   **Fix:** wrap the whole body in `catch (Exception e)` (log, never throw); null-guard `socket` before `setSoTimeout`. Extend `AtmHostConnectionHandshakeTest` with an EOF case (it currently cannot, because `socket` is never injected).
 
-- [ ] **HOST-03** · HIGH · ✔ · `atm/host/AtmHostConnection.java:158-177` (`connect`)
+- [x] **HOST-03** · HIGH · ✔ · `atm/host/AtmHostConnection.java:158-177` (`connect`) — **in release/v6.2.6 `2a32564` · on-device verification pending**
   **Defect:** `sslSocket.startHandshake()` (`:174`) runs before `socket.setSoTimeout(...)` (`:177`); the underlying socket has `SO_TIMEOUT = 0` during the TLS handshake. `connectionTimeout` (`:161`) bounds only the TCP connect.
   **Fails when:** a MUX/middlebox ACKs the TCP connect and the ClientHello but never answers → no unacked data → no kernel retransmit timeout → blocks forever. In `performCashWithdrawal` the `finally` never runs → `transactionInProgress` stays true → every later customer gets "Transaction already in progress" until app restart. In `downloadKeysSync()` the **static** `keyDownloadLock` is held forever → every `openSession()` in the process blocks.
   **Fix:** `socket.setSoTimeout(config.getConnectionTimeout())` **before** `startHandshake()`, then set `responseTimeout` after. Two lines.
 
-- [ ] **HOST-04** · HIGH · ✔ · `atm/host/AtmHostConnection.java:212-214` (`isConnected`), `:511` (timeout, no disconnect), `:532`+`:870` (EOF path skips the `:513` disconnect handler), `:816-820` (`ensureConnected`); `atm/host/AtmTransactionManager.java:1021-1045` (`sendHealthCheck`, no disconnect), `:1170-1177` (`requestHostTotals` — force-disconnects first; the correct pattern)
+- [x] **HOST-04** · HIGH · ✔ · `atm/host/AtmHostConnection.java:212-214` (`isConnected`), `:511` (timeout, no disconnect), `:532`+`:870` (EOF path skips the `:513` disconnect handler), `:816-820` (`ensureConnected`); `atm/host/AtmTransactionManager.java:1021-1045` (`sendHealthCheck`, no disconnect), `:1170-1177` (`requestHostTotals` — force-disconnects first; the correct pattern) — **in release/v6.2.6 `6ffcf02` · on-device verification pending**
   **Defect:** `isConnected()` relies on `Socket.isConnected()`, which stays `true` after the peer sends FIN; `isClosed()` reflects only local close. The host closes right after responding (the code's own comment at `:710-711` calls this normal), and health checks / timeouts / EOF never `disconnect()`, so a dead socket passes `ensureConnected()`.
   **Fails when:** the 6-minute Type 89 health check (auto-started at `AtmHostService.java:170-172`) completes and the host closes → customer arrives → 85 written into the dead socket → EOF/RST → `ConnectionException` with `requestSentToHost == true` → bogus reversal → the HOST-01 chain to OUT_OF_SERVICE. Also affects retry attempts in `sendReversalWithRetry` (`:1342-1365`), which reuse the socket that just timed out.
   **Fix:** in `performCashWithdrawal` force `disconnect()` then `connect()` (mirror `requestHostTotals`); in `sendAndReceive` also `disconnect()` on `SocketTimeoutException` and on the EOF `ConnectionException`; `disconnect()` in a `finally` in every op (health check, status monitoring, config, reversal). **Verify with a real end-to-end approved transaction on the terminal before merge.**
 
-- [ ] **SDK-01** · HIGH · ✔ · `MainActivity.java:2273-2333` (`abortTransaction`), `:2927 / :2942 / :2953` (the only `txnAborted` checks), `:2565 / :2625-2627` (`btnTransaction_Click`), `Fragment_page_transaction.java:848` (Cancel → abort; button never hidden/disabled after card detect)
+- [x] **SDK-01** · HIGH · ✔ · `MainActivity.java:2273-2333` (`abortTransaction`), `:2927 / :2942 / :2953` (the only `txnAborted` checks), `:2565 / :2625-2627` (`btnTransaction_Click`), `Fragment_page_transaction.java:848` (Cancel → abort; button never hidden/disabled after card detect) — **in release/v6.2.6 `669e568` · on-device verification pending**
   **Defect:** `txnAborted` is consulted only inside the card-detection loop. Once a card is detected nothing downstream (app select, PIN, host call, receipt nav) checks it. `abortTransaction()` waits ≤ 3 s + 1 s (`Thread.interrupt()` cannot unblock a native SDK call or a socket read) then **unconditionally** nulls `threadTxn` (`:2318`), clears `atmTransactionInProgress` (`:2322`), re-enables buttons, and the fragment navigates to the main menu.
   **Fails when:** customer taps Cancel during the host call — the phase that legitimately runs 120–150 s on the busy-MUX path, i.e. exactly when a customer *would* tap Cancel. 4 s later the UI is idle while the old thread is still inside the SDK/socket. (a) Next customer starts → a second thread issues CTOS calls concurrently with the first → the DeadObjectException / CTOS-service-crash class documented at `:399-406`. (b) Or the "cancelled" host call completes → money moves after Cancel → thread yanks the UI to the receipt page (`:4660-4671`).
   **Fix (minimal, for 6.2.6):** if the join times out, do **not** clear `atmTransactionInProgress` / `threadTxn` — leave the terminal busy until the thread really exits (have the thread's own `finally` clear them); check `txnAborted` immediately before the host call and before receipt navigation. **Full (R2 / SDK-03):** check at every phase boundary and move the join/flush off the UI thread.
 
-- [ ] **ADM-02** · MED · ● · `Fragment_page_admin_atm.java:776-789`, `:925-934`, hint text at `:755`
+- [x] **ADM-02** · MED · ● · `Fragment_page_admin_atm.java:776-789`, `:925-934`, hint text at `:755` — **in release/v6.2.6 `3916987` · on-device verification pending**
   **Defect:** the failed-attempt counter resets only on success (`:769`); after a lockout expires it is still at 3.
   **Fails when:** tech mistypes once after any prior lockout → `remaining = -1` → immediate 5-minute relock. Permanent one-strike lockout. Also the hint says "4-6 digit PIN" while the Super PIN is 7 digits.
   **Fix:** reset `KEY_FAILED_ATTEMPTS` when the lockout expires (or when setting it); fix the hint text.
 
-- [ ] **ADM-03** · LOW · ● · `Fragment_page_admin_atm.java:892` (`setViewEnabledDimmed`); XML `gone` defaults at `res/layout/fragment_page_admin_atm.xml:114, 463, 510`
+- [x] **ADM-03** · LOW · ● · `Fragment_page_admin_atm.java:892` (`setViewEnabledDimmed`); XML `gone` defaults at `res/layout/fragment_page_admin_atm.xml:114, 463, 510` — **in release/v6.2.6 `635f6fa` · on-device verification pending**
   **Defect:** forces `VISIBLE` on every direct child it touches.
   **Fails when:** after login both `layoutFlatFee` and `layoutPercentageFee` show at once, and *Clear All Pending* / *Clear Transaction History* appear with zero pending. `btnClearHistory` has no click listener anywhere (only reference is `:852`) — a dead button.
   **Fix:** drop the `setVisibility(View.VISIBLE)` line; alpha + enabled is sufficient. Decide whether `btnClearHistory` gets a handler or is removed.
 
-- [ ] **REL-01** · LOW · ✔ · `res/layout/fragment_page_admin_atm.xml`
+- [x] **REL-01** · LOW · ✔ · `res/layout/fragment_page_admin_atm.xml` — **in release/v6.2.6 `0fbda95` · on-device verification pending**
   **Defect:** the script that inserted the 9 section-header ids rewrote the file from CRLF to LF. Functionally harmless; the PR diff shows ~1,745 changed lines for 9 real ones.
   **Fix:** normalize back to CRLF before the PR so the diff shows only the id additions.
 
@@ -93,32 +93,32 @@ proxy's `info` reply and `MainActivity.getPosState()` — no UI reacts to it. So
 walk-up fallback already exists (by construction), but nothing enforces "POS drives all
 transactions" while the proxy is connected. See POS-12 and decision D5.
 
-- [ ] **POS-01** · HIGH · ● · `pos/PosConnectionClient.java:385-388, 395-408` (`onClosed` / `onFailure` ignore the `compareAndSet` result), `:277` (`openSocket` overwrites without closing), `:253` vs `:349` (`openSocket` accepts RECONNECTING, `onOpen` accepts only CONNECTING), `:101-109` (`superviseConnection`)
+- [x] **POS-01** · HIGH · ● · `pos/PosConnectionClient.java:385-388, 395-408` (`onClosed` / `onFailure` ignore the `compareAndSet` result), `:277` (`openSocket` overwrites without closing), `:253` vs `:349` (`openSocket` accepts RECONNECTING, `onOpen` accepts only CONNECTING), `:101-109` (`superviseConnection`) — **in release/v6.2.6 `6ccd2de` · on-device verification pending**
   **Defect:** stale-socket close/failure events trigger reconnects unconditionally, orphaning healthy connections.
   **Fails when:** the supervisor cancels a socket → OkHttp delivers `onFailure(ws_old, Canceled)` → `scheduleReconnect()` while the supervisor's own reconnect is already completing → two sockets opened, one orphaned → its `onClosed` schedules yet another reconnect while CONNECTED → `sendEnvelope()` returns false for the whole backoff → never converges. If the proxy enforces one binding per TSN (`bind_conflict`, `:229` comment) → `clearJwt()` → re-register → conflict → **5-minute park while a live socket exists.** Fires precisely during network trouble.
   **Fix:** `if (!socket.compareAndSet(webSocket, null)) return;` at the top of both callbacks; `WebSocket prev = socket.getAndSet(ws); if (prev != null) prev.cancel();` in `openSocket()`; no reconnect in the `onOpen` loser path; cancel `reconnectTask` inside `superviseConnection()`.
 
-- [ ] **POS-02** · HIGH · ● · `pos/AtmHostServiceGateway.java:33, :41` (final `hostService` captured once), `pos/PosOrchestrator.java:34`, `MainActivity.java:1122-1125` (`startPosModeIfEnabled`, only call site `:1042`), `:836-839` (host rebuild on signature change)
+- [x] **POS-02** · HIGH · ● · `pos/AtmHostServiceGateway.java:33, :41` (final `hostService` captured once), `pos/PosOrchestrator.java:34`, `MainActivity.java:1122-1125` (`startPosModeIfEnabled`, only call site `:1042`), `:836-839` (host rebuild on signature change) — **in release/v6.2.6 `17a31bf` · on-device verification pending**
   **Defect:** the POS stack holds the `AtmHostService` instance from first start; a config-signature rebuild shuts down the old instance (`initialized = false`, managers nulled) and `startPosModeIfEnabled()` returns "already running".
   **Fails when:** admin Save / Test Connection / Download Keys / Request New Key / CasHUB apply → from then on `isReady()` is false forever → every POS sale/balance/settlement answers `host_unreachable "host service not initialized"` until app restart. **This is POS trouble we cause ourselves — it violates the fallback requirement from the inside.**
   **Fix:** on host rebuild, `posOrchestrator.stop()` + restart, or resolve the service through a supplier.
 
-- [ ] **POS-03** · HIGH · ● · `pos/AtmHostServiceGateway.java:118-126, 141-155, 162-179`
+- [x] **POS-03** · HIGH · ● · `pos/AtmHostServiceGateway.java:118-126, 141-155, 162-179` — **in release/v6.2.6 `d5fe583` · on-device verification pending**
   **Defect:** readiness checks only `hostService.isTransactionInProgress()` (`AtmTransactionManager.transactionInProgress`, set only at `performWithdrawal` start `:308`), not `GlobalPara.atmTransactionInProgress` (set at `MainActivity.java:2632`). During card-detect/PIN the host flag is false.
   **Fails when:** a customer is on the transaction page waiting to tap → POS `sale` arrives → gateway overwrites `atmSelectedAmount / strAmount / atmTotal` mid-flow, arms a callback, navigates → `performClick` rejected by `:2565` → the customer's flow continues **with the POS amount** if not yet consumed, and its result fires the unconditional hooks (`:944 / :965 / :985 / :1003`) into the POS callback → POS receives an approval for a transaction it did not initiate.
   **Fix:** gateway refuses with `terminal_busy` when `GlobalPara.atmTransactionInProgress` is true; notify hooks carry a "POS-initiated" marker. **With D2 = YES this is the core invariant of the product, not a corner case:** the cashier and the customer screen must be mutually exclusive drivers at every instant, in both directions (see POS-12).
 
-- [ ] **POS-04** · MED · ● · `pos/AtmHostServiceGateway.java:197-243` (`startReversal` wrapper) vs `atm/host/AtmTransactionManager.java:1301-1305` (`sendReversal` returns silently when `currentRequest == null || currentResponse == null`)
+- [x] **POS-04** · MED · ● · `pos/AtmHostServiceGateway.java:197-243` (`startReversal` wrapper) vs `atm/host/AtmTransactionManager.java:1301-1305` (`sendReversal` returns silently when `currentRequest == null || currentResponse == null`) — **in release/v6.2.6 `c7559b5` · on-device verification pending**
   **Defect:** the listener wrapper never restores when there is nothing to reverse; nested wrappers (two back-to-back reversals) drop the second.
   **Fails when:** fresh boot / post-drain reversal → `fired` never flips → POS gets no reply (proxy timeout) and the wrapper stays installed → the next `onError` from **any** host op (key download failure `AtmHostService.java:611 / :615`, health check) fires the stale POS callback with an unrelated error for a dead flowId.
   **Fix:** add `hasReversibleTransaction()` and reply immediately when false; give `sendReversal` a per-call callback like `requestHostTotals(reset, callback)` already has.
 
-- [ ] **POS-05** · HIGH (raised from MED — the crash path violates the fallback requirement) · ● · `pos/PosConnectionClient.java:161-162, 95-110, 303-307`; root cause `pos/PosRegistrationClient.java:213-216` (`connection_url` used verbatim)
+- [x] **POS-05** · HIGH (raised from MED — the crash path violates the fallback requirement) · ● · `pos/PosConnectionClient.java:161-162, 95-110, 303-307`; root cause `pos/PosRegistrationClient.java:213-216` (`connection_url` used verbatim) — **in release/v6.2.6 `6ccd2de` · on-device verification pending**
   **Defect:** supervisor and reconnect task bodies have no try/catch; `scheduleAtFixedRate` cancels the periodic task forever on any thrown exception.
   **Fails when:** proxy returns a non-URL `connection_url` → `Request.Builder().url(...)` throws `IllegalArgumentException` → from the reconnect task it is swallowed into the Future (state CONNECTING, no task) → supervisor throws → dead → **permanent POS wedge**; from `onRegistered` on the OkHttp thread a non-IOException is rethrown → uncaught → **process crash — takes the walk-up fallback down with it.**
   **Fix:** wrap both task bodies (`catch Throwable → scheduleReconnect()`); validate `connection_url` with `HttpUrl.parse` in the registrar and fall back to the default.
 
-- [ ] **POS-06** · HIGH (raised from MED — drops a real approval) · ● · `pos/PosTransactionObserver.java:47` (180 s watchdog), `:85-94`
+- [x] **POS-06** · HIGH (raised from MED — drops a real approval) · ● · `pos/PosTransactionObserver.java:47` (180 s watchdog), `:85-94` — **in release/v6.2.6 `653df8e` · on-device verification pending**
   **Defect:** the watchdog is shorter than a legitimate worst-case flow (card wait + 60 s PIN + 130–150 s busy-MUX host wait) and does not abort the flow when it fires.
   **Fails when:** watchdog clears the slot and sends `host_unreachable` → the real approval hits `cb == null` and is dropped → **customer debited, POS told "error", no reversal** (the terminal saw an approval). With the slot free but `GlobalPara.atmTransactionInProgress` still true, a retry `sale` passes the gateway and hits POS-03.
   **Fix (6.2.6):** size the watchdog above the full flow (card + PIN + 150 s gate + margin). **Fix (with SDK-01 full):** on fire call `abortTransaction()` so slot and flow release together.
@@ -252,6 +252,7 @@ go-live release.
 - [ ] **POS-09** · LOW · ● · `pos/PosConnectionClient.java:362-368` — only `PosEnvelopeException` caught; a RuntimeException from `dispatcher.dispatch` tears the socket down via OkHttp `failWebSocket` (full reconnect for one bad frame). Catch Throwable and log.
 - [ ] **POS-10** · LOW · ● · `pos/PosConnectionClient.java:71, 289, 295, 355` — `reconnectAttempt` plain int written from OkHttp and scheduler threads (benign: clamped index).
 - [ ] **POS-11** · LOW · ● · `pos/PosOrchestrator.java:138-148` — `stop()` does not `PosTransactionObserver.clear()`; late result silently dropped. Be explicit.
+- [ ] **TEST-01** · LOW · ✔ · three unit tests fail at 6.2.5 HEAD, before any 6.2.6 change (verified by running them against the stashed tree on 2026-09-18). `HyosungProtocolTest.testProcessorConfigDns` asserts `isHealthCheckEnabled()` is false but `ProcessorConfig.forDns` sets it true (`ProcessorConfig.java:105`) — the test is stale. `EmvTagEnhancerTest.testTerminalCapsOverriddenInAtmMode` / `testCvmResultsOverriddenInAtmMode` expect 9F33 → `E040C8` and 9F34 → `420000` in ATM mode; the enhancer no longer produces those overrides — decide whether the tests or the enhancer are stale (the constants still exist at `EmvTagEnhancer.java:38-39`) before touching either. Not fixed in 6.2.6 on purpose: a release PR should not change EMV tag behaviour to make a test pass. Everything else in the suite is green (172 tests).
 
 ---
 
