@@ -105,7 +105,7 @@ public final class PosTransactionExecutor implements PosCommandDispatcher.Transa
                     ok.put(PosWire.RSP_STATUS, "ok");
                     ok.put(PosWire.RSP_DISPLAY_MESSAGE, message == null ? "" : message);
                 } catch (JSONException ignored) {}
-                sender.send(PosEnvelope.response(flowId, ok, null));
+                reply(flowId, "reversal ok", PosEnvelope.response(flowId, ok, null));
             }
             @Override public void onError(String code, String msg) {
                 sendErrorEnvelope(flowId, code, msg);
@@ -128,7 +128,8 @@ public final class PosTransactionExecutor implements PosCommandDispatcher.Transa
                     r.put("total_cash_dispensed_cents", result.totalCashDispensedCents);
                     r.put("total_surcharges_cents", result.totalSurchargesCents);
                 } catch (JSONException ignored) {}
-                sender.send(PosEnvelope.response(flowId, r, null));
+                reply(flowId, "settlement approved (" + result.withdrawalCount + " withdrawals)",
+                        PosEnvelope.response(flowId, r, null));
             }
             @Override public void onError(String code, String msg) {
                 sendErrorEnvelope(flowId, code, msg);
@@ -151,7 +152,24 @@ public final class PosTransactionExecutor implements PosCommandDispatcher.Transa
     }
 
     private void sendErrorEnvelope(String flowId, String code, String message) {
-        sender.send(PosEnvelope.response(flowId, null, PosEnvelope.errorBlock(code, message)));
+        reply(flowId, "error " + code + " (" + message + ")",
+                PosEnvelope.response(flowId, null, PosEnvelope.errorBlock(code, message)));
+    }
+
+    /**
+     * Sends one reply to the register and logs the outcome — the one line per POS
+     * flow the field log needs. {@code sender.send} reports whether the envelope
+     * was handed to a live socket; a false return used to be ignored everywhere,
+     * so a reply lost to a proxy reconnect left no trace while the register timed out.
+     */
+    private void reply(String flowId, String outcome, PosEnvelope env) {
+        boolean sent = sender.send(env);
+        if (sent) {
+            Log.d(TAG, "POS flow=" + flowId + " → " + outcome);
+        } else {
+            Log.w(TAG, "POS flow=" + flowId + " → " + outcome
+                    + " — NOT SENT (proxy connection down); the register will time out");
+        }
     }
 
     /**
@@ -206,7 +224,8 @@ public final class PosTransactionExecutor implements PosCommandDispatcher.Transa
                 if (amountCents > 0)    resource.put(PosWire.TXN_AMOUNT, amountCents);
                 if (surchargeCents > 0) resource.put(PosWire.TXN_SURCHARGE, surchargeCents);
             } catch (JSONException ignored) {}
-            sender.send(PosEnvelope.response(flowId, resource, null));
+            reply(flowId, "approved rc=" + r.responseCode + " rrn=" + r.referenceNumber
+                    + " amt=" + amountCents, PosEnvelope.response(flowId, resource, null));
         }
 
         @Override
@@ -218,7 +237,8 @@ public final class PosTransactionExecutor implements PosCommandDispatcher.Transa
                 resource.put(PosWire.RSP_DISPLAY_MESSAGE, responseMessage == null ? "" : responseMessage);
                 resource.put(PosWire.RSP_RETAIN_CARD, retainCard);
             } catch (JSONException ignored) {}
-            sender.send(PosEnvelope.response(flowId, resource, null));
+            reply(flowId, "declined rc=" + responseCode + " (" + responseMessage + ")",
+                    PosEnvelope.response(flowId, resource, null));
         }
 
         @Override
