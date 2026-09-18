@@ -885,11 +885,13 @@ public class Fragment_page_admin_atm extends Fragment {
     /**
      * Enables/disables a view and its entire subtree, dimming to 40% alpha when
      * disabled so a restricted control reads as "greyed out". Leaves visibility
-     * untouched (stays VISIBLE).
+     * untouched: a control the layout defaults to gone (the flat/percentage fee
+     * sub-layouts, the Clear buttons) must stay hidden until its own logic shows
+     * it — forcing VISIBLE here showed both fee layouts at once and surfaced the
+     * Clear buttons with nothing to clear.
      */
     private void setViewEnabledDimmed(View v, boolean enabled) {
         if (v == null) return;
-        v.setVisibility(View.VISIBLE);
         v.setAlpha(enabled ? 1f : 0.4f);
         setViewTreeEnabled(v, enabled);
     }
