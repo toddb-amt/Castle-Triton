@@ -835,6 +835,22 @@ public class MainActivity extends AppCompatActivity {
             // Shutdown existing service if any
             if (atmHostService != null) {
                 Log.d(TAG, "Shutting down existing ATM Host Service (config changed)");
+                // The POS stack holds a final reference to THIS service instance
+                // (AtmHostServiceGateway.hostService). After shutdown() that instance
+                // reports initialized=false forever, so every POS sale / balance /
+                // settlement answered host_unreachable until an app restart — an
+                // admin Save, Test Connection or Request New Key was enough to kill
+                // POS mode. Stop the orchestrator here; startPosModeIfEnabled() at
+                // the end of this method rebuilds it bound to the new service.
+                if (posOrchestrator != null) {
+                    Log.d(TAG, "Stopping POS orchestrator — host service is being rebuilt");
+                    try {
+                        posOrchestrator.stop();
+                    } catch (Exception e) {
+                        Log.w(TAG, "POS orchestrator stop failed: " + e.getMessage());
+                    }
+                    posOrchestrator = null;
+                }
                 atmHostService.shutdown();
                 atmHostService = null;
             }
