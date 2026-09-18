@@ -171,6 +171,15 @@ public class AtmHostConnection {
 
         // Enforce TLS 1.2 minimum
         sslSocket.setEnabledProtocols(new String[] { "TLSv1.2", "TLSv1.3" });
+
+        // Bound the TLS handshake. socket.connect() above only bounds the TCP
+        // connect; without this the socket has SO_TIMEOUT=0 while
+        // startHandshake() waits for the ServerHello, so a peer (or MUX) that
+        // ACKs the connect and the ClientHello but never answers blocks the
+        // transaction thread forever — there is no unacked data, so the kernel
+        // never times it out either. The response timeout is applied after the
+        // handshake, below.
+        sslSocket.setSoTimeout(config.getConnectionTimeout());
         sslSocket.startHandshake();
 
         socket = sslSocket;
