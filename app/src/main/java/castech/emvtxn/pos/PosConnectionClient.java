@@ -93,20 +93,38 @@ public final class PosConnectionClient {
     }
 
     private void superviseConnection() {
-        State s = state.get();
-        if (s == State.STOPPED || s == State.CONNECTED) return;
-        if (System.currentTimeMillis() <= staleDeadlineMs) return;
-        Log.w(TAG, "supervisor: connection stalled in state " + s
-                + " past its deadline — forcing recovery (cancel socket, clear JWT, re-register)");
-        WebSocket ws = socket.getAndSet(null);
-        if (ws != null) {
-            try { ws.cancel(); } catch (Exception ignored) {}
+        try {
+            State s = state.get();
+            if (s == State.STOPPED || s == State.CONNECTED) return;
+            if (System.currentTimeMillis() <= staleDeadlineMs) return;
+            Log.w(TAG, "supervisor: connection stalled in state " + s
+                    + " past its deadline — forcing recovery (cancel socket, clear JWT, re-register)");
+            // The supervisor is about to connect itself; a queued retry would open a
+            // second socket beside it.
+            cancelReconnect();
+            WebSocket ws = socket.getAndSet(null);
+            if (ws != null) {
+                // Its onFailure(Canceled) arrives later; the CAS in the listener sees
+                // it is no longer the current socket and ignores it.
+                try { ws.cancel(); } catch (Exception ignored) {}
+            }
+            // The stalled attempt may have been token-poisoned; re-register from scratch.
+            config.clearJwt();
+            armDeadline(PosWire.REGISTRATION_TIMEOUT_MILLIS);
+            state.set(State.CONNECTING);
+            connectNow();
+        } catch (Throwable t) {
+            // scheduleAtFixedRate cancels the periodic task for good on any thrown
+            // exception — which would silently remove this safety net. Never let
+            // one escape; the next period retries.
+            Log.e(TAG, "supervisor: unexpected error — will retry next period: " + t, t);
         }
-        // The stalled attempt may have been token-poisoned; re-register from scratch.
-        config.clearJwt();
-        armDeadline(PosWire.REGISTRATION_TIMEOUT_MILLIS);
-        state.set(State.CONNECTING);
-        connectNow();
+    }
+
+    private void cancelReconnect() {
+        synchronized (scheduleLock) {
+            if (reconnectTask != null) { reconnectTask.cancel(false); reconnectTask = null; }
+        }
     }
 
     // ---- Construction ---------------------------------------------------------
@@ -263,10 +281,24 @@ public final class PosConnectionClient {
             return;
         }
 
-        Request request = new Request.Builder()
-                .url(url)
-                .header("Authorization", "Bearer " + jwt)
-                .build();
+        Request request;
+        try {
+            request = new Request.Builder()
+                    .url(url)
+                    .header("Authorization", "Bearer " + jwt)
+                    .build();
+        } catch (IllegalArgumentException e) {
+            // A malformed connection_url from the proxy. This must never propagate:
+            // from the registrar callback it runs on the OkHttp thread, where an
+            // unchecked exception is rethrown and kills the process — taking the
+            // walk-up fallback down with the POS stack; from the reconnect task it
+            // would leave us in CONNECTING with no task queued. Use the default URL
+            // on the next attempt.
+            Log.e(TAG, "Invalid connection URL '" + url + "' — falling back to default: " + e.getMessage());
+            connectionUrl = null;
+            scheduleReconnect();
+            return;
+        }
 
         Log.d(TAG, "Opening connection socket to " + url);
         // The upgrade must resolve (onOpen/onFailure) within the grace window —
@@ -274,7 +306,16 @@ public final class PosConnectionClient {
         // upgrade would otherwise hang this attempt forever.
         armDeadline(0);
         WebSocket ws = httpClient.newWebSocket(request, new ConnectionWebSocketListener());
-        socket.set(ws);
+        WebSocket prev = socket.getAndSet(ws);
+        if (prev != null && prev != ws) {
+            // An earlier attempt is still open — e.g. a stale close event scheduled a
+            // retry while another attempt was completing. Two live sockets for one TSN
+            // means heartbeats reach only one, and a proxy that enforces one binding
+            // per TSN answers the other with bind_conflict. Cancel the old one; its
+            // callbacks are ignored because it is no longer the current socket.
+            Log.w(TAG, "openSocket: replacing a still-open socket");
+            try { prev.cancel(); } catch (Exception ignored) {}
+        }
     }
 
     /**
@@ -301,9 +342,20 @@ public final class PosConnectionClient {
             if (scheduler == null || scheduler.isShutdown()) return;
             if (reconnectTask != null) reconnectTask.cancel(false);
             reconnectTask = scheduler.schedule(() -> {
-                if (state.get() == State.STOPPED) return;
-                state.set(State.CONNECTING);
-                connectNow();
+                try {
+                    State cur = state.get();
+                    if (cur == State.STOPPED) return;
+                    // A socket came up while this retry was queued — opening another
+                    // would only replace a healthy connection.
+                    if (cur == State.CONNECTED) return;
+                    state.set(State.CONNECTING);
+                    connectNow();
+                } catch (Throwable t) {
+                    // Swallowed into the Future otherwise: we would sit in CONNECTING
+                    // with nothing queued until the supervisor noticed.
+                    Log.e(TAG, "reconnect attempt threw — scheduling another: " + t, t);
+                    scheduleReconnect();
+                }
             }, delayMillis, TimeUnit.MILLISECONDS);
         }
     }
@@ -346,11 +398,26 @@ public final class PosConnectionClient {
     private final class ConnectionWebSocketListener extends WebSocketListener {
         @Override
         public void onOpen(WebSocket webSocket, Response response) {
-            if (!state.compareAndSet(State.CONNECTING, State.CONNECTED)) {
+            if (socket.get() != webSocket) {
+                // Not the current attempt (replaced by openSocket() or cancelled) —
+                // close it quietly; its onClosed is ignored for the same reason.
+                try { webSocket.close(1000, "superseded"); } catch (Exception ignored) {}
+                return;
+            }
+            // openSocket() legitimately runs in RECONNECTING too (a registrar callback
+            // that lands after a retry was queued), so accept both — closing a healthy
+            // socket here only to reconnect a moment later was pure churn.
+            State prev = state.get();
+            boolean opened = (prev == State.CONNECTING || prev == State.RECONNECTING)
+                    && state.compareAndSet(prev, State.CONNECTED);
+            if (!opened) {
                 // Stop was called between newWebSocket() and onOpen() — close.
                 try { webSocket.close(1000, "stopped before open"); } catch (Exception ignored) {}
                 return;
             }
+            // A retry still queued from before this attempt succeeded would open a
+            // second socket beside this one.
+            cancelReconnect();
             Log.d(TAG, "Connection socket open");
             reconnectAttempt = 0;
             staleDeadlineMs = Long.MAX_VALUE;  // CONNECTED has no progress deadline
@@ -381,8 +448,14 @@ public final class PosConnectionClient {
         @Override
         public void onClosed(WebSocket webSocket, int code, String reason) {
             Log.d(TAG, "Connection socket closed: code=" + code + " reason=" + reason);
+            if (!socket.compareAndSet(webSocket, null)) {
+                // A socket we already replaced or cancelled. It must not drive state:
+                // this stale event used to schedule a reconnect beside a healthy
+                // connection — and, with one binding per TSN, a bind_conflict park.
+                Log.d(TAG, "onClosed for a superseded socket — ignored");
+                return;
+            }
             cancelHeartbeat();
-            socket.compareAndSet(webSocket, null);
             if (state.get() == State.STOPPED) return;
             listener.onDisconnected("closed code=" + code + " reason=" + reason);
             scheduleReconnect();
@@ -391,8 +464,13 @@ public final class PosConnectionClient {
         @Override
         public void onFailure(WebSocket webSocket, Throwable t, Response response) {
             Log.w(TAG, "Connection socket failure: " + t.getMessage());
+            if (!socket.compareAndSet(webSocket, null)) {
+                // Superseded/cancelled socket (e.g. the supervisor's or openSocket()'s
+                // cancel() delivering Canceled) — see onClosed.
+                Log.d(TAG, "onFailure for a superseded socket — ignored");
+                return;
+            }
             cancelHeartbeat();
-            socket.compareAndSet(webSocket, null);
             if (state.get() == State.STOPPED) return;
             // The server ANSWERED with an HTTP status instead of upgrading —
             // whatever the code, this token did not get us in. Clear it so the

@@ -235,6 +235,7 @@ public class MainActivity extends AppCompatActivity {
 
         Toolbar toolbar = (Toolbar) findViewById(R.id.toolbar);
         setSupportActionBar(toolbar);
+        initStatusBar();
 
         mSectionsPagerAdapter = new SectionsPagerAdapter(getSupportFragmentManager(), this);
 
@@ -386,6 +387,7 @@ public class MainActivity extends AppCompatActivity {
             }
             posOrchestrator = null;
         }
+        teardownStatusBar();
         super.onDestroy();
     }
 
@@ -452,6 +454,179 @@ public class MainActivity extends AppCompatActivity {
             }
         } catch (Throwable t) {
             Log.w(TAG, "Banner update failed: " + t.getMessage());
+        }
+    }
+
+    // ── Toolbar status: WiFi signal + battery level/charging ──────────────────
+    // Uses ONLY Android system APIs (BatteryManager / WifiManager /
+    // ConnectivityManager) — never the CTOS SDK, which is single-threaded and
+    // must not be touched off the transaction thread.
+    private android.content.BroadcastReceiver batteryReceiver;
+    private android.net.ConnectivityManager.NetworkCallback wifiNetworkCallback;
+    private final android.os.Handler statusHandler =
+            new android.os.Handler(android.os.Looper.getMainLooper());
+    private final Runnable wifiRefreshTask = new Runnable() {
+        @Override public void run() {
+            updateSignalIcon();
+            statusHandler.postDelayed(this, 20000); // periodic safety refresh (RSSI changes aren't always broadcast)
+        }
+    };
+
+    private void initStatusBar() {
+        try {
+            batteryReceiver = new android.content.BroadcastReceiver() {
+                @Override public void onReceive(android.content.Context c, Intent i) { updateBatteryIcon(i); }
+            };
+            Intent sticky = registerReceiver(batteryReceiver, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
+            updateBatteryIcon(sticky); // initial paint from the sticky broadcast
+
+            android.net.ConnectivityManager cm =
+                    (android.net.ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+            if (cm != null) {
+                wifiNetworkCallback = new android.net.ConnectivityManager.NetworkCallback() {
+                    @Override public void onAvailable(android.net.Network n) { runOnUiThread(() -> updateSignalIcon()); }
+                    @Override public void onLost(android.net.Network n) { runOnUiThread(() -> updateSignalIcon()); }
+                    @Override public void onCapabilitiesChanged(android.net.Network n,
+                            android.net.NetworkCapabilities caps) { runOnUiThread(() -> updateSignalIcon()); }
+                };
+                try { cm.registerDefaultNetworkCallback(wifiNetworkCallback); }
+                catch (Throwable t) { Log.w(TAG, "wifi callback register failed: " + t.getMessage()); }
+            }
+            statusHandler.post(wifiRefreshTask);
+        } catch (Throwable t) {
+            Log.w(TAG, "initStatusBar failed: " + t.getMessage());
+        }
+    }
+
+    /** Battery level → 5-step icon + exact %, with a charging bolt when plugged in. */
+    private void updateBatteryIcon(Intent batteryIntent) {
+        try {
+            ImageView img = findViewById(R.id.imgBatteryStatus);
+            ImageView bolt = findViewById(R.id.imgCharging);
+            TextView pctText = findViewById(R.id.txvBatteryPct);
+            if (img == null || batteryIntent == null) return;
+            int level = batteryIntent.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1);
+            int scale = batteryIntent.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, -1);
+            int pct = (level >= 0 && scale > 0) ? Math.round(level * 100f / scale) : -1;
+            int status = batteryIntent.getIntExtra(android.os.BatteryManager.EXTRA_STATUS, -1);
+            boolean charging = status == android.os.BatteryManager.BATTERY_STATUS_CHARGING
+                    || status == android.os.BatteryManager.BATTERY_STATUS_FULL;
+            int lvlIdx;
+            if (pct < 0) lvlIdx = 0;
+            else if (pct >= 88) lvlIdx = 4;
+            else if (pct >= 63) lvlIdx = 3;
+            else if (pct >= 38) lvlIdx = 2;
+            else if (pct >= 13) lvlIdx = 1;
+            else lvlIdx = 0;
+            img.setImageLevel(lvlIdx);
+            if (bolt != null) bolt.setVisibility(charging ? View.VISIBLE : View.GONE);
+            if (pctText != null) pctText.setText(pct < 0 ? "--%" : pct + "%");
+        } catch (Throwable t) {
+            Log.w(TAG, "battery update failed: " + t.getMessage());
+        }
+    }
+
+    /** Tracks which glyph set (wifi fan vs cell bars) is currently shown, so the
+     *  drawable is only swapped when the active transport changes. */
+    private int currentSignalRes = 0;
+
+    /**
+     * Adaptive network indicator: shows the WiFi fan when connected over WiFi and
+     * the cell bars when connected over cellular (whichever transport is active),
+     * with its signal level. When nothing is connected it shows an empty glyph for
+     * the transport the unit has (cellular if a SIM is present, else WiFi).
+     */
+    private void updateSignalIcon() {
+        try {
+            ImageView img = findViewById(R.id.imgSignalStatus);
+            if (img == null) return;
+
+            boolean wifi = false, cell = false;
+            android.net.ConnectivityManager cm =
+                    (android.net.ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+            if (cm != null) {
+                android.net.Network n = cm.getActiveNetwork();
+                android.net.NetworkCapabilities caps = (n != null) ? cm.getNetworkCapabilities(n) : null;
+                if (caps != null) {
+                    wifi = caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI);
+                    cell = caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR);
+                }
+            }
+
+            int res, level;
+            if (wifi) {
+                res = R.drawable.ic_wifi_level; level = wifiSignalLevel();
+            } else if (cell) {
+                res = R.drawable.ic_cell_level; level = cellSignalLevel();
+            } else {
+                res = hasSim() ? R.drawable.ic_cell_level : R.drawable.ic_wifi_level; level = 0;
+            }
+            if (res != currentSignalRes) {   // only reload the drawable on a transport change
+                img.setImageResource(res);
+                currentSignalRes = res;
+            }
+            img.setImageLevel(level);
+        } catch (Throwable t) {
+            Log.w(TAG, "signal update failed: " + t.getMessage());
+        }
+    }
+
+    /** WiFi RSSI → 0-4 bars (0 when off/disconnected). */
+    private int wifiSignalLevel() {
+        try {
+            android.net.wifi.WifiManager wm = (android.net.wifi.WifiManager)
+                    getApplicationContext().getSystemService(WIFI_SERVICE);
+            if (wm != null && wm.isWifiEnabled()) {
+                android.net.wifi.WifiInfo info = wm.getConnectionInfo();
+                if (info != null && info.getNetworkId() != -1) {
+                    return Math.max(0, Math.min(4,
+                            android.net.wifi.WifiManager.calculateSignalLevel(info.getRssi(), 5)));
+                }
+            }
+        } catch (Throwable ignore) {}
+        return 0;
+    }
+
+    /** Cellular signal → 0-4 (SignalStrength.getLevel, API 28+); a healthy default
+     *  when connected but the exact level isn't readable. */
+    private int cellSignalLevel() {
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+                android.telephony.TelephonyManager tm =
+                        (android.telephony.TelephonyManager) getSystemService(TELEPHONY_SERVICE);
+                if (tm != null) {
+                    android.telephony.SignalStrength ss = tm.getSignalStrength();
+                    if (ss != null) return Math.max(0, Math.min(4, ss.getLevel()));
+                }
+            }
+        } catch (Throwable ignore) {}
+        return 3; // connected, level unknown → show a healthy default
+    }
+
+    /** True if a SIM is present and ready (drives the empty-state glyph choice). */
+    private boolean hasSim() {
+        try {
+            android.telephony.TelephonyManager tm =
+                    (android.telephony.TelephonyManager) getSystemService(TELEPHONY_SERVICE);
+            return tm != null && tm.getSimState() == android.telephony.TelephonyManager.SIM_STATE_READY;
+        } catch (Throwable ignore) {
+            return false;
+        }
+    }
+
+    private void teardownStatusBar() {
+        try { statusHandler.removeCallbacks(wifiRefreshTask); } catch (Throwable ignore) {}
+        if (batteryReceiver != null) {
+            try { unregisterReceiver(batteryReceiver); } catch (Throwable ignore) {}
+            batteryReceiver = null;
+        }
+        if (wifiNetworkCallback != null) {
+            try {
+                android.net.ConnectivityManager cm =
+                        (android.net.ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+                if (cm != null) cm.unregisterNetworkCallback(wifiNetworkCallback);
+            } catch (Throwable ignore) {}
+            wifiNetworkCallback = null;
         }
     }
 
@@ -660,6 +835,22 @@ public class MainActivity extends AppCompatActivity {
             // Shutdown existing service if any
             if (atmHostService != null) {
                 Log.d(TAG, "Shutting down existing ATM Host Service (config changed)");
+                // The POS stack holds a final reference to THIS service instance
+                // (AtmHostServiceGateway.hostService). After shutdown() that instance
+                // reports initialized=false forever, so every POS sale / balance /
+                // settlement answered host_unreachable until an app restart — an
+                // admin Save, Test Connection or Request New Key was enough to kill
+                // POS mode. Stop the orchestrator here; startPosModeIfEnabled() at
+                // the end of this method rebuilds it bound to the new service.
+                if (posOrchestrator != null) {
+                    Log.d(TAG, "Stopping POS orchestrator — host service is being rebuilt");
+                    try {
+                        posOrchestrator.stop();
+                    } catch (Exception e) {
+                        Log.w(TAG, "POS orchestrator stop failed: " + e.getMessage());
+                    }
+                    posOrchestrator = null;
+                }
                 atmHostService.shutdown();
                 atmHostService = null;
             }
@@ -2095,12 +2286,42 @@ public class MainActivity extends AppCompatActivity {
      * Abort any in-progress transaction.
      * Sets the abort flag and tries to interrupt the transaction thread.
      */
-    public void abortTransaction() {
+    /**
+     * Abort any in-progress transaction.
+     *
+     * @return {@code true} when the terminal is idle on return — no transaction
+     *         thread alive — so the caller may reset ATM state and leave the page.
+     *         {@code false} when it is NOT: either the request has already gone to
+     *         the host, or the transaction thread did not exit within the grace
+     *         period. In that case the caller must leave GlobalPara alone and stay
+     *         on the transaction page; the thread owns the outcome and clears
+     *         {@code atmTransactionInProgress} / navigates itself when it finishes.
+     *
+     * <p>Why the contract: the previous version cleared {@code atmTransactionInProgress}
+     * and nulled {@code threadTxn} unconditionally after a 4 s wait, although
+     * {@code Thread.interrupt()} cannot unblock a native CTOS call or a socket read.
+     * The UI went idle while the old thread was still inside the SDK, so the next
+     * customer started a second thread issuing CTOS calls concurrently with the
+     * first (the DeadObjectException / CTOS-service-crash class), or the "cancelled"
+     * host call simply completed and moved money after Cancel.</p>
+     */
+    public boolean abortTransaction() {
         Log.d(TAG, "abortTransaction() called");
+
+        // Once the request is on its way to the host the outcome is the host's to
+        // decide and this thread must run to completion to show/print it. Cancelling
+        // here would only hide an approval that has already moved money.
+        if (GlobalPara.atmHostCallInProgress) {
+            Log.w(TAG, "abortTransaction: host request in flight — cannot cancel, letting it complete");
+            return false;
+        }
+
         txnAborted = true;
         needsSdkReinit = true;  // Force full SDK re-init on next transaction
 
-        // Cancel both EMVCL and EMV transactions to unblock any waiting SDK calls
+        // Cancel the contactless kernel to unblock a waiting performTransactionEx().
+        // cancelTransaction() is the one SDK call that is safe cross-thread; nothing
+        // else below may touch the SDK while the transaction thread might be in it.
         try {
             if (emvcl != null) {
                 Log.d(TAG, "Calling emvcl.cancelTransaction() to unblock...");
@@ -2114,22 +2335,31 @@ public class MainActivity extends AppCompatActivity {
         // Full SDK re-init on next transaction (needsSdkReinit=true) will reset state
 
         // Wait for thread to exit
-        if (threadTxn != null && threadTxn.isAlive()) {
+        Thread t = threadTxn;
+        if (t != null && t.isAlive()) {
             try {
                 Log.d(TAG, "Waiting for transaction thread to exit...");
-                threadTxn.join(3000);  // Wait up to 3 seconds
-                if (threadTxn.isAlive()) {
+                t.join(3000);  // Wait up to 3 seconds
+                if (t.isAlive()) {
                     Log.w(TAG, "Thread still alive after 3 seconds, interrupting");
-                    threadTxn.interrupt();
+                    t.interrupt();
                     // Give it one more second after interrupt
-                    threadTxn.join(1000);
+                    t.join(1000);
                 }
             } catch (Exception e) {
                 Log.e(TAG, "Error waiting for thread: " + e.getMessage());
             }
+            if (t.isAlive()) {
+                // Do NOT declare the terminal idle. The thread is still inside the SDK
+                // or a blocking call; it tests txnAborted at its next phase boundary
+                // and clears atmTransactionInProgress itself on exit. Clearing it here
+                // is exactly what let a second thread start CTOS calls alongside this one.
+                Log.w(TAG, "abortTransaction: transaction thread still running — terminal stays busy until it exits");
+                return false;
+            }
         }
 
-        // Flush MSR buffer
+        // Thread is gone (or never existed): the SDK is ours to touch again.
         try {
             if (msr != null) {
                 Log.d(TAG, "Flushing MSR tracks buffer");
@@ -2155,6 +2385,7 @@ public class MainActivity extends AppCompatActivity {
         }
 
         Log.d(TAG, "abortTransaction() complete - SDK will re-init on next transaction");
+        return true;
     }
 
     /**
@@ -2446,10 +2677,18 @@ public class MainActivity extends AppCompatActivity {
         // NOTE: SDK re-initialization is done INSIDE the thread (more thorough)
         // Removed duplicate pre-thread initialization to reduce delay
 
-        // Simple cleanup - just clear old thread reference (NO SDK calls)
-        if (threadTxn != null) {
-            threadTxn = null;
+        // A previous transaction thread that is still running owns the SDK. Never start
+        // a second one beside it — concurrent CTOS calls crash the CTOS service. The
+        // atmTransactionInProgress gate above normally catches this; this is the
+        // backstop for the flag and the thread ever disagreeing.
+        if (threadTxn != null && threadTxn.isAlive()) {
+            Log.w(TAG, "Previous transaction thread still running — refusing to start another");
+            ui_ShowMsg("Please wait —\nfinishing previous transaction\n");
+            return 0;
         }
+
+        // Simple cleanup - just clear old thread reference (NO SDK calls)
+        threadTxn = null;
 
         // Reset flags and mark transaction as in progress
         resetAbortFlag();
@@ -2799,7 +3038,12 @@ public class MainActivity extends AppCompatActivity {
                     if (entryMode == 0) {
                         Log.d(TAG, "No card detected - exiting");
                         ui_ShowMsg("Cancelled\n");
-                        // cancelTransaction was already called by abortTransaction()
+                        // cancelTransaction was already called by abortTransaction().
+                        // Release a POS-armed slot too (exactly-once; no-op when this
+                        // wasn't POS-driven or the Cancel handler already answered) —
+                        // the handler only answers when abortTransaction() reported idle.
+                        castech.emvtxn.pos.PosTransactionObserver.notifyDeclined(
+                                "user_cancelled", "cancelled at terminal", false);
                         GlobalPara.atmTransactionInProgress = false;
                         ui_EnableAllButton();
                         return;
@@ -2996,8 +3240,8 @@ public class MainActivity extends AppCompatActivity {
 
                             tlvUtility_ct.TLVDataClear();
                             tlvUtility_ct.TLVDataParse(reqData.tlvBuf, reqData.tlvLen);
-                            Log.d(TAG, "TLVData(UtilityDB) : " + Converter.byteArray2HexString(tlvUtility_ct.TLVDataBase, tlvUtility_ct.intTLVDataBaseLen));
-                            Log.d(TAG, "reqData.tlvBuf     : " + Converter.byteArray2HexString(reqData.tlvBuf, reqData.tlvLen));
+                            Log.d(TAG, "TLVData(UtilityDB) : " + LogMask.tlv(Converter.byteArray2HexString(tlvUtility_ct.TLVDataBase, tlvUtility_ct.intTLVDataBaseLen)));
+                            Log.d(TAG, "reqData.tlvBuf     : " + LogMask.tlv(Converter.byteArray2HexString(reqData.tlvBuf, reqData.tlvLen)));
 
                             //Version
                             TLVData.tag = 0x9F09;
@@ -3040,7 +3284,7 @@ public class MainActivity extends AppCompatActivity {
 
                                 Log.d(TAG, "tag :" + "0xDF32 (PAN mask)");
                                 Log.d(TAG, "value :" + Converter.byteArray2HexString(TLVData.value, TLVData.len));
-                                Log.d(TAG, "ASCII :" + GlobalPara.asciiPAN);
+                                Log.d(TAG, "ASCII :" + LogMask.pan(GlobalPara.asciiPAN));
                                 ui_ShowMsg("PAN :" + GlobalPara.asciiPAN);
                                 // Removed 1.3s sleep - PAN visible during PIN entry
                             } else {
@@ -3064,7 +3308,7 @@ public class MainActivity extends AppCompatActivity {
                             intRtn = tlvUtility_ct.TLVDataGet(TLVData);
                             if (intRtn == 0) {
                                 Log.d(TAG, "tag :" + "0xDF30 (PAN encrypt)");
-                                Log.d(TAG, "TagData(DF30):" + Converter.byteArray2HexString(TLVData.value, TLVData.len));
+                                Log.d(TAG, "TagData(DF30): [" + TLVData.len + " bytes encrypted PAN]");
                             } else {
                                 Log.d(TAG, "NoTag(DF30)");
                             }
@@ -3127,11 +3371,11 @@ public class MainActivity extends AppCompatActivity {
                             intRtn = tlvUtility_ct.TLVDataGet(TLVData);
                             if (intRtn == 0 && TLVData.len > 0) {
                                 Log.d(TAG, "tag :" + "0xDF33 (Track2 encrypt)");
-                                Log.d(TAG, "TagData(DF33):" + Converter.byteArray2HexString(TLVData.value, TLVData.len));
+                                Log.d(TAG, "TagData(DF33): [" + TLVData.len + " bytes encrypted Track 2]");
                                 // Store encrypted Track 2 for ATM host transactions (chip cards)
                                 if (GlobalPara.atmTrack2Data == null || GlobalPara.atmTrack2Data.isEmpty() || GlobalPara.atmTrack2Data.contains("*")) {
                                     GlobalPara.atmTrack2Data = "E:" + Converter.byteArray2HexString(TLVData.value, TLVData.len);
-                                    Log.d(TAG, "Stored ATM Track2 Data (CT encrypted): " + GlobalPara.atmTrack2Data);
+                                    Log.d(TAG, "Stored ATM Track2 Data (CT encrypted): " + LogMask.len(GlobalPara.atmTrack2Data));
                                 }
                             } else {
                                 Log.d(TAG, "NoTag(DF33) or empty, trying DF32 (masked)");
@@ -3179,7 +3423,7 @@ public class MainActivity extends AppCompatActivity {
                                     // Build Track 2 in ISO format: ;PAN=YYMMsss?
                                     // Server expects this format and strips ; and ?
                                     GlobalPara.atmTrack2Data = ";" + maskedPan + "=" + expiry + serviceCode + "?";
-                                    Log.d(TAG, "Stored ATM Track2 Data (CT masked ISO format): " + GlobalPara.atmTrack2Data);
+                                    Log.d(TAG, "Stored ATM Track2 Data (CT masked ISO format): " + LogMask.track2(GlobalPara.atmTrack2Data));
                                 } else {
                                     Log.d(TAG, "NoTag(DF32) - no Track2 available");
                                 }
@@ -3320,7 +3564,7 @@ public class MainActivity extends AppCompatActivity {
                                 Log.d(TAG, "ATM MODE (CT): Tag 57 dataGet returned: " + String.format("0x%08X", tag57Rtn) + ", len=" + tag57.len);
                                 if (tag57Rtn == 0 && tag57.len > 0) {
                                     String track2Hex = Converter.byteArray2HexString(tag57.value, tag57.len);
-                                    Log.d(TAG, "ATM MODE (CT): Tag 57 raw: " + track2Hex);
+                                    Log.d(TAG, "ATM MODE (CT): Tag 57 raw: " + LogMask.track2(track2Hex));
                                     // BCD encoded - PAN is before 'D' separator
                                     int sepIdx = track2Hex.toUpperCase().indexOf("D");
                                     if (sepIdx > 0) {
@@ -3376,7 +3620,7 @@ public class MainActivity extends AppCompatActivity {
                             Log.d(TAG, "ATM PIN: PIN entry successful (POST-TRANSACTION, No-CVM approach)");
                             GlobalPara.atmPinCollectedPostTransaction = true;  // Mark as post-cryptogram PIN
                         } else if (GlobalPara.atmMode) {
-                            Log.d(TAG, "ATM MODE (CT): PIN collected via EMV callback (ISO-0): " + GlobalPara.atmEncryptedPinBlock);
+                            Log.d(TAG, "ATM MODE (CT): PIN collected via EMV callback (ISO-0): " + LogMask.pinBlock(GlobalPara.atmEncryptedPinBlock));
                             GlobalPara.atmPinCollectedPostTransaction = false;  // PIN was collected during EMV flow
                         }
                         if (GlobalPara.scrnBrdcstRecver != null) {
@@ -3392,7 +3636,7 @@ public class MainActivity extends AppCompatActivity {
                             // BUT if we collected PIN manually via DUKPT, we can continue!
                             if (GlobalPara.atmEncryptedPinBlock != null && !GlobalPara.atmEncryptedPinBlock.isEmpty()) {
                                 Log.w(TAG, ">>> ATM: SDK PIN failed (0x1003) but manual DUKPT PIN collected - CONTINUING");
-                                Log.d(TAG, ">>> ATM: PIN block = " + GlobalPara.atmEncryptedPinBlock);
+                                Log.d(TAG, ">>> ATM: PIN block = " + LogMask.pinBlock(GlobalPara.atmEncryptedPinBlock));
                                 Log.d(TAG, ">>> ATM: KSN = " + GlobalPara.atmDukptKsn);
                                 // CRITICAL: Set transaction result to "Go Online" so host authorization proceeds
                                 GlobalPara.transactionResult = 0x0004;  // Go Online
@@ -3441,7 +3685,7 @@ public class MainActivity extends AppCompatActivity {
                             // Store EMV data for ATM host transaction (includes 5A for PIN translation)
                             if (GlobalPara.atmMode && authRequestData.tlvLen > 0) {
                                 GlobalPara.atmEmvData = Converter.byteArray2HexString(authRequestData.tlvBuf, authRequestData.tlvLen);
-                                Log.d(TAG, "Stored ATM EMV Data (CT): " + GlobalPara.atmEmvData);
+                                Log.d(TAG, "Stored ATM EMV Data (CT): " + LogMask.tlv(GlobalPara.atmEmvData));
                             }
 
                             TLVData.tag = 0x95;
@@ -3503,7 +3747,7 @@ public class MainActivity extends AppCompatActivity {
                             Log.d(TAG, "ATM: Sensitive data request (5A,57) rtn=" + String.format("0x%08X", sensRtn) + ", len=" + sensitiveData.tlvLen);
                             if (sensRtn == 0 && sensitiveData.tlvLen > 0) {
                                 String sensitiveHex = Converter.byteArray2HexString(sensitiveData.tlvBuf, sensitiveData.tlvLen);
-                                Log.d(TAG, "ATM: Sensitive EMV data (5A,57): " + sensitiveHex);
+                                Log.d(TAG, "ATM: Sensitive EMV data (5A,57): " + LogMask.tlv(sensitiveHex));
                                 // Store the clear PAN for PIN translation
                                 GlobalPara.atmSensitiveEmvData = sensitiveHex;
                             } else {
@@ -3662,13 +3906,13 @@ public class MainActivity extends AppCompatActivity {
                                 Log.d(TAG, "KSN Track1 : " + Converter.byteArray2HexString(encryptedTracks.track1KSN, encryptedTracks.track1KSNLen));
                             }
                             if (encryptedTracks.track2EncryptedDataLen > 0) {
-                                Log.d(TAG, "Encrypted Track2 : " + Converter.byteArray2HexString(encryptedTracks.track2EncryptedData, encryptedTracks.track2EncryptedDataLen));
+                                Log.d(TAG, "Encrypted Track2 : [" + encryptedTracks.track2EncryptedDataLen + " bytes]");
                                 Log.d(TAG, "Checksum Track2 : " + Converter.byteArray2HexString(encryptedTracks.track2Checksum, encryptedTracks.track2ChecksumLen));
                                 Log.d(TAG, "KSN Track2 : " + Converter.byteArray2HexString(encryptedTracks.track2KSN, encryptedTracks.track2KSNLen));
 
                                 // Store encrypted track 2 for ATM transactions
                                 GlobalPara.atmTrack2Data = Converter.byteArray2HexString(encryptedTracks.track2EncryptedData, encryptedTracks.track2EncryptedDataLen);
-                                Log.d(TAG, "Stored ATM Track2 Data: " + GlobalPara.atmTrack2Data);
+                                Log.d(TAG, "Stored ATM Track2 Data: " + LogMask.track2(GlobalPara.atmTrack2Data));
                             }
                             if (encryptedTracks.track3EncryptedDataLen > 0) {
                                 Log.d(TAG, "Encrypted Track3 : " + Converter.byteArray2HexString(encryptedTracks.track3EncryptedData, encryptedTracks.track3EncryptedDataLen));
@@ -3858,9 +4102,9 @@ public class MainActivity extends AppCompatActivity {
                         tlvUtility.TLVDataClear();
                         tlvUtility.TLVDataParse(rcData.chipData, rcData.chipDataLen);
                         tlvUtility.TLVDataParse(rcData.additionalData, rcData.additionalDataLen);
-                        Log.d(TAG, "TLVData(UtilityDB) : " + Converter.byteArray2HexString(tlvUtility.TLVDataBase, tlvUtility.intTLVDataBaseLen));
+                        Log.d(TAG, "TLVData(UtilityDB) : " + LogMask.tlv(Converter.byteArray2HexString(tlvUtility.TLVDataBase, tlvUtility.intTLVDataBaseLen)));
                         Log.d(TAG, "rcData.track1Data  : " + Converter.byteArray2HexString(rcData.track1Data, rcData.track1Len));
-                        Log.d(TAG, "rcData.track2Data  : " + Converter.byteArray2HexString(rcData.track2Data, rcData.track2Len));
+                        Log.d(TAG, "rcData.track2Data  : [" + rcData.track2Len + " bytes]");
                         Log.d(TAG, "rcData.chipData    : " + Converter.byteArray2HexString(rcData.chipData, rcData.chipDataLen));
                         Log.d(TAG, "rcData.addData     : " + Converter.byteArray2HexString(rcData.additionalData, rcData.additionalDataLen));
 
@@ -3879,7 +4123,7 @@ public class MainActivity extends AppCompatActivity {
                         // Store EMV data for ATM host transaction (CL)
                         if (GlobalPara.atmMode && tlvUtility.intTLVDataBaseLen > 0) {
                             GlobalPara.atmEmvData = Converter.byteArray2HexString(tlvUtility.TLVDataBase, tlvUtility.intTLVDataBaseLen);
-                            Log.d(TAG, "Stored ATM EMV Data (CL): " + GlobalPara.atmEmvData);
+                            Log.d(TAG, "Stored ATM EMV Data (CL): " + LogMask.tlv(GlobalPara.atmEmvData));
                         }
 
                         // Try to get tag 5A (PAN) for PIN translation - contactless
@@ -4080,8 +4324,8 @@ public class MainActivity extends AppCompatActivity {
                                     track2Hex = track2Hex.toUpperCase().replaceAll("F+$", "");
                                     String track2Ascii = ";" + track2Hex.replace("D", "=") + "?";
 
-                                    Log.d(TAG, "ATM HOST (CL): Track2 raw hex: " + track2Hex);
-                                    Log.d(TAG, "ATM HOST (CL): Track2 ASCII: " + track2Ascii);
+                                    Log.d(TAG, "ATM HOST (CL): Track2 raw hex: " + LogMask.len(track2Hex));
+                                    Log.d(TAG, "ATM HOST (CL): Track2 ASCII: " + LogMask.track2(track2Ascii));
 
                                     // Try to encrypt track 2 with DUKPT
                                     DukptEncryptedData encryptedTrack2 = encryptTrack2WithDukpt(track2Ascii);
@@ -4090,7 +4334,7 @@ public class MainActivity extends AppCompatActivity {
                                         cardData.setEncryptedTrack2(Converter.hexString2ByteArray(encryptedTrack2.encryptedData));
                                         cardData.setTrack2KSN(Converter.hexString2ByteArray(encryptedTrack2.ksn));
                                         Log.d(TAG, "ATM HOST (CL): Track2 ENCRYPTED with DUKPT");
-                                        Log.d(TAG, "  Encrypted: " + encryptedTrack2.encryptedData);
+                                        Log.d(TAG, "  Encrypted: " + LogMask.len(encryptedTrack2.encryptedData));
                                         Log.d(TAG, "  KSN: " + encryptedTrack2.ksn);
 
                                         // Also set clear track 2 for processor (if not masked)
@@ -4114,7 +4358,7 @@ public class MainActivity extends AppCompatActivity {
                                 // Set encrypted PIN block and PIN KSN
                                 if (GlobalPara.atmEncryptedPinBlock != null && !GlobalPara.atmEncryptedPinBlock.isEmpty()) {
                                     cardData.setEncryptedPinBlock(GlobalPara.atmEncryptedPinBlock);
-                                    Log.d(TAG, "ATM HOST (CL): PIN block set: " + GlobalPara.atmEncryptedPinBlock);
+                                    Log.d(TAG, "ATM HOST (CL): PIN block set: " + LogMask.pinBlock(GlobalPara.atmEncryptedPinBlock));
                                     // Set PIN KSN separately for DUKPT PIN decryption
                                     if (GlobalPara.atmDukptKsn != null && !GlobalPara.atmDukptKsn.isEmpty()) {
                                         cardData.setPinBlockKSN(Converter.hexString2ByteArray(GlobalPara.atmDukptKsn));
@@ -4201,7 +4445,7 @@ public class MainActivity extends AppCompatActivity {
                                         track2Hex = track2Hex.toUpperCase().replaceAll("F+$", "");
                                         track2AsciiCT = ";" + track2Hex.replace("D", "=") + "?";
                                         Log.d(TAG, "ATM HOST (CT): Track2 from tag 57, len=" + TLVData.len);
-                                        Log.d(TAG, "ATM HOST (CT): Track2 ASCII: " + track2AsciiCT);
+                                        Log.d(TAG, "ATM HOST (CT): Track2 ASCII: " + LogMask.track2(track2AsciiCT));
                                     } else {
                                         // Tag 57 not available (Castle masks for PCI), check stored track 2
                                         Log.w(TAG, "ATM HOST (CT): Tag 57 not available, checking GlobalPara.atmTrack2Data");
@@ -4250,7 +4494,7 @@ public class MainActivity extends AppCompatActivity {
                                 // Set encrypted PIN block and PIN KSN
                                 if (GlobalPara.atmEncryptedPinBlock != null && !GlobalPara.atmEncryptedPinBlock.isEmpty()) {
                                     cardData.setEncryptedPinBlock(GlobalPara.atmEncryptedPinBlock);
-                                    Log.d(TAG, "ATM HOST (CT): PIN block set: " + GlobalPara.atmEncryptedPinBlock);
+                                    Log.d(TAG, "ATM HOST (CT): PIN block set: " + LogMask.pinBlock(GlobalPara.atmEncryptedPinBlock));
                                     // Set PIN KSN separately for DUKPT PIN decryption
                                     if (GlobalPara.atmDukptKsn != null && !GlobalPara.atmDukptKsn.isEmpty()) {
                                         cardData.setPinBlockKSN(Converter.hexString2ByteArray(GlobalPara.atmDukptKsn));
@@ -4476,12 +4720,28 @@ public class MainActivity extends AppCompatActivity {
 
                 GlobalPara.clLED.startIdleLEDBehavior();
 
-                // Check if ATM mode - navigate to receipt page
-                // Include both withdrawal (amount > 0) and balance inquiry mode
-                if (GlobalPara.atmMode ||
+                if (txnAborted && !GlobalPara.atmHostCallSuccess) {
+                    // Cancelled after card detection and the host did not approve —
+                    // either nothing was sent (sendAtmHostRequestWithPinRetry returned
+                    // "Transaction cancelled") or the cancel raced a decline. Nothing to
+                    // receipt. The Cancel handler stayed on the page because this thread
+                    // was still alive, so return to the menu from here, and release a
+                    // POS-armed slot (exactly-once; no-op otherwise). An APPROVAL always
+                    // takes the receipt path below, cancelled or not: money moved.
+                    Log.d(TAG, "Transaction cancelled — returning to main menu");
+                    castech.emvtxn.pos.PosTransactionObserver.notifyDeclined(
+                            "user_cancelled", "cancelled at terminal", false);
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            navigateToPage(GlobalDef.d_PAGE_MAIN_MENU);
+                        }
+                    });
+                } else if (GlobalPara.atmMode ||
                     (GlobalPara.atmSelectedAmount != null && !"0.00".equals(GlobalPara.atmSelectedAmount)) ||
                     GlobalPara.atmBalanceInquiryMode) {
-                    // ATM Mode: Mark transaction as complete and navigate to receipt
+                    // ATM Mode (withdrawal with amount > 0, or balance inquiry):
+                    // mark transaction as complete and navigate to receipt
                     GlobalPara.atmTransactionComplete = true;
 
                     // Small delay before navigating to receipt
@@ -5144,43 +5404,63 @@ public class MainActivity extends AppCompatActivity {
             long surchargeCents, String acctType, String pathTag) {
         int attempt = 1;
         while (true) {
+            // Cancel pressed while the card/PIN was being read (or during a PIN
+            // re-prompt): nothing has gone to the host for THIS attempt, so honour it
+            // here — the last point at which cancelling is free. Past this line the
+            // request is committed and abortTransaction() refuses (atmHostCallInProgress).
+            if (txnAborted) {
+                Log.w(TAG, "ATM HOST (" + pathTag + "): cancelled before send — not contacting host");
+                GlobalPara.atmHostCallSuccess = false;
+                GlobalPara.atmResponseMessage = "Transaction cancelled";
+                return;
+            }
+
             atmTransactionLatch = new java.util.concurrent.CountDownLatch(1);
             // Re-set transaction listener (may have been overwritten by admin screen)
             if (atmTransactionEventListener != null) {
                 atmHostService.setEventListener(atmTransactionEventListener);
                 Log.d(TAG, "ATM HOST (" + pathTag + "): Re-set transaction event listener");
             }
-            if (GlobalPara.atmBalanceInquiryMode) {
-                Log.d(TAG, "ATM HOST (" + pathTag + "): Sending BALANCE INQUIRY, account=" + acctType
-                        + " (attempt " + attempt + ")");
-                atmHostService.performBalanceInquiry(cardData, acctType);
-            } else {
-                Log.d(TAG, "ATM HOST (" + pathTag + "): Sending WITHDRAWAL - amount=" + amountCents
-                        + " cents, surcharge=" + surchargeCents + " cents, account=" + acctType
-                        + " (attempt " + attempt + ")");
-                atmHostService.performWithdrawal(cardData, amountCents, surchargeCents, acctType);
-            }
-
-            // Wait for the host result. MUST outlast the connection layer's own
-            // response timeout (120s for EFX/busy-MUX paths): the socket layer is
-            // the authority on giving up, and every outcome it produces (response,
-            // timeout, error) releases this latch via the listener callbacks. When
-            // this latch was 60s it fired FIRST on a ~50-120s host, abandoning an
-            // in-flight authorization the host then answered "after the fact" —
-            // the customer saw a timeout while the host approved/declined for real.
+            // From here until the latch releases, the request is committed to the host:
+            // abortTransaction() sees this flag and refuses, so a Cancel tap can never
+            // hide an approval that already moved money. Cleared in finally on every
+            // exit path (response, timeout, interrupt).
+            GlobalPara.atmHostCallInProgress = true;
             try {
-                boolean completed = atmTransactionLatch.await(130, java.util.concurrent.TimeUnit.SECONDS);
-                if (!completed) {
-                    Log.e(TAG, "ATM HOST (" + pathTag + "): Transaction TIMEOUT after 130 seconds");
+                if (GlobalPara.atmBalanceInquiryMode) {
+                    Log.d(TAG, "ATM HOST (" + pathTag + "): Sending BALANCE INQUIRY, account=" + acctType
+                            + " (attempt " + attempt + ")");
+                    atmHostService.performBalanceInquiry(cardData, acctType);
+                } else {
+                    Log.d(TAG, "ATM HOST (" + pathTag + "): Sending WITHDRAWAL - amount=" + amountCents
+                            + " cents, surcharge=" + surchargeCents + " cents, account=" + acctType
+                            + " (attempt " + attempt + ")");
+                    atmHostService.performWithdrawal(cardData, amountCents, surchargeCents, acctType);
+                }
+
+                // Wait for the host result. MUST outlast the connection layer's own
+                // response timeout (120s for EFX/busy-MUX paths): the socket layer is
+                // the authority on giving up, and every outcome it produces (response,
+                // timeout, error) releases this latch via the listener callbacks. When
+                // this latch was 60s it fired FIRST on a ~50-120s host, abandoning an
+                // in-flight authorization the host then answered "after the fact" —
+                // the customer saw a timeout while the host approved/declined for real.
+                try {
+                    boolean completed = atmTransactionLatch.await(130, java.util.concurrent.TimeUnit.SECONDS);
+                    if (!completed) {
+                        Log.e(TAG, "ATM HOST (" + pathTag + "): Transaction TIMEOUT after 130 seconds");
+                        GlobalPara.atmHostCallSuccess = false;
+                        GlobalPara.atmResponseMessage = "Transaction timeout";
+                        return;
+                    }
+                } catch (InterruptedException e) {
+                    Log.e(TAG, "ATM HOST (" + pathTag + "): Transaction interrupted: " + e.getMessage());
                     GlobalPara.atmHostCallSuccess = false;
-                    GlobalPara.atmResponseMessage = "Transaction timeout";
+                    GlobalPara.atmResponseMessage = "Transaction interrupted";
                     return;
                 }
-            } catch (InterruptedException e) {
-                Log.e(TAG, "ATM HOST (" + pathTag + "): Transaction interrupted: " + e.getMessage());
-                GlobalPara.atmHostCallSuccess = false;
-                GlobalPara.atmResponseMessage = "Transaction interrupted";
-                return;
+            } finally {
+                GlobalPara.atmHostCallInProgress = false;
             }
 
             // Anything other than a retryable incorrect-PIN decline is final.
@@ -5268,7 +5548,7 @@ public class MainActivity extends AppCompatActivity {
             boolean dukptOK = requestATMPinEntryDukptMvp();
 
             if (dukptOK) {
-                Log.d(TAG, "ATM PIN: DUKPT successful - PIN block: " + GlobalPara.atmEncryptedPinBlock);
+                Log.d(TAG, "ATM PIN: DUKPT successful - PIN block: " + LogMask.pinBlock(GlobalPara.atmEncryptedPinBlock));
                 Log.d(TAG, "ATM PIN: KSN: " + GlobalPara.atmDukptKsn);
                 return true;
             } else {
@@ -5611,7 +5891,7 @@ public class MainActivity extends AppCompatActivity {
 
             if (encryptedBlock != null && encryptedBlock.length >= 8) {
                 GlobalPara.atmEncryptedPinBlock = Converter.byteArray2HexString(encryptedBlock, 8);
-                Log.d(TAG, "DUKPT: Encrypted PIN block: " + GlobalPara.atmEncryptedPinBlock);
+                Log.d(TAG, "DUKPT: Encrypted PIN block: " + LogMask.pinBlock(GlobalPara.atmEncryptedPinBlock));
             }
 
             if (ksn != null && ksn.length > 0) {
@@ -5961,7 +6241,7 @@ public class MainActivity extends AppCompatActivity {
             // Process results
             if (encryptedBlock != null && encryptedBlock.length >= 8) {
                 GlobalPara.atmEncryptedPinBlock = Converter.byteArray2HexString(encryptedBlock, 8);
-                Log.d(TAG, ">>> MVP: Encrypted PIN block: " + GlobalPara.atmEncryptedPinBlock);
+                Log.d(TAG, ">>> MVP: Encrypted PIN block: " + LogMask.pinBlock(GlobalPara.atmEncryptedPinBlock));
             } else {
                 Log.e(TAG, ">>> MVP: encryptedBlock is null or too short");
             }
@@ -9004,7 +9284,7 @@ public class MainActivity extends AppCompatActivity {
             Log.d(TAG, "Tag 5A (PAN): rtn=" + String.format("0x%08X", rtn) + ", len=" + tag5A.len);
             if (rtn == 0 && tag5A.len > 0) {
                 String hex = Converter.byteArray2HexString(tag5A.value, tag5A.len);
-                Log.d(TAG, "  5A hex = " + hex);
+                Log.d(TAG, "  5A hex = " + LogMask.pan(hex));
                 Log.d(TAG, "  Contains * (masked): " + hex.contains("*"));
             }
 
@@ -9017,7 +9297,7 @@ public class MainActivity extends AppCompatActivity {
             Log.d(TAG, "Tag 57 (Track2): rtn=" + String.format("0x%08X", rtn) + ", len=" + tag57.len);
             if (rtn == 0 && tag57.len > 0) {
                 String hex = Converter.byteArray2HexString(tag57.value, tag57.len);
-                Log.d(TAG, "  57 hex = " + hex);
+                Log.d(TAG, "  57 hex = " + LogMask.track2(hex));
                 Log.d(TAG, "  Contains * (masked): " + hex.contains("*"));
             }
 
@@ -9060,10 +9340,10 @@ public class MainActivity extends AppCompatActivity {
 
             // Log what we have in GlobalPara
             Log.d(TAG, "--- GlobalPara State ---");
-            Log.d(TAG, "  asciiPAN = " + GlobalPara.asciiPAN);
-            Log.d(TAG, "  atmTrack2Data = " + GlobalPara.atmTrack2Data);
-            Log.d(TAG, "  atmClearPan = " + GlobalPara.atmClearPan);
-            Log.d(TAG, "  atmEncryptedPinBlock = " + GlobalPara.atmEncryptedPinBlock);
+            Log.d(TAG, "  asciiPAN = " + LogMask.pan(GlobalPara.asciiPAN));
+            Log.d(TAG, "  atmTrack2Data = " + LogMask.track2(GlobalPara.atmTrack2Data));
+            Log.d(TAG, "  atmClearPan = " + LogMask.pan(GlobalPara.atmClearPan));
+            Log.d(TAG, "  atmEncryptedPinBlock = " + LogMask.pinBlock(GlobalPara.atmEncryptedPinBlock));
 
             Log.d(TAG, "=== END EMV TAG DUMP ===");
 
@@ -9104,7 +9384,7 @@ public class MainActivity extends AppCompatActivity {
 
             // If we have a PIN block from the SDK, compare
             if (GlobalPara.atmEncryptedPinBlock != null && !GlobalPara.atmEncryptedPinBlock.isEmpty()) {
-                Log.d(TAG, "Current SDK PIN block: " + GlobalPara.atmEncryptedPinBlock);
+                Log.d(TAG, "Current SDK PIN block: " + LogMask.pinBlock(GlobalPara.atmEncryptedPinBlock));
                 Log.d(TAG, "(Note: SDK block is encrypted, can't compare directly)");
             } else {
                 Log.d(TAG, "No PIN block in GlobalPara yet");

@@ -410,7 +410,7 @@ public class MyEMVSPEvent implements CtEMV.IEventShowVirtualPINEx, CtEMV.IEventG
                 int tag57Rtn = mainAct.emv.dataGet(tag57);
                 if (tag57Rtn == 0 && tag57.len > 0) {
                     String track2Hex = Converter.byteArray2HexString(tag57.value, tag57.len);
-                    Log.d(TAG, "  Tag 57 raw: " + track2Hex);
+                    Log.d(TAG, "  Tag 57 raw: " + castech.emvtxn.LogMask.track2(track2Hex));
                     int sepIdx = track2Hex.toUpperCase().indexOf("D");
                     if (sepIdx > 0) {
                         String panFromTrack2 = track2Hex.substring(0, sepIdx);
@@ -596,7 +596,7 @@ public class MyEMVSPEvent implements CtEMV.IEventShowVirtualPINEx, CtEMV.IEventG
                 int tag57Rtn = mainAct.emv.dataGet(tag57);
                 if (tag57Rtn == 0 && tag57.len > 0) {
                     String track2Hex = Converter.byteArray2HexString(tag57.value, tag57.len);
-                    Log.d(TAG, "ATM PIN: Tag 57 raw: " + track2Hex);
+                    Log.d(TAG, "ATM PIN: Tag 57 raw: " + castech.emvtxn.LogMask.track2(track2Hex));
                     int sepIdx = track2Hex.toUpperCase().indexOf("D");
                     if (sepIdx > 0) {
                         String panFromTrack2 = track2Hex.substring(0, sepIdx);
@@ -986,7 +986,7 @@ public class MyEMVSPEvent implements CtEMV.IEventShowVirtualPINEx, CtEMV.IEventG
 
                 // Store encrypted PIN block for ATM host communication
                 GlobalPara.atmEncryptedPinBlock = Converter.byteArray2HexString(fixedKey.getOutpuData(), outblocklen);
-                Log.d(TAG, "ATM: Stored ISO-0 PIN block (FixedKey): " + GlobalPara.atmEncryptedPinBlock);
+                Log.d(TAG, "ATM: Stored ISO-0 PIN block (FixedKey): " + castech.emvtxn.LogMask.pinBlock(GlobalPara.atmEncryptedPinBlock));
             }
         } catch (CTOS.CtKMS2Exception e) {
             Log.e(TAG, "startVirtualPin Fail: " + String.format("0x%X", e.getError()));

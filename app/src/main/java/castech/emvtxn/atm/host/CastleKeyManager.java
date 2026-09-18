@@ -441,8 +441,6 @@ public class CastleKeyManager {
         String keyPartB = combinedKey.substring(16, 32);
         Log.d(TAG, "  Key Part A: " + maskKey(keyPartA));
         Log.d(TAG, "  Key Part B: " + maskKey(keyPartB));
-        Log.d(TAG, "  DEBUG ENCRYPTED KEY A: " + keyPartA);
-        Log.d(TAG, "  DEBUG ENCRYPTED KEY B: " + keyPartB);
 
         // Decrypt using hardware TMK at CFFF/0000 — no software fallback
         if (!checkKeyExists(tmkKeySet, tmkKeyIndex)) {
@@ -671,7 +669,10 @@ public class CastleKeyManager {
             key.dataEncrypt();
             byte[] encrypted = key.getOutpuData();
             if (encrypted != null) {
-                Log.d(TAG, "  " + label + " => " + bytesToHexString(encrypted));
+                // KCV-length prefix only — never the full ciphertext of a known
+                // plaintext under the master key.
+                String hex = bytesToHexString(encrypted);
+                Log.d(TAG, "  " + label + " => " + hex.substring(0, Math.min(6, hex.length())) + " (KCV)");
             } else {
                 Log.d(TAG, "  " + label + " => null");
             }
@@ -799,7 +800,7 @@ public class CastleKeyManager {
 
             if (encryptedBlock != null && encryptedBlock.length >= 8) {
                 String result = bytesToHexString(encryptedBlock);
-                Log.d(TAG, "  MKSK encrypted PIN block: " + result);
+                Log.d(TAG, "  MKSK encrypted PIN block: [" + (result.length() / 2) + " bytes]");
                 return result;
             }
 
@@ -1355,7 +1356,7 @@ public class CastleKeyManager {
 
             if (encryptedBlock != null && encryptedBlock.length >= 8) {
                 String result = bytesToHexString(encryptedBlock);
-                Log.d(TAG, "  Encrypted PIN block: " + result);
+                Log.d(TAG, "  Encrypted PIN block: [" + (result.length() / 2) + " bytes]");
                 return result;
             } else {
                 Log.e(TAG, "FixedKey encryption returned invalid result");
@@ -1511,13 +1512,16 @@ public class CastleKeyManager {
             Log.d(TAG, "=== Software PIN Block Encryption ===");
 
             byte[] pinBlockBytes = hexStringToBytes(clearPinBlock);
-            Log.d(TAG, "  Clear PIN block: " + maskKey(clearPinBlock));
+            // Never log the clear PIN block, even "masked": in an ISO 9564 Format-0
+            // block nibbles 0-3 are 0 / PIN-length / PIN[0] / PIN[1] and are NOT
+            // covered by the PAN XOR, so maskKey()'s first four characters were the
+            // PIN length and the first two PIN digits in clear.
 
             byte[] encrypted = software3desEncrypt(softwareWorkingKey, pinBlockBytes);
 
             if (encrypted != null) {
                 String result = bytesToHexString(encrypted);
-                Log.d(TAG, "  Encrypted PIN block: " + result);
+                Log.d(TAG, "  Encrypted PIN block: [" + (result.length() / 2) + " bytes]");
                 return result;
             } else {
                 Log.e(TAG, "Software encryption returned null");
@@ -2017,7 +2021,7 @@ public class CastleKeyManager {
             byte[] encrypted = mksk.dataEncrypt();
             String result = bytesToHexString(encrypted);
 
-            Log.d(TAG, "  MKSK C001 PIN encryption SUCCESS: " + result);
+            Log.d(TAG, "  MKSK C001 PIN encryption SUCCESS: [" + (result.length() / 2) + " bytes]");
             return result;
 
         } catch (CtKMS2Exception e) {

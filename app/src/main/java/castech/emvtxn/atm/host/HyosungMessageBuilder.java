@@ -89,7 +89,7 @@ public class HyosungMessageBuilder {
                 log("TRACK2 (EMV): WARNING - No PIN KSN, falling back to Track2 KSN: " + ksnForField7);
             }
             log("TRACK2 (EMV): Using CLEAR track 2 - ARQC provides security");
-            log("  Field 6 (clear): [" + track2ForMessage + "]");
+            log("  Field 6 (clear): " + castech.emvtxn.LogMask.track2(track2ForMessage));
             log("  Field 7 (KSN for PIN): " + ksnForField7);
         } else if (request.hasEncryptedTrack2()) {
             // MSR transaction (swipe): Use ENCRYPTED Track 2
@@ -97,12 +97,12 @@ public class HyosungMessageBuilder {
             track2ForMessage = "e" + request.getEncryptedTrack2();
             ksnForField7 = request.getTrack2Ksn();
             log("TRACK2 (MSR): Using DUKPT encrypted track 2");
-            log("  Field 6 (encrypted data): " + track2ForMessage.substring(0, Math.min(40, track2ForMessage.length())) + "...");
+            log("  Field 6 (encrypted data): " + castech.emvtxn.LogMask.len(track2ForMessage));
             log("  Field 7 (KSN): " + ksnForField7);
         } else {
             // Fallback: Use clear track 2 if available
             track2ForMessage = nullToEmpty(request.getTrack2Data());
-            log("TRACK2 (fallback): [" + track2ForMessage + "]");
+            log("TRACK2 (fallback): " + castech.emvtxn.LogMask.track2(track2ForMessage));
         }
         fields[6] = track2ForMessage;                           // Field 6: Track 2 Data
 
@@ -115,10 +115,14 @@ public class HyosungMessageBuilder {
         // Field 13: EMV Data - must have "ud" prefix per Hyosung spec
         String emvData = nullToEmpty(request.getEmvData());
         String emvField = emvData.isEmpty() ? "" : "ud" + emvData;
+        // Redact 5A/57 before truncating: the enhancer appends the sensitive tags
+        // last today, so the prefix happens to be clean, but the log must not
+        // depend on tag order to stay PCI-clean.
+        String emvRedacted = castech.emvtxn.LogMask.tlv(emvData);
         log("DEBUG EMV: Raw EMV data length=" + emvData.length() +
-            ", first 60 chars: [" + (emvData.length() > 60 ? emvData.substring(0, 60) + "..." : emvData) + "]");
-        log("DEBUG EMV: Field 13 will be (first 80 chars): [" +
-            (emvField.length() > 80 ? emvField.substring(0, 80) + "..." : emvField) + "]");
+            ", first 60 chars: [" + (emvRedacted.length() > 60 ? emvRedacted.substring(0, 60) + "..." : emvRedacted) + "]");
+        log("DEBUG EMV: Field 13 will be " + emvField.length() + " chars"
+            + (emvField.isEmpty() ? "" : " (\"ud\" + redacted TLV): [ud" + emvRedacted + "]"));
         fields[13] = emvField;
 
         return frameMessage(fields);

@@ -425,6 +425,19 @@ public class AtmTransactionManager {
                             + ", rrn=" + retrievalRef + ")");
                     }
 
+                    // Connect FIRST, then mark the request as sent. A connect-time failure
+                    // (host down, TCP connect timeout, TLS handshake failure) must NOT
+                    // create a reversal: the host never received an 85, so a Type 86 for
+                    // it can never match — the drain would fail every attempt and take the
+                    // terminal OUT_OF_SERVICE after a single connect blip. A connect failure
+                    // lands in the catch below with requestSentToHost still false.
+                    //
+                    // Always a FRESH socket: the host closes its side after every exchange
+                    // and Socket.isConnected() cannot see that FIN, so a socket left open by
+                    // a health check would pass ensureConnected() and the 85 would be
+                    // written into a dead pipe (see AtmHostConnection.connectFresh).
+                    connection.connectFresh();
+
                     // Mark that we're sending to host - if we fail after this, may need reversal
                     requestSentToHost = true;
 
@@ -433,7 +446,6 @@ public class AtmTransactionManager {
                     AtmProtocol protocol = connection.getProtocol();
                     if (protocol != null && config.isTritonProtocol()) {
                         Log.d(TAG, "Using Triton transaction request");
-                        connection.ensureConnected();
                         byte[] requestMsg = protocol.buildTransactionRequest(request);
                         byte[] responseMsg = connection.sendAndReceiveRaw(requestMsg);
                         connection.completeTritonHandshake();
@@ -626,6 +638,12 @@ public class AtmTransactionManager {
                         Log.d(TAG, "Balance inquiry — no reversal record armed (BI does not reverse)");
                     }
 
+                    // Connect FIRST (on a fresh socket), then mark the request as sent —
+                    // same reasoning as the withdrawal path: a connect-time failure must
+                    // not arm a reversal for an 85 the host never received, and a socket
+                    // left over from a health check must never be reused.
+                    connection.connectFresh();
+
                     // Mark that we're sending to host - if we fail after this, may need reversal
                     requestSentToHost = true;
 
@@ -634,7 +652,6 @@ public class AtmTransactionManager {
                     AtmProtocol protocol = connection.getProtocol();
                     if (protocol != null && config.isTritonProtocol()) {
                         Log.d(TAG, "Using Triton balance inquiry request");
-                        connection.ensureConnected();
                         byte[] requestMsg = protocol.buildTransactionRequest(request);
                         byte[] responseMsg = connection.sendAndReceiveRaw(requestMsg);
                         connection.completeTritonHandshake();
@@ -756,6 +773,11 @@ public class AtmTransactionManager {
                     notifyError("Invalid configuration response: " + e.getMessage());
                 } catch (Exception e) {
                     notifyError("Configuration error: " + e.getMessage());
+                } finally {
+                    // The success paths above already disconnect; this covers the
+                    // failure paths, which used to leave the socket open for the next
+                    // operation. disconnect() is idempotent.
+                    connection.disconnect();
                 }
             }
         });
@@ -1039,6 +1061,11 @@ public class AtmTransactionManager {
                 } catch (Exception e) {
                     Log.e(TAG, "Health check failed: " + e.getMessage());
                     notifyHealthCheckResult(false);
+                } finally {
+                    // The host closes its side after every exchange. Never leave this
+                    // socket for the next operation — isConnected() would still report
+                    // it live and the next customer's 85 would go into a dead pipe.
+                    connection.disconnect();
                 }
             }
         });
@@ -1067,6 +1094,9 @@ public class AtmTransactionManager {
                 } catch (Exception e) {
                     Log.e(TAG, "Status monitoring failed: " + e.getMessage(), e);
                     notifyHealthCheckResult(false);
+                } finally {
+                    // Same rule as the health check: never leave a socket behind.
+                    connection.disconnect();
                 }
             }
         });
@@ -1264,6 +1294,15 @@ public class AtmTransactionManager {
      * @param reason Reversal reason code
      */
     /**
+     * True when the in-memory last transaction (currentRequest + currentResponse)
+     * exists, i.e. {@link #sendReversal(String)} would actually send something
+     * rather than return silently.
+     */
+    public boolean hasReversibleTransaction() {
+        return currentRequest != null && currentResponse != null;
+    }
+
+    /**
      * Sends a fully-constructed reversal that was built from a persisted record
      * (i.e. survives an app restart, unlike the in-memory currentRequest/
      * currentResponse path used by {@link #sendReversal(String)}). Called by
@@ -1353,6 +1392,9 @@ public class AtmTransactionManager {
                     throw e;
                 }
                 Log.w(TAG, "Reversal attempt " + attempt + " failed, retrying...");
+                // Drop the socket the failed attempt used; the retry's ensureConnected()
+                // then opens a fresh one instead of writing into the same dead pipe.
+                connection.disconnect();
                 try {
                     Thread.sleep(config.getRetryDelayMs());
                 } catch (InterruptedException ie) {

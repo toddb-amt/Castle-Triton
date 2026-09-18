@@ -22,7 +22,6 @@ import android.widget.Toast;
 
 import androidx.fragment.app.Fragment;
 
-import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -43,17 +42,27 @@ import castech.emvtxn.test.EmvCryptogramTest;
 public class Fragment_page_admin_atm extends Fragment {
     private static final String TAG = "AdminATM";
     private static final String PREFS_NAME = "ATM_Admin_Prefs";
-    private static final String KEY_PIN_HASH = "admin_pin_hash";
-    private static final String KEY_PIN_SALT = "admin_pin_salt";
     private static final String KEY_FAILED_ATTEMPTS = "failed_attempts";
     private static final String KEY_LOCKOUT_TIME = "lockout_time";
     private static final int MAX_FAILED_ATTEMPTS = 3;
     private static final long LOCKOUT_DURATION_MS = 5 * 60 * 1000; // 5 minutes
-    private static final String DEFAULT_PIN = "123456";
+
+    // Fixed admin passwords — only TFI changes these (by shipping a new build).
+    // The old user-changeable stored-hash / "Change Default PIN" flow was
+    // removed 2026-09-11. Super Admin sees everything; Normal Admin is limited
+    // to Reversal Management, View Transaction History, WiFi, and Diagnostics.
+    private static final String SUPER_ADMIN_PIN = "8675309";
+    private static final String NORMAL_ADMIN_PIN = "123456";
+
+    // Access tiers returned by verifyPinTier().
+    private static final int ACCESS_NONE = 0;
+    private static final int ACCESS_NORMAL = 1;
+    private static final int ACCESS_SUPER = 2;
 
     private static MainActivity mainActivity = null;
     private View rootView;
     private boolean isAuthenticated = false;
+    private int accessLevel = ACCESS_NONE;  // set on successful admin login
     private boolean isUserVisible = false;  // Track actual user visibility from setMenuVisibility
 
     // UI Elements - Fee Configuration
@@ -743,7 +752,7 @@ public class Fragment_page_admin_atm extends Fragment {
 
         final EditText input = new EditText(getContext());
         input.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_VARIATION_PASSWORD);
-        input.setHint("Enter 4-6 digit PIN");
+        input.setHint("Enter admin PIN");
 
         LinearLayout layout = new LinearLayout(getContext());
         layout.setOrientation(LinearLayout.VERTICAL);
@@ -753,11 +762,16 @@ public class Fragment_page_admin_atm extends Fragment {
 
         builder.setPositiveButton("OK", (dialog, which) -> {
             String enteredPin = input.getText().toString();
-            if (verifyPin(enteredPin)) {
+            int tier = verifyPinTier(enteredPin);
+            if (tier != ACCESS_NONE) {
                 isAuthenticated = true;
+                accessLevel = tier;
                 resetFailedAttempts();
                 setContentVisible(true);
-                Toast.makeText(getContext(), "Access granted", Toast.LENGTH_SHORT).show();
+                applyAccessLevel(tier);
+                Toast.makeText(getContext(),
+                    tier == ACCESS_SUPER ? "Super Admin access granted" : "Admin access granted",
+                    Toast.LENGTH_SHORT).show();
             } else {
                 incrementFailedAttempts();
                 int remaining = MAX_FAILED_ATTEMPTS - getFailedAttempts();
@@ -785,113 +799,112 @@ public class Fragment_page_admin_atm extends Fragment {
         builder.show();
     }
 
+    /**
+     * Returns the access tier for an entered password, or {@link #ACCESS_NONE}.
+     * Passwords are fixed in the build (only TFI changes them by shipping a new
+     * version) — there is no on-terminal PIN change.
+     */
+    private int verifyPinTier(String enteredPin) {
+        if (SUPER_ADMIN_PIN.equals(enteredPin)) return ACCESS_SUPER;
+        if (NORMAL_ADMIN_PIN.equals(enteredPin)) return ACCESS_NORMAL;
+        return ACCESS_NONE;
+    }
+
+    /** Any valid admin password (used by the kiosk-apply re-confirmation). */
     private boolean verifyPin(String enteredPin) {
-        SharedPreferences prefs = getContext().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
-        String storedHash = prefs.getString(KEY_PIN_HASH, null);
+        return verifyPinTier(enteredPin) != ACCESS_NONE;
+    }
 
-        if (storedHash == null) {
-            // W4 fix: First time — accept default PIN but force change
-            if (enteredPin.equals(DEFAULT_PIN)) {
-                // Force PIN change on first authentication
-                promptChangePin();
-                return true;
+    /**
+     * Enables/greys admin sections by access tier — restricted sections stay
+     * VISIBLE but are disabled and dimmed, not hidden.
+     * <ul>
+     *   <li>Super Admin ({@code 8675309}) — everything active.</li>
+     *   <li>Normal Admin ({@code 123456}) — only Reversal Management,
+     *       View Transaction History, WiFi Configuration, and Diagnostics are
+     *       active; all other sections are greyed out. The destructive "Clear"
+     *       buttons stay Super-only (greyed for Normal).</li>
+     * </ul>
+     * Sections are flat siblings in the scroll column, each led by a header
+     * with an id; {@link #setSectionEnabled} enables/dims the run of views
+     * between one header and the next.
+     */
+    private void applyAccessLevel(int tier) {
+        if (rootView == null) return;
+        boolean sup = (tier == ACCESS_SUPER);
+
+        // Super-only sections — greyed out + disabled for Normal Admin (still visible)
+        setSectionEnabled(R.id.hdrFeeConfig,    R.id.hdrWithdrawal,   sup);
+        setSectionEnabled(R.id.hdrWithdrawal,   R.id.hdrTerminalInfo, sup);
+        setSectionEnabled(R.id.hdrTerminalInfo, R.id.hdrHostSettings, sup);
+        setSectionEnabled(R.id.hdrHostSettings, R.id.hdrReversal,     sup);
+        // Normal-admin sections — always active once authenticated
+        setSectionEnabled(R.id.hdrReversal,     R.id.hdrHistory,      true);
+        setSectionEnabled(R.id.hdrHistory,      R.id.hdrWifi,         true);
+        setSectionEnabled(R.id.hdrWifi,         R.id.hdrDiagnostics,  true);
+        setSectionEnabled(R.id.hdrDiagnostics,  R.id.hdrKiosk,        true);
+        // Kiosk is the last section — 0 = "to end of column"
+        setSectionEnabled(R.id.hdrKiosk,        0,                    sup);
+
+        // Destructive "Clear" actions live inside the two normal sections, so
+        // re-apply them AFTER the section pass above: Super-only, greyed for Normal.
+        setViewEnabledDimmed(rootView.findViewById(R.id.btnClearReversals), sup);
+        setViewEnabledDimmed(rootView.findViewById(R.id.btnClearHistory), sup);
+
+        // "Request New Working Key" is available to BOTH tiers even though it
+        // sits in the (otherwise Super-only) Host Settings section — a field tech
+        // may need to re-request a key. Re-enable it after the section pass.
+        setViewEnabledDimmed(rootView.findViewById(R.id.btnRequestNewKey), true);
+    }
+
+    /**
+     * Enables (or disables + dims) every direct child of the scroll column from
+     * {@code startHeaderId} (inclusive) up to {@code endHeaderId} (exclusive);
+     * {@code endHeaderId <= 0} means "to the end of the column". Views stay
+     * visible either way.
+     */
+    private void setSectionEnabled(int startHeaderId, int endHeaderId, boolean enabled) {
+        View start = rootView.findViewById(startHeaderId);
+        if (start == null || !(start.getParent() instanceof ViewGroup)) return;
+        ViewGroup col = (ViewGroup) start.getParent();
+        int from = col.indexOfChild(start);
+        if (from < 0) return;
+        int to = col.getChildCount();
+        if (endHeaderId > 0) {
+            View end = rootView.findViewById(endHeaderId);
+            if (end != null) {
+                int ei = col.indexOfChild(end);
+                if (ei >= 0) to = ei;
             }
-            return false;
         }
-
-        String salt = prefs.getString(KEY_PIN_SALT, "");
-        String enteredHash = hashPin(enteredPin, salt);
-        return storedHash.equals(enteredHash);
-    }
-
-    private void promptChangePin() {
-        new AlertDialog.Builder(getContext())
-            .setTitle("Change Default PIN")
-            .setMessage("Default PIN detected. Would you like to set a new PIN?")
-            .setPositiveButton("Yes", (dialog, which) -> showChangePinDialog())
-            .setNegativeButton("Later", null)
-            .show();
-    }
-
-    private void showChangePinDialog() {
-        AlertDialog.Builder builder = new AlertDialog.Builder(getContext());
-        builder.setTitle("Set New Admin PIN");
-
-        LinearLayout layout = new LinearLayout(getContext());
-        layout.setOrientation(LinearLayout.VERTICAL);
-        layout.setPadding(50, 40, 50, 10);
-
-        final EditText inputNew = new EditText(getContext());
-        inputNew.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_VARIATION_PASSWORD);
-        inputNew.setHint("New PIN (4-6 digits)");
-        layout.addView(inputNew);
-
-        final EditText inputConfirm = new EditText(getContext());
-        inputConfirm.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_VARIATION_PASSWORD);
-        inputConfirm.setHint("Confirm PIN");
-        layout.addView(inputConfirm);
-
-        builder.setView(layout);
-
-        builder.setPositiveButton("Save", (dialog, which) -> {
-            String newPin = inputNew.getText().toString();
-            String confirmPin = inputConfirm.getText().toString();
-
-            if (newPin.length() < 4 || newPin.length() > 6) {
-                Toast.makeText(getContext(), "PIN must be 4-6 digits", Toast.LENGTH_SHORT).show();
-                return;
-            }
-
-            if (!newPin.equals(confirmPin)) {
-                Toast.makeText(getContext(), "PINs do not match", Toast.LENGTH_SHORT).show();
-                return;
-            }
-
-            saveNewPin(newPin);
-            Toast.makeText(getContext(), "PIN changed successfully", Toast.LENGTH_SHORT).show();
-        });
-
-        builder.setNegativeButton("Cancel", null);
-        builder.show();
-    }
-
-    private void saveNewPin(String pin) {
-        String salt = generateSalt();
-        String hash = hashPin(pin, salt);
-
-        SharedPreferences.Editor editor = getContext()
-            .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit();
-        editor.putString(KEY_PIN_HASH, hash);
-        editor.putString(KEY_PIN_SALT, salt);
-        editor.apply();
-    }
-
-    private String hashPin(String pin, String salt) {
-        try {
-            MessageDigest md = MessageDigest.getInstance("SHA-256");
-            md.update((salt + pin).getBytes());
-            byte[] digest = md.digest();
-            StringBuilder sb = new StringBuilder();
-            for (byte b : digest) {
-                sb.append(String.format("%02x", b));
-            }
-            return sb.toString();
-        } catch (Exception e) {
-            // S7 fix: Fail explicitly — never store/compare plaintext PIN
-            Log.e(TAG, "Hash error: " + e.getMessage());
-            throw new RuntimeException("SHA-256 unavailable — cannot hash PIN securely", e);
+        for (int i = from; i < to; i++) {
+            setViewEnabledDimmed(col.getChildAt(i), enabled);
         }
     }
 
-    private String generateSalt() {
-        // W5 fix: Use SecureRandom instead of predictable timestamp
-        byte[] saltBytes = new byte[16];
-        new java.security.SecureRandom().nextBytes(saltBytes);
-        StringBuilder sb = new StringBuilder();
-        for (byte b : saltBytes) {
-            sb.append(String.format("%02x", b));
+    /**
+     * Enables/disables a view and its entire subtree, dimming to 40% alpha when
+     * disabled so a restricted control reads as "greyed out". Leaves visibility
+     * untouched: a control the layout defaults to gone (the flat/percentage fee
+     * sub-layouts, the Clear buttons) must stay hidden until its own logic shows
+     * it — forcing VISIBLE here showed both fee layouts at once and surfaced the
+     * Clear buttons with nothing to clear.
+     */
+    private void setViewEnabledDimmed(View v, boolean enabled) {
+        if (v == null) return;
+        v.setAlpha(enabled ? 1f : 0.4f);
+        setViewTreeEnabled(v, enabled);
+    }
+
+    private void setViewTreeEnabled(View v, boolean enabled) {
+        if (v == null) return;
+        v.setEnabled(enabled);
+        if (v instanceof ViewGroup) {
+            ViewGroup vg = (ViewGroup) v;
+            for (int i = 0; i < vg.getChildCount(); i++) {
+                setViewTreeEnabled(vg.getChildAt(i), enabled);
+            }
         }
-        return sb.toString();
     }
 
     private boolean isLockedOut() {
@@ -924,8 +937,14 @@ public class Fragment_page_admin_atm extends Fragment {
 
     private void setLockoutTime() {
         long lockoutUntil = System.currentTimeMillis() + LOCKOUT_DURATION_MS;
+        // The lockout IS the penalty for the failed attempts, so the counter starts
+        // over with it. It used to stay at MAX after the lockout expired (it was only
+        // reset on success), so one mistype on the next visit gave remaining = -1 and
+        // an immediate 5-minute relock — a permanent one-strike lockout. No attempt
+        // is possible while locked (the PIN dialog is gated on isLockedOut()), so
+        // resetting here cannot grant extra tries.
         getContext().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            .edit().putLong(KEY_LOCKOUT_TIME, lockoutUntil).apply();
+            .edit().putLong(KEY_LOCKOUT_TIME, lockoutUntil).putInt(KEY_FAILED_ATTEMPTS, 0).apply();
     }
 
     private void setContentVisible(boolean visible) {
@@ -1047,7 +1066,20 @@ public class Fragment_page_admin_atm extends Fragment {
         updateGlobalPara();
     }
 
+    /** The Save button: persists everything on the page, POS-mode settings included. */
     private void saveSettings() {
+        saveSettings(true);
+    }
+
+    /**
+     * @param includePosSettings false for the IMPLICIT saves that Test Connection,
+     *        Download Keys and Request New Working Key run before their host call.
+     *        Those exist to persist the host settings they depend on; they must not
+     *        also commit the POS-mode checkbox. That is how a POS-site terminal lost
+     *        POS mode on 2026-09-18: a stray tap had unchecked "Enable POS Mode" and a
+     *        later Request New Working Key silently persisted it.
+     */
+    private void saveSettings(boolean includePosSettings) {
         try {
             SharedPreferences.Editor editor = getContext()
                 .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit();
@@ -1088,8 +1120,11 @@ public class Fragment_page_admin_atm extends Fragment {
 
             editor.apply();
 
-            // Persist POS Mode settings (own SharedPreferences file via PosConfig)
-            savePosSettings();
+            // Persist POS Mode settings (own SharedPreferences file via PosConfig) —
+            // only for the explicit Save button, never for an implicit save.
+            if (includePosSettings) {
+                savePosSettings();
+            }
 
             // Update GlobalPara
             updateGlobalPara();
@@ -1247,8 +1282,9 @@ public class Fragment_page_admin_atm extends Fragment {
             return;
         }
 
-        // Save settings first so they're available to host service
-        saveSettings();
+        // Save host settings first so they're available to host service (implicit
+        // save: leaves the POS-mode settings alone)
+        saveSettings(false);
 
         txvHostStatus.setText("Status: Initializing host service...");
         txvHostStatus.setTextColor(0xFF666666);
@@ -1424,8 +1460,9 @@ public class Fragment_page_admin_atm extends Fragment {
             return;
         }
 
-        // Ensure settings are saved (this is fast, OK on main thread)
-        saveSettings();
+        // Ensure host settings are saved (this is fast, OK on main thread). Implicit
+        // save: the POS-mode settings are not touched.
+        saveSettings(false);
 
         txvHostStatus.setText("Status: Initializing...");
         txvHostStatus.setTextColor(0xFF666666);
@@ -1545,8 +1582,9 @@ public class Fragment_page_admin_atm extends Fragment {
             return;
         }
 
-        // Ensure settings are saved (this is fast, OK on main thread)
-        saveSettings();
+        // Ensure host settings are saved (this is fast, OK on main thread). Implicit
+        // save: the POS-mode settings are not touched.
+        saveSettings(false);
 
         txvHostStatus.setText("Status: Initializing...");
         txvHostStatus.setTextColor(0xFF666666);
@@ -1752,11 +1790,18 @@ public class Fragment_page_admin_atm extends Fragment {
                 btnProcessReversals.setEnabled(pendingCount > 0);
             }
             if (btnClearReversals != null) {
-                btnClearReversals.setEnabled(pendingCount > 0);
+                // Super-only: clearing deletes unsent reversal records (money exposure).
+                // This refresh also runs after Process Reversals / Request New Key —
+                // paths a Normal admin may use — so it must re-apply the tier, not
+                // just the count, or it silently re-enables the button that
+                // applyAccessLevel() greyed at login.
+                boolean isSuper = accessLevel == ACCESS_SUPER;
+                btnClearReversals.setEnabled(pendingCount > 0 && isSuper);
+                btnClearReversals.setAlpha(isSuper ? 1f : 0.4f);
                 // Toggle visibility — the XML defaults this button to gone so
                 // operators can't accidentally tap it when no reversals exist.
-                // Show it ONLY when there's something to clear; the existing
-                // AlertDialog in clearPendingReversals() guards against typos.
+                // Show it ONLY when there's something to clear (greyed for Normal);
+                // the AlertDialog in clearPendingReversals() guards against typos.
                 btnClearReversals.setVisibility(pendingCount > 0 ? View.VISIBLE : View.GONE);
             }
         } else {
@@ -1826,6 +1871,13 @@ public class Fragment_page_admin_atm extends Fragment {
      * Clears all pending reversals (with confirmation).
      */
     private void clearPendingReversals() {
+        // Tier check at the ACTION, not only at the button: status refreshes can
+        // re-enable the button, and this deletes reversal records.
+        if (accessLevel != ACCESS_SUPER) {
+            Log.w(TAG, "clearPendingReversals refused — Super Admin only (tier=" + accessLevel + ")");
+            Toast.makeText(getContext(), "Super Admin only", Toast.LENGTH_SHORT).show();
+            return;
+        }
         AtmHostService hostService = (mainActivity != null) ? mainActivity.getAtmHostService() : null;
         if (hostService == null || !hostService.isInitialized()) {
             Toast.makeText(getContext(), "Host service not initialized", Toast.LENGTH_SHORT).show();
@@ -1953,6 +2005,7 @@ public class Fragment_page_admin_atm extends Fragment {
 
     private void exitAdmin() {
         isAuthenticated = false;
+        accessLevel = ACCESS_NONE;
         if (mainActivity != null) {
             mainActivity.navigateToPage(GlobalDef.d_PAGE_MAIN_MENU);
         }
@@ -1985,14 +2038,24 @@ public class Fragment_page_admin_atm extends Fragment {
      */
     private void savePosSettings() {
         if (posConfig == null) return;
-        if (edtPosProxyUrl != null)   posConfig.setProxyBaseUrl(edtPosProxyUrl.getText().toString().trim());
-        if (edtPosAccessKey != null)  posConfig.setTerminalAccessKey(edtPosAccessKey.getText().toString().trim());
-        if (cbEnablePosMode != null) {
+        // A greyed control is read-only for this tier (the POS section is Super-only);
+        // its state is never persisted, whatever it happens to hold.
+        if (edtPosProxyUrl != null && edtPosProxyUrl.isEnabled()) {
+            posConfig.setProxyBaseUrl(edtPosProxyUrl.getText().toString().trim());
+        }
+        if (edtPosAccessKey != null && edtPosAccessKey.isEnabled()) {
+            posConfig.setTerminalAccessKey(edtPosAccessKey.getText().toString().trim());
+        }
+        if (cbEnablePosMode != null && cbEnablePosMode.isEnabled()) {
             boolean wasEnabled = posConfig.isEnabled();
             boolean nowEnabled = cbEnablePosMode.isChecked();
             posConfig.setEnabled(nowEnabled);
             if (wasEnabled != nowEnabled) {
-                Log.d(TAG, "POS Mode toggled " + (nowEnabled ? "ON" : "OFF") + " — restart required");
+                // Loud and attributable: this flips the terminal between POS-driven
+                // and walk-up operation.
+                Log.w(TAG, "POS Mode toggled " + (nowEnabled ? "ON" : "OFF")
+                        + " by admin tier=" + (accessLevel == ACCESS_SUPER ? "SUPER" : "NORMAL")
+                        + " via Save Settings — restart required");
             }
         }
     }
