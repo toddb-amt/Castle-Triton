@@ -62,7 +62,8 @@ public final class AtmHostServiceGateway implements PosTerminalGateway {
         // surfaces from the transaction itself as host_unreachable.
         return hostService.isInitialized()
             && hostService.hasValidWorkingKey()
-            && !hostService.isTransactionInProgress();
+            && !hostService.isTransactionInProgress()
+            && !GlobalPara.atmTransactionInProgress;
     }
 
     @Override
@@ -70,6 +71,7 @@ public final class AtmHostServiceGateway implements PosTerminalGateway {
         if (!hostService.isInitialized())          return "host service not initialized";
         if (!hostService.hasValidWorkingKey())     return "no working key loaded";
         if (hostService.isTransactionInProgress()) return "transaction in progress";
+        if (GlobalPara.atmTransactionInProgress)   return "customer transaction in progress";
         return "";
     }
 
@@ -122,6 +124,17 @@ public final class AtmHostServiceGateway implements PosTerminalGateway {
         if (PosTransactionObserver.isArmed()) {
             callback.onError(PosWire.ERR_TERMINAL_BUSY,
                     "another POS transaction is already in progress");
+            return;
+        }
+        // The cashier and the customer screen are mutually exclusive drivers. The
+        // host-service flag only goes true once the request is being sent; during
+        // card detection and PIN entry it is still false, so a sale arriving then
+        // overwrote the customer's amount mid-flow and this callback received an
+        // approval for a transaction it never initiated. MainActivity's flag covers
+        // the whole customer flow from the button press to the thread's exit.
+        if (GlobalPara.atmTransactionInProgress || hostService.isTransactionInProgress()) {
+            callback.onError(PosWire.ERR_TERMINAL_BUSY,
+                    "a transaction is already in progress at the terminal");
             return;
         }
 
