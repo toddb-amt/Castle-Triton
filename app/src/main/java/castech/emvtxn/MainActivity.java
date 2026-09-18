@@ -3240,8 +3240,8 @@ public class MainActivity extends AppCompatActivity {
 
                             tlvUtility_ct.TLVDataClear();
                             tlvUtility_ct.TLVDataParse(reqData.tlvBuf, reqData.tlvLen);
-                            Log.d(TAG, "TLVData(UtilityDB) : " + Converter.byteArray2HexString(tlvUtility_ct.TLVDataBase, tlvUtility_ct.intTLVDataBaseLen));
-                            Log.d(TAG, "reqData.tlvBuf     : " + Converter.byteArray2HexString(reqData.tlvBuf, reqData.tlvLen));
+                            Log.d(TAG, "TLVData(UtilityDB) : " + LogMask.tlv(Converter.byteArray2HexString(tlvUtility_ct.TLVDataBase, tlvUtility_ct.intTLVDataBaseLen)));
+                            Log.d(TAG, "reqData.tlvBuf     : " + LogMask.tlv(Converter.byteArray2HexString(reqData.tlvBuf, reqData.tlvLen)));
 
                             //Version
                             TLVData.tag = 0x9F09;
@@ -3308,7 +3308,7 @@ public class MainActivity extends AppCompatActivity {
                             intRtn = tlvUtility_ct.TLVDataGet(TLVData);
                             if (intRtn == 0) {
                                 Log.d(TAG, "tag :" + "0xDF30 (PAN encrypt)");
-                                Log.d(TAG, "TagData(DF30):" + Converter.byteArray2HexString(TLVData.value, TLVData.len));
+                                Log.d(TAG, "TagData(DF30): [" + TLVData.len + " bytes encrypted PAN]");
                             } else {
                                 Log.d(TAG, "NoTag(DF30)");
                             }
@@ -3371,7 +3371,7 @@ public class MainActivity extends AppCompatActivity {
                             intRtn = tlvUtility_ct.TLVDataGet(TLVData);
                             if (intRtn == 0 && TLVData.len > 0) {
                                 Log.d(TAG, "tag :" + "0xDF33 (Track2 encrypt)");
-                                Log.d(TAG, "TagData(DF33):" + Converter.byteArray2HexString(TLVData.value, TLVData.len));
+                                Log.d(TAG, "TagData(DF33): [" + TLVData.len + " bytes encrypted Track 2]");
                                 // Store encrypted Track 2 for ATM host transactions (chip cards)
                                 if (GlobalPara.atmTrack2Data == null || GlobalPara.atmTrack2Data.isEmpty() || GlobalPara.atmTrack2Data.contains("*")) {
                                     GlobalPara.atmTrack2Data = "E:" + Converter.byteArray2HexString(TLVData.value, TLVData.len);
@@ -3423,7 +3423,7 @@ public class MainActivity extends AppCompatActivity {
                                     // Build Track 2 in ISO format: ;PAN=YYMMsss?
                                     // Server expects this format and strips ; and ?
                                     GlobalPara.atmTrack2Data = ";" + maskedPan + "=" + expiry + serviceCode + "?";
-                                    Log.d(TAG, "Stored ATM Track2 Data (CT masked ISO format): " + GlobalPara.atmTrack2Data);
+                                    Log.d(TAG, "Stored ATM Track2 Data (CT masked ISO format): " + LogMask.track2(GlobalPara.atmTrack2Data));
                                 } else {
                                     Log.d(TAG, "NoTag(DF32) - no Track2 available");
                                 }
@@ -3685,7 +3685,7 @@ public class MainActivity extends AppCompatActivity {
                             // Store EMV data for ATM host transaction (includes 5A for PIN translation)
                             if (GlobalPara.atmMode && authRequestData.tlvLen > 0) {
                                 GlobalPara.atmEmvData = Converter.byteArray2HexString(authRequestData.tlvBuf, authRequestData.tlvLen);
-                                Log.d(TAG, "Stored ATM EMV Data (CT): " + GlobalPara.atmEmvData);
+                                Log.d(TAG, "Stored ATM EMV Data (CT): " + LogMask.tlv(GlobalPara.atmEmvData));
                             }
 
                             TLVData.tag = 0x95;
@@ -3747,7 +3747,7 @@ public class MainActivity extends AppCompatActivity {
                             Log.d(TAG, "ATM: Sensitive data request (5A,57) rtn=" + String.format("0x%08X", sensRtn) + ", len=" + sensitiveData.tlvLen);
                             if (sensRtn == 0 && sensitiveData.tlvLen > 0) {
                                 String sensitiveHex = Converter.byteArray2HexString(sensitiveData.tlvBuf, sensitiveData.tlvLen);
-                                Log.d(TAG, "ATM: Sensitive EMV data (5A,57): " + sensitiveHex);
+                                Log.d(TAG, "ATM: Sensitive EMV data (5A,57): " + LogMask.tlv(sensitiveHex));
                                 // Store the clear PAN for PIN translation
                                 GlobalPara.atmSensitiveEmvData = sensitiveHex;
                             } else {
@@ -4102,7 +4102,7 @@ public class MainActivity extends AppCompatActivity {
                         tlvUtility.TLVDataClear();
                         tlvUtility.TLVDataParse(rcData.chipData, rcData.chipDataLen);
                         tlvUtility.TLVDataParse(rcData.additionalData, rcData.additionalDataLen);
-                        Log.d(TAG, "TLVData(UtilityDB) : " + Converter.byteArray2HexString(tlvUtility.TLVDataBase, tlvUtility.intTLVDataBaseLen));
+                        Log.d(TAG, "TLVData(UtilityDB) : " + LogMask.tlv(Converter.byteArray2HexString(tlvUtility.TLVDataBase, tlvUtility.intTLVDataBaseLen)));
                         Log.d(TAG, "rcData.track1Data  : " + Converter.byteArray2HexString(rcData.track1Data, rcData.track1Len));
                         Log.d(TAG, "rcData.track2Data  : [" + rcData.track2Len + " bytes]");
                         Log.d(TAG, "rcData.chipData    : " + Converter.byteArray2HexString(rcData.chipData, rcData.chipDataLen));
@@ -4123,7 +4123,7 @@ public class MainActivity extends AppCompatActivity {
                         // Store EMV data for ATM host transaction (CL)
                         if (GlobalPara.atmMode && tlvUtility.intTLVDataBaseLen > 0) {
                             GlobalPara.atmEmvData = Converter.byteArray2HexString(tlvUtility.TLVDataBase, tlvUtility.intTLVDataBaseLen);
-                            Log.d(TAG, "Stored ATM EMV Data (CL): " + GlobalPara.atmEmvData);
+                            Log.d(TAG, "Stored ATM EMV Data (CL): " + LogMask.tlv(GlobalPara.atmEmvData));
                         }
 
                         // Try to get tag 5A (PAN) for PIN translation - contactless
@@ -9284,7 +9284,7 @@ public class MainActivity extends AppCompatActivity {
             Log.d(TAG, "Tag 5A (PAN): rtn=" + String.format("0x%08X", rtn) + ", len=" + tag5A.len);
             if (rtn == 0 && tag5A.len > 0) {
                 String hex = Converter.byteArray2HexString(tag5A.value, tag5A.len);
-                Log.d(TAG, "  5A hex = " + hex);
+                Log.d(TAG, "  5A hex = " + LogMask.pan(hex));
                 Log.d(TAG, "  Contains * (masked): " + hex.contains("*"));
             }
 
@@ -9297,7 +9297,7 @@ public class MainActivity extends AppCompatActivity {
             Log.d(TAG, "Tag 57 (Track2): rtn=" + String.format("0x%08X", rtn) + ", len=" + tag57.len);
             if (rtn == 0 && tag57.len > 0) {
                 String hex = Converter.byteArray2HexString(tag57.value, tag57.len);
-                Log.d(TAG, "  57 hex = " + hex);
+                Log.d(TAG, "  57 hex = " + LogMask.track2(hex));
                 Log.d(TAG, "  Contains * (masked): " + hex.contains("*"));
             }
 
@@ -9342,7 +9342,7 @@ public class MainActivity extends AppCompatActivity {
             Log.d(TAG, "--- GlobalPara State ---");
             Log.d(TAG, "  asciiPAN = " + LogMask.pan(GlobalPara.asciiPAN));
             Log.d(TAG, "  atmTrack2Data = " + LogMask.track2(GlobalPara.atmTrack2Data));
-            Log.d(TAG, "  atmClearPan = " + GlobalPara.atmClearPan);
+            Log.d(TAG, "  atmClearPan = " + LogMask.pan(GlobalPara.atmClearPan));
             Log.d(TAG, "  atmEncryptedPinBlock = " + LogMask.pinBlock(GlobalPara.atmEncryptedPinBlock));
 
             Log.d(TAG, "=== END EMV TAG DUMP ===");

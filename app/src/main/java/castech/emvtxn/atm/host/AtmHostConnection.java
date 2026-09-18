@@ -281,16 +281,19 @@ public class AtmHostConnection {
         byte[] requestMessage = builder.buildReversalRequest(request);
         // Log the request bytes so we (and the mux team) can see exactly what
         // we put on the wire when a reversal gets rejected.
-        Log.d(TAG, "[" + config.getName() + "] Reversal REQ (" + requestMessage.length + " bytes): "
-                + toHex(requestMessage));
+        // Field-wise rendering with Track 2 / EMV 5A-57 / PIN block masked: a Type 86
+        // echoes the original 85's EMV TLV, so a raw hex dump put the full PAN and
+        // Track 2 in logcat. Everything the MUX team needs to see stays readable.
+        Log.d(TAG, "[" + config.getName() + "] Reversal REQ: "
+                + castech.emvtxn.LogMask.std1(requestMessage));
 
         byte[] responseMessage = sendAndReceive(requestMessage);
 
         // Log the raw response bytes too — needed to diagnose "Reversal not accepted"
         // failures (the parsed responseCode alone doesn't show framing or field layout
         // differences).
-        Log.d(TAG, "[" + config.getName() + "] Reversal RSP (" + responseMessage.length + " bytes): "
-                + toHex(responseMessage));
+        Log.d(TAG, "[" + config.getName() + "] Reversal RSP: "
+                + castech.emvtxn.LogMask.std1(responseMessage));
 
         ReversalResponse response = parser.parseReversalResponse(responseMessage);
 
