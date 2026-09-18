@@ -425,6 +425,14 @@ public class AtmTransactionManager {
                             + ", rrn=" + retrievalRef + ")");
                     }
 
+                    // Connect FIRST, then mark the request as sent. A connect-time failure
+                    // (host down, TCP connect timeout, TLS handshake failure) must NOT
+                    // create a reversal: the host never received an 85, so a Type 86 for
+                    // it can never match — the drain would fail every attempt and take the
+                    // terminal OUT_OF_SERVICE after a single connect blip. A connect failure
+                    // lands in the catch below with requestSentToHost still false.
+                    connection.ensureConnected();
+
                     // Mark that we're sending to host - if we fail after this, may need reversal
                     requestSentToHost = true;
 
@@ -433,7 +441,6 @@ public class AtmTransactionManager {
                     AtmProtocol protocol = connection.getProtocol();
                     if (protocol != null && config.isTritonProtocol()) {
                         Log.d(TAG, "Using Triton transaction request");
-                        connection.ensureConnected();
                         byte[] requestMsg = protocol.buildTransactionRequest(request);
                         byte[] responseMsg = connection.sendAndReceiveRaw(requestMsg);
                         connection.completeTritonHandshake();
@@ -626,6 +633,11 @@ public class AtmTransactionManager {
                         Log.d(TAG, "Balance inquiry — no reversal record armed (BI does not reverse)");
                     }
 
+                    // Connect FIRST, then mark the request as sent — same reasoning as the
+                    // withdrawal path: a connect-time failure must not arm a reversal for
+                    // an 85 the host never received.
+                    connection.ensureConnected();
+
                     // Mark that we're sending to host - if we fail after this, may need reversal
                     requestSentToHost = true;
 
@@ -634,7 +646,6 @@ public class AtmTransactionManager {
                     AtmProtocol protocol = connection.getProtocol();
                     if (protocol != null && config.isTritonProtocol()) {
                         Log.d(TAG, "Using Triton balance inquiry request");
-                        connection.ensureConnected();
                         byte[] requestMsg = protocol.buildTransactionRequest(request);
                         byte[] responseMsg = connection.sendAndReceiveRaw(requestMsg);
                         connection.completeTritonHandshake();
