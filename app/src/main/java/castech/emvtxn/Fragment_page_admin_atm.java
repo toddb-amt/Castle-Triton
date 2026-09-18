@@ -1763,11 +1763,18 @@ public class Fragment_page_admin_atm extends Fragment {
                 btnProcessReversals.setEnabled(pendingCount > 0);
             }
             if (btnClearReversals != null) {
-                btnClearReversals.setEnabled(pendingCount > 0);
+                // Super-only: clearing deletes unsent reversal records (money exposure).
+                // This refresh also runs after Process Reversals / Request New Key —
+                // paths a Normal admin may use — so it must re-apply the tier, not
+                // just the count, or it silently re-enables the button that
+                // applyAccessLevel() greyed at login.
+                boolean isSuper = accessLevel == ACCESS_SUPER;
+                btnClearReversals.setEnabled(pendingCount > 0 && isSuper);
+                btnClearReversals.setAlpha(isSuper ? 1f : 0.4f);
                 // Toggle visibility — the XML defaults this button to gone so
                 // operators can't accidentally tap it when no reversals exist.
-                // Show it ONLY when there's something to clear; the existing
-                // AlertDialog in clearPendingReversals() guards against typos.
+                // Show it ONLY when there's something to clear (greyed for Normal);
+                // the AlertDialog in clearPendingReversals() guards against typos.
                 btnClearReversals.setVisibility(pendingCount > 0 ? View.VISIBLE : View.GONE);
             }
         } else {
@@ -1837,6 +1844,13 @@ public class Fragment_page_admin_atm extends Fragment {
      * Clears all pending reversals (with confirmation).
      */
     private void clearPendingReversals() {
+        // Tier check at the ACTION, not only at the button: status refreshes can
+        // re-enable the button, and this deletes reversal records.
+        if (accessLevel != ACCESS_SUPER) {
+            Log.w(TAG, "clearPendingReversals refused — Super Admin only (tier=" + accessLevel + ")");
+            Toast.makeText(getContext(), "Super Admin only", Toast.LENGTH_SHORT).show();
+            return;
+        }
         AtmHostService hostService = (mainActivity != null) ? mainActivity.getAtmHostService() : null;
         if (hostService == null || !hostService.isInitialized()) {
             Toast.makeText(getContext(), "Host service not initialized", Toast.LENGTH_SHORT).show();
