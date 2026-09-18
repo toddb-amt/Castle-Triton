@@ -752,7 +752,7 @@ public class Fragment_page_admin_atm extends Fragment {
 
         final EditText input = new EditText(getContext());
         input.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_VARIATION_PASSWORD);
-        input.setHint("Enter 4-6 digit PIN");
+        input.setHint("Enter admin PIN");
 
         LinearLayout layout = new LinearLayout(getContext());
         layout.setOrientation(LinearLayout.VERTICAL);
@@ -935,8 +935,14 @@ public class Fragment_page_admin_atm extends Fragment {
 
     private void setLockoutTime() {
         long lockoutUntil = System.currentTimeMillis() + LOCKOUT_DURATION_MS;
+        // The lockout IS the penalty for the failed attempts, so the counter starts
+        // over with it. It used to stay at MAX after the lockout expired (it was only
+        // reset on success), so one mistype on the next visit gave remaining = -1 and
+        // an immediate 5-minute relock — a permanent one-strike lockout. No attempt
+        // is possible while locked (the PIN dialog is gated on isLockedOut()), so
+        // resetting here cannot grant extra tries.
         getContext().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            .edit().putLong(KEY_LOCKOUT_TIME, lockoutUntil).apply();
+            .edit().putLong(KEY_LOCKOUT_TIME, lockoutUntil).putInt(KEY_FAILED_ATTEMPTS, 0).apply();
     }
 
     private void setContentVisible(boolean visible) {
