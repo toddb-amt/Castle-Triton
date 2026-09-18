@@ -33,6 +33,10 @@ public final class AtmHostServiceGateway implements PosTerminalGateway {
     private final AtmHostService hostService;
     private final UiBridge ui;
 
+    /** One POS reversal at a time — see {@link #startReversal}. */
+    private final java.util.concurrent.atomic.AtomicBoolean reversalInFlight =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
+
     /**
      * Production constructor with UI navigation support (for sale + balance_inquiry).
      */
@@ -204,6 +208,23 @@ public final class AtmHostServiceGateway implements PosTerminalGateway {
             callback.onError(PosWire.ERR_INTERNAL, "host service not initialized");
             return;
         }
+        // sendReversal() returns silently when there is nothing to reverse (fresh
+        // boot, or the last record already drained). The wrapper below would then
+        // never fire and never restore the original listener: the POS caller timed
+        // out, and the NEXT onError from any host operation — a key-download
+        // failure, a health check — fired this stale callback with an unrelated
+        // error for a dead flowId. Answer immediately instead.
+        if (!hostService.hasReversibleTransaction()) {
+            callback.onError(PosWire.ERR_INVALID_REQUEST, "no transaction to reverse");
+            return;
+        }
+        // One reversal at a time: a second wrapper installed over the first would
+        // capture the first wrapper as its "original", restore the wrong listener,
+        // and drop whichever result arrived second. Released when the result fires.
+        if (!reversalInFlight.compareAndSet(false, true)) {
+            callback.onError(PosWire.ERR_TERMINAL_BUSY, "a reversal is already in progress");
+            return;
+        }
 
         // Install a temporary event listener that bridges the host result back
         // to our callback. Restore the original listener after the result fires.
@@ -217,12 +238,14 @@ public final class AtmHostServiceGateway implements PosTerminalGateway {
             @Override public void onError(String error) {
                 if (fired.compareAndSet(false, true)) {
                     hostService.setEventListener(original);
+                    reversalInFlight.set(false);
                     callback.onError(PosWire.ERR_HOST_UNREACHABLE, error);
                 }
             }
             @Override public void onReversalComplete(boolean success) {
                 if (fired.compareAndSet(false, true)) {
                     hostService.setEventListener(original);
+                    reversalInFlight.set(false);
                     if (success) callback.onSuccess("reversal complete");
                     else callback.onError(PosWire.ERR_HOST_UNREACHABLE, "reversal failed");
                 }
@@ -253,7 +276,17 @@ public final class AtmHostServiceGateway implements PosTerminalGateway {
             }
         });
 
-        hostService.sendReversal(reason);
+        try {
+            hostService.sendReversal(reason);
+        } catch (RuntimeException e) {
+            // e.g. RejectedExecutionException when the host executor was shut down
+            // under us. Nothing will fire: restore the listener and answer now.
+            if (fired.compareAndSet(false, true)) {
+                hostService.setEventListener(original);
+                reversalInFlight.set(false);
+                callback.onError(PosWire.ERR_INTERNAL, "reversal could not be started: " + e.getMessage());
+            }
+        }
     }
 
     // ---- Settlement (no card read required) -----------------------------------

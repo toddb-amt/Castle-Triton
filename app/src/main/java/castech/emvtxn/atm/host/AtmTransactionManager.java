@@ -1294,6 +1294,15 @@ public class AtmTransactionManager {
      * @param reason Reversal reason code
      */
     /**
+     * True when the in-memory last transaction (currentRequest + currentResponse)
+     * exists, i.e. {@link #sendReversal(String)} would actually send something
+     * rather than return silently.
+     */
+    public boolean hasReversibleTransaction() {
+        return currentRequest != null && currentResponse != null;
+    }
+
+    /**
      * Sends a fully-constructed reversal that was built from a persisted record
      * (i.e. survives an app restart, unlike the in-memory currentRequest/
      * currentResponse path used by {@link #sendReversal(String)}). Called by
