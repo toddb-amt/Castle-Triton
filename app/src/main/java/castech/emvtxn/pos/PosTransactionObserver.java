@@ -37,14 +37,19 @@ public final class PosTransactionObserver {
 
     /**
      * Watchdog: releases a wedged slot if no result arrives within this window.
-     * Sized to comfortably outlast the slowest legitimate transaction (the host
-     * transaction latch waits up to 130s on the busy-MUX path, plus card/PIN
-     * entry time). This is slot RECOVERY, not caller feedback — the proxy
-     * abandons the flow after its own 90s window and safely discards late
-     * frames; the point is that one wedged transaction must never require an
-     * app restart (or a site visit) before the next POS command can run.
+     * This is slot RECOVERY, not caller feedback — the proxy abandons the flow
+     * after its own 90s window and safely discards late frames; the point is
+     * that one wedged transaction must never require an app restart (or a site
+     * visit) before the next POS command can run.
+     *
+     * <p>It MUST outlast the slowest legitimate flow, because when it fires
+     * before the real result the approval lands on an empty slot and is dropped:
+     * the customer is debited, the POS is told "error", and no reversal is
+     * raised (the terminal saw an approval). Worst legitimate case: card
+     * presentation + up to 60s PIN entry + the 150s busy-MUX host gate. 180s
+     * was inside that envelope; 300s is outside it with margin.
      */
-    static final long WATCHDOG_MILLIS = 180_000L;
+    static final long WATCHDOG_MILLIS = 300_000L;
 
     private static final ScheduledExecutorService watchdog =
             Executors.newSingleThreadScheduledExecutor(r -> {
