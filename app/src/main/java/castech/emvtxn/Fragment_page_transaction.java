@@ -830,26 +830,36 @@ public class Fragment_page_transaction extends Fragment
 	private void cancelTransaction() {
 		android.util.Log.d("Fragment_Txn", "cancelTransaction() called");
 
-		// If this transaction was POS-initiated, answer the waiting POS caller
-		// immediately and free the single POS slot — otherwise the proxy waits
-		// out its full timeout on a transaction the operator already abandoned,
-		// and every later POS command is rejected with terminal_busy until
-		// something else clears the slot. No-op when the transaction wasn't
-		// POS-driven (observer not armed).
-		castech.emvtxn.pos.PosTransactionObserver.notifyDeclined(
-				"user_cancelled", "cancelled at terminal", false);
-
-		// Full reset of ATM state
-		GlobalPara.resetATMTransactionState();
-
-		// Also try to abort any in-progress EMV transaction
+		// Abort FIRST and honour the answer. abortTransaction() returns false when the
+		// terminal is not idle: the request is already at the host (the outcome is the
+		// host's and must be shown), or the transaction thread has not exited yet.
+		// In that case NOTHING below may run — resetting ATM state under a live thread
+		// corrupts the receipt, answering the POS caller would drop the real result
+		// on a cleared slot, and leaving the page lets the next customer start a
+		// second SDK thread. The thread clears state and navigates itself when done.
+		boolean idle = true;
 		if (mainActivity != null) {
 			try {
-				mainActivity.abortTransaction();
+				idle = mainActivity.abortTransaction();
 			} catch (Exception e) {
 				android.util.Log.e("Fragment_Txn", "Error aborting transaction: " + e.getMessage());
 			}
 		}
+		if (!idle) {
+			android.util.Log.w("Fragment_Txn", "cancelTransaction: transaction still completing — staying on page");
+			if (txvStatus != null) txvStatus.setText("Please wait — finishing transaction...");
+			return;
+		}
+
+		// POS-initiated: answer the waiting POS caller now and free the single POS
+		// slot — otherwise the proxy waits out its full timeout on a transaction the
+		// operator already abandoned and every later POS command is rejected with
+		// terminal_busy. No-op when not POS-driven or already answered (exactly-once).
+		castech.emvtxn.pos.PosTransactionObserver.notifyDeclined(
+				"user_cancelled", "cancelled at terminal", false);
+
+		// Full reset of ATM state — safe now: no transaction thread is alive.
+		GlobalPara.resetATMTransactionState();
 
 		// Navigate back to main menu
 		if (mainActivity != null) {

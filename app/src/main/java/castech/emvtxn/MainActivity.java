@@ -2270,12 +2270,42 @@ public class MainActivity extends AppCompatActivity {
      * Abort any in-progress transaction.
      * Sets the abort flag and tries to interrupt the transaction thread.
      */
-    public void abortTransaction() {
+    /**
+     * Abort any in-progress transaction.
+     *
+     * @return {@code true} when the terminal is idle on return — no transaction
+     *         thread alive — so the caller may reset ATM state and leave the page.
+     *         {@code false} when it is NOT: either the request has already gone to
+     *         the host, or the transaction thread did not exit within the grace
+     *         period. In that case the caller must leave GlobalPara alone and stay
+     *         on the transaction page; the thread owns the outcome and clears
+     *         {@code atmTransactionInProgress} / navigates itself when it finishes.
+     *
+     * <p>Why the contract: the previous version cleared {@code atmTransactionInProgress}
+     * and nulled {@code threadTxn} unconditionally after a 4 s wait, although
+     * {@code Thread.interrupt()} cannot unblock a native CTOS call or a socket read.
+     * The UI went idle while the old thread was still inside the SDK, so the next
+     * customer started a second thread issuing CTOS calls concurrently with the
+     * first (the DeadObjectException / CTOS-service-crash class), or the "cancelled"
+     * host call simply completed and moved money after Cancel.</p>
+     */
+    public boolean abortTransaction() {
         Log.d(TAG, "abortTransaction() called");
+
+        // Once the request is on its way to the host the outcome is the host's to
+        // decide and this thread must run to completion to show/print it. Cancelling
+        // here would only hide an approval that has already moved money.
+        if (GlobalPara.atmHostCallInProgress) {
+            Log.w(TAG, "abortTransaction: host request in flight — cannot cancel, letting it complete");
+            return false;
+        }
+
         txnAborted = true;
         needsSdkReinit = true;  // Force full SDK re-init on next transaction
 
-        // Cancel both EMVCL and EMV transactions to unblock any waiting SDK calls
+        // Cancel the contactless kernel to unblock a waiting performTransactionEx().
+        // cancelTransaction() is the one SDK call that is safe cross-thread; nothing
+        // else below may touch the SDK while the transaction thread might be in it.
         try {
             if (emvcl != null) {
                 Log.d(TAG, "Calling emvcl.cancelTransaction() to unblock...");
@@ -2289,22 +2319,31 @@ public class MainActivity extends AppCompatActivity {
         // Full SDK re-init on next transaction (needsSdkReinit=true) will reset state
 
         // Wait for thread to exit
-        if (threadTxn != null && threadTxn.isAlive()) {
+        Thread t = threadTxn;
+        if (t != null && t.isAlive()) {
             try {
                 Log.d(TAG, "Waiting for transaction thread to exit...");
-                threadTxn.join(3000);  // Wait up to 3 seconds
-                if (threadTxn.isAlive()) {
+                t.join(3000);  // Wait up to 3 seconds
+                if (t.isAlive()) {
                     Log.w(TAG, "Thread still alive after 3 seconds, interrupting");
-                    threadTxn.interrupt();
+                    t.interrupt();
                     // Give it one more second after interrupt
-                    threadTxn.join(1000);
+                    t.join(1000);
                 }
             } catch (Exception e) {
                 Log.e(TAG, "Error waiting for thread: " + e.getMessage());
             }
+            if (t.isAlive()) {
+                // Do NOT declare the terminal idle. The thread is still inside the SDK
+                // or a blocking call; it tests txnAborted at its next phase boundary
+                // and clears atmTransactionInProgress itself on exit. Clearing it here
+                // is exactly what let a second thread start CTOS calls alongside this one.
+                Log.w(TAG, "abortTransaction: transaction thread still running — terminal stays busy until it exits");
+                return false;
+            }
         }
 
-        // Flush MSR buffer
+        // Thread is gone (or never existed): the SDK is ours to touch again.
         try {
             if (msr != null) {
                 Log.d(TAG, "Flushing MSR tracks buffer");
@@ -2330,6 +2369,7 @@ public class MainActivity extends AppCompatActivity {
         }
 
         Log.d(TAG, "abortTransaction() complete - SDK will re-init on next transaction");
+        return true;
     }
 
     /**
@@ -2621,10 +2661,18 @@ public class MainActivity extends AppCompatActivity {
         // NOTE: SDK re-initialization is done INSIDE the thread (more thorough)
         // Removed duplicate pre-thread initialization to reduce delay
 
-        // Simple cleanup - just clear old thread reference (NO SDK calls)
-        if (threadTxn != null) {
-            threadTxn = null;
+        // A previous transaction thread that is still running owns the SDK. Never start
+        // a second one beside it — concurrent CTOS calls crash the CTOS service. The
+        // atmTransactionInProgress gate above normally catches this; this is the
+        // backstop for the flag and the thread ever disagreeing.
+        if (threadTxn != null && threadTxn.isAlive()) {
+            Log.w(TAG, "Previous transaction thread still running — refusing to start another");
+            ui_ShowMsg("Please wait —\nfinishing previous transaction\n");
+            return 0;
         }
+
+        // Simple cleanup - just clear old thread reference (NO SDK calls)
+        threadTxn = null;
 
         // Reset flags and mark transaction as in progress
         resetAbortFlag();
@@ -2974,7 +3022,12 @@ public class MainActivity extends AppCompatActivity {
                     if (entryMode == 0) {
                         Log.d(TAG, "No card detected - exiting");
                         ui_ShowMsg("Cancelled\n");
-                        // cancelTransaction was already called by abortTransaction()
+                        // cancelTransaction was already called by abortTransaction().
+                        // Release a POS-armed slot too (exactly-once; no-op when this
+                        // wasn't POS-driven or the Cancel handler already answered) —
+                        // the handler only answers when abortTransaction() reported idle.
+                        castech.emvtxn.pos.PosTransactionObserver.notifyDeclined(
+                                "user_cancelled", "cancelled at terminal", false);
                         GlobalPara.atmTransactionInProgress = false;
                         ui_EnableAllButton();
                         return;
@@ -4651,12 +4704,28 @@ public class MainActivity extends AppCompatActivity {
 
                 GlobalPara.clLED.startIdleLEDBehavior();
 
-                // Check if ATM mode - navigate to receipt page
-                // Include both withdrawal (amount > 0) and balance inquiry mode
-                if (GlobalPara.atmMode ||
+                if (txnAborted && !GlobalPara.atmHostCallSuccess) {
+                    // Cancelled after card detection and the host did not approve —
+                    // either nothing was sent (sendAtmHostRequestWithPinRetry returned
+                    // "Transaction cancelled") or the cancel raced a decline. Nothing to
+                    // receipt. The Cancel handler stayed on the page because this thread
+                    // was still alive, so return to the menu from here, and release a
+                    // POS-armed slot (exactly-once; no-op otherwise). An APPROVAL always
+                    // takes the receipt path below, cancelled or not: money moved.
+                    Log.d(TAG, "Transaction cancelled — returning to main menu");
+                    castech.emvtxn.pos.PosTransactionObserver.notifyDeclined(
+                            "user_cancelled", "cancelled at terminal", false);
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            navigateToPage(GlobalDef.d_PAGE_MAIN_MENU);
+                        }
+                    });
+                } else if (GlobalPara.atmMode ||
                     (GlobalPara.atmSelectedAmount != null && !"0.00".equals(GlobalPara.atmSelectedAmount)) ||
                     GlobalPara.atmBalanceInquiryMode) {
-                    // ATM Mode: Mark transaction as complete and navigate to receipt
+                    // ATM Mode (withdrawal with amount > 0, or balance inquiry):
+                    // mark transaction as complete and navigate to receipt
                     GlobalPara.atmTransactionComplete = true;
 
                     // Small delay before navigating to receipt
@@ -5319,43 +5388,63 @@ public class MainActivity extends AppCompatActivity {
             long surchargeCents, String acctType, String pathTag) {
         int attempt = 1;
         while (true) {
+            // Cancel pressed while the card/PIN was being read (or during a PIN
+            // re-prompt): nothing has gone to the host for THIS attempt, so honour it
+            // here — the last point at which cancelling is free. Past this line the
+            // request is committed and abortTransaction() refuses (atmHostCallInProgress).
+            if (txnAborted) {
+                Log.w(TAG, "ATM HOST (" + pathTag + "): cancelled before send — not contacting host");
+                GlobalPara.atmHostCallSuccess = false;
+                GlobalPara.atmResponseMessage = "Transaction cancelled";
+                return;
+            }
+
             atmTransactionLatch = new java.util.concurrent.CountDownLatch(1);
             // Re-set transaction listener (may have been overwritten by admin screen)
             if (atmTransactionEventListener != null) {
                 atmHostService.setEventListener(atmTransactionEventListener);
                 Log.d(TAG, "ATM HOST (" + pathTag + "): Re-set transaction event listener");
             }
-            if (GlobalPara.atmBalanceInquiryMode) {
-                Log.d(TAG, "ATM HOST (" + pathTag + "): Sending BALANCE INQUIRY, account=" + acctType
-                        + " (attempt " + attempt + ")");
-                atmHostService.performBalanceInquiry(cardData, acctType);
-            } else {
-                Log.d(TAG, "ATM HOST (" + pathTag + "): Sending WITHDRAWAL - amount=" + amountCents
-                        + " cents, surcharge=" + surchargeCents + " cents, account=" + acctType
-                        + " (attempt " + attempt + ")");
-                atmHostService.performWithdrawal(cardData, amountCents, surchargeCents, acctType);
-            }
-
-            // Wait for the host result. MUST outlast the connection layer's own
-            // response timeout (120s for EFX/busy-MUX paths): the socket layer is
-            // the authority on giving up, and every outcome it produces (response,
-            // timeout, error) releases this latch via the listener callbacks. When
-            // this latch was 60s it fired FIRST on a ~50-120s host, abandoning an
-            // in-flight authorization the host then answered "after the fact" —
-            // the customer saw a timeout while the host approved/declined for real.
+            // From here until the latch releases, the request is committed to the host:
+            // abortTransaction() sees this flag and refuses, so a Cancel tap can never
+            // hide an approval that already moved money. Cleared in finally on every
+            // exit path (response, timeout, interrupt).
+            GlobalPara.atmHostCallInProgress = true;
             try {
-                boolean completed = atmTransactionLatch.await(130, java.util.concurrent.TimeUnit.SECONDS);
-                if (!completed) {
-                    Log.e(TAG, "ATM HOST (" + pathTag + "): Transaction TIMEOUT after 130 seconds");
+                if (GlobalPara.atmBalanceInquiryMode) {
+                    Log.d(TAG, "ATM HOST (" + pathTag + "): Sending BALANCE INQUIRY, account=" + acctType
+                            + " (attempt " + attempt + ")");
+                    atmHostService.performBalanceInquiry(cardData, acctType);
+                } else {
+                    Log.d(TAG, "ATM HOST (" + pathTag + "): Sending WITHDRAWAL - amount=" + amountCents
+                            + " cents, surcharge=" + surchargeCents + " cents, account=" + acctType
+                            + " (attempt " + attempt + ")");
+                    atmHostService.performWithdrawal(cardData, amountCents, surchargeCents, acctType);
+                }
+
+                // Wait for the host result. MUST outlast the connection layer's own
+                // response timeout (120s for EFX/busy-MUX paths): the socket layer is
+                // the authority on giving up, and every outcome it produces (response,
+                // timeout, error) releases this latch via the listener callbacks. When
+                // this latch was 60s it fired FIRST on a ~50-120s host, abandoning an
+                // in-flight authorization the host then answered "after the fact" —
+                // the customer saw a timeout while the host approved/declined for real.
+                try {
+                    boolean completed = atmTransactionLatch.await(130, java.util.concurrent.TimeUnit.SECONDS);
+                    if (!completed) {
+                        Log.e(TAG, "ATM HOST (" + pathTag + "): Transaction TIMEOUT after 130 seconds");
+                        GlobalPara.atmHostCallSuccess = false;
+                        GlobalPara.atmResponseMessage = "Transaction timeout";
+                        return;
+                    }
+                } catch (InterruptedException e) {
+                    Log.e(TAG, "ATM HOST (" + pathTag + "): Transaction interrupted: " + e.getMessage());
                     GlobalPara.atmHostCallSuccess = false;
-                    GlobalPara.atmResponseMessage = "Transaction timeout";
+                    GlobalPara.atmResponseMessage = "Transaction interrupted";
                     return;
                 }
-            } catch (InterruptedException e) {
-                Log.e(TAG, "ATM HOST (" + pathTag + "): Transaction interrupted: " + e.getMessage());
-                GlobalPara.atmHostCallSuccess = false;
-                GlobalPara.atmResponseMessage = "Transaction interrupted";
-                return;
+            } finally {
+                GlobalPara.atmHostCallInProgress = false;
             }
 
             // Anything other than a retryable incorrect-PIN decline is final.
