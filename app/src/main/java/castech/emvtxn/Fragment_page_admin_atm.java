@@ -1066,7 +1066,20 @@ public class Fragment_page_admin_atm extends Fragment {
         updateGlobalPara();
     }
 
+    /** The Save button: persists everything on the page, POS-mode settings included. */
     private void saveSettings() {
+        saveSettings(true);
+    }
+
+    /**
+     * @param includePosSettings false for the IMPLICIT saves that Test Connection,
+     *        Download Keys and Request New Working Key run before their host call.
+     *        Those exist to persist the host settings they depend on; they must not
+     *        also commit the POS-mode checkbox. That is how a POS-site terminal lost
+     *        POS mode on 2026-09-18: a stray tap had unchecked "Enable POS Mode" and a
+     *        later Request New Working Key silently persisted it.
+     */
+    private void saveSettings(boolean includePosSettings) {
         try {
             SharedPreferences.Editor editor = getContext()
                 .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit();
@@ -1107,8 +1120,11 @@ public class Fragment_page_admin_atm extends Fragment {
 
             editor.apply();
 
-            // Persist POS Mode settings (own SharedPreferences file via PosConfig)
-            savePosSettings();
+            // Persist POS Mode settings (own SharedPreferences file via PosConfig) —
+            // only for the explicit Save button, never for an implicit save.
+            if (includePosSettings) {
+                savePosSettings();
+            }
 
             // Update GlobalPara
             updateGlobalPara();
@@ -1266,8 +1282,9 @@ public class Fragment_page_admin_atm extends Fragment {
             return;
         }
 
-        // Save settings first so they're available to host service
-        saveSettings();
+        // Save host settings first so they're available to host service (implicit
+        // save: leaves the POS-mode settings alone)
+        saveSettings(false);
 
         txvHostStatus.setText("Status: Initializing host service...");
         txvHostStatus.setTextColor(0xFF666666);
@@ -1443,8 +1460,9 @@ public class Fragment_page_admin_atm extends Fragment {
             return;
         }
 
-        // Ensure settings are saved (this is fast, OK on main thread)
-        saveSettings();
+        // Ensure host settings are saved (this is fast, OK on main thread). Implicit
+        // save: the POS-mode settings are not touched.
+        saveSettings(false);
 
         txvHostStatus.setText("Status: Initializing...");
         txvHostStatus.setTextColor(0xFF666666);
@@ -1564,8 +1582,9 @@ public class Fragment_page_admin_atm extends Fragment {
             return;
         }
 
-        // Ensure settings are saved (this is fast, OK on main thread)
-        saveSettings();
+        // Ensure host settings are saved (this is fast, OK on main thread). Implicit
+        // save: the POS-mode settings are not touched.
+        saveSettings(false);
 
         txvHostStatus.setText("Status: Initializing...");
         txvHostStatus.setTextColor(0xFF666666);
@@ -2019,14 +2038,24 @@ public class Fragment_page_admin_atm extends Fragment {
      */
     private void savePosSettings() {
         if (posConfig == null) return;
-        if (edtPosProxyUrl != null)   posConfig.setProxyBaseUrl(edtPosProxyUrl.getText().toString().trim());
-        if (edtPosAccessKey != null)  posConfig.setTerminalAccessKey(edtPosAccessKey.getText().toString().trim());
-        if (cbEnablePosMode != null) {
+        // A greyed control is read-only for this tier (the POS section is Super-only);
+        // its state is never persisted, whatever it happens to hold.
+        if (edtPosProxyUrl != null && edtPosProxyUrl.isEnabled()) {
+            posConfig.setProxyBaseUrl(edtPosProxyUrl.getText().toString().trim());
+        }
+        if (edtPosAccessKey != null && edtPosAccessKey.isEnabled()) {
+            posConfig.setTerminalAccessKey(edtPosAccessKey.getText().toString().trim());
+        }
+        if (cbEnablePosMode != null && cbEnablePosMode.isEnabled()) {
             boolean wasEnabled = posConfig.isEnabled();
             boolean nowEnabled = cbEnablePosMode.isChecked();
             posConfig.setEnabled(nowEnabled);
             if (wasEnabled != nowEnabled) {
-                Log.d(TAG, "POS Mode toggled " + (nowEnabled ? "ON" : "OFF") + " — restart required");
+                // Loud and attributable: this flips the terminal between POS-driven
+                // and walk-up operation.
+                Log.w(TAG, "POS Mode toggled " + (nowEnabled ? "ON" : "OFF")
+                        + " by admin tier=" + (accessLevel == ACCESS_SUPER ? "SUPER" : "NORMAL")
+                        + " via Save Settings — restart required");
             }
         }
     }
