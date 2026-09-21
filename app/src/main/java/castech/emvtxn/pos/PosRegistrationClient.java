@@ -10,6 +10,7 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import okhttp3.HttpUrl;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.Response;
@@ -35,6 +36,16 @@ import okio.ByteString;
 public final class PosRegistrationClient {
 
     private static final String TAG = "PosRegistrationClient";
+
+    /**
+     * True if OkHttp will accept {@code url} as a WebSocket URL. OkHttp parses
+     * ws/wss by mapping them to http/https first, so probe the same way.
+     */
+    static boolean isUsableWebSocketUrl(String url) {
+        if (url == null || url.isEmpty()) return false;
+        String probe = url.replaceFirst("(?i)^wss:", "https:").replaceFirst("(?i)^ws:", "http:");
+        return HttpUrl.parse(probe) != null;
+    }
 
     /** Capabilities this terminal advertises to the proxy. */
     public static final List<String> SUPPORTED_CAPABILITIES = java.util.Arrays.asList(
@@ -211,7 +222,14 @@ public final class PosRegistrationClient {
             }
 
             String connectionUrl = resource.optString(PosWire.REG_CONNECTION_URL, "");
-            if (connectionUrl.isEmpty()) {
+            if (!isUsableWebSocketUrl(connectionUrl)) {
+                // Missing or malformed: use the default. The connection client builds
+                // an OkHttp Request from this string on the OkHttp thread; an
+                // unparsable URL threw an unchecked exception there and killed the
+                // whole process — walk-up fallback included.
+                if (!connectionUrl.isEmpty()) {
+                    Log.w(TAG, "Ignoring malformed connection_url from proxy: '" + connectionUrl + "'");
+                }
                 connectionUrl = config.getProxyBaseUrl().replaceAll("/+$", "") + PosWire.PATH_CONNECT;
             }
 

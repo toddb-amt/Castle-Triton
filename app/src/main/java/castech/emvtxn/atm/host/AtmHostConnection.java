@@ -171,6 +171,15 @@ public class AtmHostConnection {
 
         // Enforce TLS 1.2 minimum
         sslSocket.setEnabledProtocols(new String[] { "TLSv1.2", "TLSv1.3" });
+
+        // Bound the TLS handshake. socket.connect() above only bounds the TCP
+        // connect; without this the socket has SO_TIMEOUT=0 while
+        // startHandshake() waits for the ServerHello, so a peer (or MUX) that
+        // ACKs the connect and the ClientHello but never answers blocks the
+        // transaction thread forever — there is no unacked data, so the kernel
+        // never times it out either. The response timeout is applied after the
+        // handshake, below.
+        sslSocket.setSoTimeout(config.getConnectionTimeout());
         sslSocket.startHandshake();
 
         socket = sslSocket;
@@ -272,16 +281,19 @@ public class AtmHostConnection {
         byte[] requestMessage = builder.buildReversalRequest(request);
         // Log the request bytes so we (and the mux team) can see exactly what
         // we put on the wire when a reversal gets rejected.
-        Log.d(TAG, "[" + config.getName() + "] Reversal REQ (" + requestMessage.length + " bytes): "
-                + toHex(requestMessage));
+        // Field-wise rendering with Track 2 / EMV 5A-57 / PIN block masked: a Type 86
+        // echoes the original 85's EMV TLV, so a raw hex dump put the full PAN and
+        // Track 2 in logcat. Everything the MUX team needs to see stays readable.
+        Log.d(TAG, "[" + config.getName() + "] Reversal REQ: "
+                + castech.emvtxn.LogMask.std1(requestMessage));
 
         byte[] responseMessage = sendAndReceive(requestMessage);
 
         // Log the raw response bytes too — needed to diagnose "Reversal not accepted"
         // failures (the parsed responseCode alone doesn't show framing or field layout
         // differences).
-        Log.d(TAG, "[" + config.getName() + "] Reversal RSP (" + responseMessage.length + " bytes): "
-                + toHex(responseMessage));
+        Log.d(TAG, "[" + config.getName() + "] Reversal RSP: "
+                + castech.emvtxn.LogMask.std1(responseMessage));
 
         ReversalResponse response = parser.parseReversalResponse(responseMessage);
 
@@ -509,7 +521,18 @@ public class AtmHostConnection {
             disconnect();
             throw new ConnectionException("Connection lost - streams became null", e);
         } catch (SocketTimeoutException e) {
+            // The host went silent mid-exchange; the socket's state is unknown and
+            // any late bytes would corrupt the next exchange. Drop it so the next
+            // operation opens a fresh connection instead of reusing this one.
+            disconnect();
             throw new ConnectionException("Response timeout", e);
+        } catch (ConnectionException e) {
+            // readResponse() signals "connection closed by host" (read() == -1) and
+            // bad framing as ConnectionException, which is NOT an IOException and
+            // used to bypass the disconnect below — leaving a half-closed socket
+            // that isConnected() still reported as live.
+            disconnect();
+            throw e;
         } catch (IOException e) {
             disconnect();
             throw new ConnectionException("Communication error: " + e.getMessage(), e);
@@ -698,6 +721,15 @@ public class AtmHostConnection {
     }
 
     /**
+     * Test seam: injects the socket so the EOT-wait path (which sets SO_TIMEOUT
+     * on it) can be exercised. An unconnected {@code new Socket()} is enough —
+     * setSoTimeout() needs no peer. Package-private on purpose.
+     */
+    void injectSocketForTest(java.net.Socket s) {
+        this.socket = s;
+    }
+
+    /**
      * Completes the handshake by sending ACK and waiting for EOT.
      *
      * <p>Package-private so {@code AtmHostConnectionHandshakeTest} can verify it
@@ -729,8 +761,14 @@ public class AtmHostConnection {
             out.flush();
             log("Sent ACK");
 
-            // Wait for EOT
-            socket.setSoTimeout(config.getEotTimeout());
+            // Wait for EOT. Capture the socket locally too: a concurrent
+            // disconnect() nulls the field, and an NPE here is not an IOException.
+            java.net.Socket s = socket;
+            if (s == null) {
+                log("Handshake: socket already closed — skipping EOT wait");
+                return;
+            }
+            s.setSoTimeout(config.getEotTimeout());
             byte[] eotResponse = readResponse();
 
             if (!parser.isEot(eotResponse)) {
@@ -740,18 +778,20 @@ public class AtmHostConnection {
             }
 
             // Restore normal timeout
-            socket.setSoTimeout(config.getResponseTimeout());
+            s.setSoTimeout(config.getResponseTimeout());
 
         } catch (SocketTimeoutException e) {
             // EOT timeout is not critical
             log("EOT timeout (non-critical)");
-        } catch (IOException e) {
-            // Was: throw new ConnectionException(...). That discarded an approval we
-            // had already received and reversed approved withdrawals (host closes
-            // the socket right after responding, so the ACK write hits a broken
-            // pipe). The response is authoritative; log the cleanup failure and move on.
+        } catch (Exception e) {
+            // Was: catch (IOException) only. That still let two failures escape
+            // and reverse approved withdrawals: readResponse() throws
+            // ConnectionException (not an IOException) when the host closes the
+            // socket without sending EOT — read() returns -1 — and setSoTimeout()
+            // NPEs if disconnect() raced us. The response is authoritative;
+            // NOTHING thrown from this cleanup may propagate.
             log("Handshake completion error (non-critical, response already received): "
-                    + e.getMessage());
+                    + e.getClass().getSimpleName() + " - " + e.getMessage());
         }
     }
 
@@ -817,6 +857,28 @@ public class AtmHostConnection {
         if (!isConnected()) {
             connect();
         }
+    }
+
+    /**
+     * Drops any existing socket and opens a new one.
+     *
+     * <p>Use this at the start of a customer transaction instead of
+     * {@link #ensureConnected()}. The host closes its side after every exchange
+     * (see {@link #completeHandshake()}), but {@link java.net.Socket#isConnected()}
+     * stays true after the peer's FIN and {@link java.net.Socket#isClosed()} only
+     * reflects a local close — so a socket left open by an earlier operation
+     * (a health check, a status probe) passes {@link #isConnected()} and the 85
+     * is written into a dead pipe. That surfaced as a ConnectionException with
+     * requestSentToHost already true, i.e. a reversal for a request the host
+     * never saw. One TCP/TLS setup per transaction is the price of never reusing
+     * a socket whose far end we cannot observe.</p>
+     */
+    public synchronized void connectFresh() throws ConnectionException {
+        if (connected || socket != null) {
+            log("connectFresh: dropping existing socket before reconnecting");
+            disconnect();
+        }
+        connect();
     }
 
     // =========================================================================

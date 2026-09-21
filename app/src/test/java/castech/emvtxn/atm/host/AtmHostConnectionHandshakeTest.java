@@ -83,4 +83,53 @@ public class AtmHostConnectionHandshakeTest {
                     + "non-fatal once the response is received. Got: " + e.getMessage());
         }
     }
+
+    /** An OutputStream that accepts every write (the ACK goes out fine). */
+    private static OutputStream sinkStream() {
+        return new OutputStream() {
+            @Override public void write(int b) { }
+        };
+    }
+
+    /**
+     * The gap the first fix left open: the ACK is written successfully, but the
+     * host then closes the socket WITHOUT sending EOT (what a MUX restart looks
+     * like). readResponse() sees read() == -1 and throws ConnectionException —
+     * which is not an IOException, so the old {@code catch (IOException)} let it
+     * escape and reverse the approval already in hand.
+     */
+    @Test
+    public void completeHandshake_hostClosesWithoutEot_isNonFatal() throws Exception {
+        AtmHostConnection conn = newConnection();
+        conn.injectStreamsForTest(sinkStream(), new ByteArrayInputStream(new byte[0]));
+        conn.injectSocketForTest(new java.net.Socket()); // unconnected; setSoTimeout() works
+
+        try {
+            conn.completeHandshake();
+        } catch (Throwable t) {
+            fail("completeHandshake() threw when the host closed without EOT after "
+                    + "responding — the response is authoritative and this must be "
+                    + "non-fatal. Got: " + t.getClass().getSimpleName() + ": " + t.getMessage());
+        }
+    }
+
+    /**
+     * A concurrent disconnect() nulls the socket field between the ACK write and
+     * the EOT wait. That used to NPE on socket.setSoTimeout() — a RuntimeException,
+     * also not caught by the old handler.
+     */
+    @Test
+    public void completeHandshake_socketRacedToNull_isNonFatal() {
+        AtmHostConnection conn = newConnection();
+        conn.injectStreamsForTest(sinkStream(), new ByteArrayInputStream(new byte[0]));
+        conn.injectSocketForTest(null);
+
+        try {
+            conn.completeHandshake();
+        } catch (Throwable t) {
+            fail("completeHandshake() threw when the socket was nulled by a concurrent "
+                    + "disconnect — must be non-fatal. Got: "
+                    + t.getClass().getSimpleName() + ": " + t.getMessage());
+        }
+    }
 }

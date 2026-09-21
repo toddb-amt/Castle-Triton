@@ -836,6 +836,16 @@ public class AtmHostService {
         return transactionManager != null && transactionManager.isTransactionInProgress();
     }
 
+    /**
+     * True when {@link #sendReversal(String)} has a last transaction to act on.
+     * Callers that install a temporary listener to catch the result (the POS
+     * gateway) must check this first: sendReversal() returns silently when there
+     * is nothing to reverse, and no callback would ever fire.
+     */
+    public boolean hasReversibleTransaction() {
+        return transactionManager != null && transactionManager.hasReversibleTransaction();
+    }
+
     // =========================================================================
     // Reversal Persistence Methods
     // =========================================================================

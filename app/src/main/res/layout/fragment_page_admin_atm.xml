@@ -50,6 +50,7 @@
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
+                android:id="@+id/hdrFeeConfig"
                 android:text="Fee Configuration"
                 android:textSize="18sp"
                 android:textStyle="bold"
@@ -146,6 +147,7 @@
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
+                android:id="@+id/hdrWithdrawal"
                 android:text="Withdrawal Limits"
                 android:textSize="18sp"
                 android:textStyle="bold"
@@ -208,6 +210,7 @@
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
+                android:id="@+id/hdrTerminalInfo"
                 android:text="Terminal Information"
                 android:textSize="18sp"
                 android:textStyle="bold"
@@ -233,6 +236,7 @@
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
+                android:id="@+id/hdrHostSettings"
                 android:text="Host Settings"
                 android:textSize="18sp"
                 android:textStyle="bold"
@@ -421,6 +425,7 @@
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
+                android:id="@+id/hdrReversal"
                 android:text="Reversal Management"
                 android:textSize="18sp"
                 android:textStyle="bold"
@@ -468,6 +473,7 @@
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
+                android:id="@+id/hdrHistory"
                 android:text="Transaction History"
                 android:textSize="18sp"
                 android:textStyle="bold"
@@ -514,6 +520,7 @@
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
+                android:id="@+id/hdrWifi"
                 android:text="WiFi Configuration"
                 android:textSize="18sp"
                 android:textStyle="bold"
@@ -637,6 +644,7 @@
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
+                android:id="@+id/hdrDiagnostics"
                 android:text="Diagnostics"
                 android:textSize="18sp"
                 android:textStyle="bold"
@@ -669,6 +677,7 @@
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
+                android:id="@+id/hdrKiosk"
                 android:text="Kiosk Mode"
                 android:textSize="18sp"
                 android:textStyle="bold"

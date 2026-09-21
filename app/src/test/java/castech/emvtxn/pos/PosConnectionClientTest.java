@@ -304,6 +304,53 @@ public class PosConnectionClientTest {
         return callback -> fail("registrar must not be called when JWT is valid");
     }
 
+    // ---- defect 5 (2026-09-01): token rejection must always re-register --------
+
+    @Test
+    public void upgradeRejectedWithAnyHttpStatusClearsJwtAndReregisters() throws Exception {
+        // JWT locally "valid" (clock skew) but the server rejects the upgrade
+        // with a NON-401 status. The client must clear the token and fall back
+        // to registration — with 15-minute proxy tokens, a server-side expiry
+        // rejection at reconnect is the normal case, whatever its status code.
+        config.setJwt("stale-but-locally-valid", System.currentTimeMillis() + 3_600_000L);
+        server.enqueue(new MockResponse().setResponseCode(400).setBody("token expired"));
+
+        CountDownLatch registered = new CountDownLatch(1);
+        Registrar registrar = callback -> registered.countDown(); // never completes — we only care that it was invoked
+
+        Recorder rec = new Recorder();
+        PosConnectionClient client = newClient(rec, registrar);
+        client.start();
+
+        assertTrue("client must fall back to registration after ANY HTTP upgrade rejection",
+                registered.await(5, TimeUnit.SECONDS));
+        assertTrue("rejected JWT must have been cleared", config.jwt.isEmpty());
+    }
+
+    @Test
+    public void supervisorRecoversFromSilentlyStalledConnection() throws Exception {
+        // Server accepts TCP but never answers the WebSocket upgrade — with
+        // readTimeout(0) no callback ever fires, which is exactly the "went
+        // completely silent" wedge from defect 5. The supervisor must notice the
+        // missed deadline, cancel the hung attempt, clear the JWT, and re-register.
+        config.setJwt("hang-token", System.currentTimeMillis() + 3_600_000L);
+        server.enqueue(new MockResponse()
+                .setSocketPolicy(okhttp3.mockwebserver.SocketPolicy.NO_RESPONSE));
+
+        CountDownLatch registered = new CountDownLatch(1);
+        Registrar registrar = callback -> registered.countDown();
+
+        Recorder rec = new Recorder();
+        PosConnectionClient client = newClient(rec, registrar);
+        client.supervisorPeriodMillis = 50L;   // check fast
+        client.staleGraceMillis = 200L;        // stall declared after 200ms without progress
+        client.start();
+
+        assertTrue("supervisor must force re-registration out of a silent stall",
+                registered.await(5, TimeUnit.SECONDS));
+        assertTrue("stalled attempt's JWT must have been cleared", config.jwt.isEmpty());
+    }
+
     private static final class Recorder implements PosConnectionClient.ConnectionListener {
         final CountDownLatch connected = new CountDownLatch(1);
         final CountDownLatch connectedAgain = new CountDownLatch(2);   // second connect == reconnect
