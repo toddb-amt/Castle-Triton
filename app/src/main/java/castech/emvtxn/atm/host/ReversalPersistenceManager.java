@@ -347,16 +347,21 @@ public class ReversalPersistenceManager {
      * @param success Whether it was successful
      */
     public void addToCompletedHistory(PendingReversal reversal, boolean success) {
+        pushHistory(CompletedReversal.completed(reversal, success));
+    }
+
+    /**
+     * Records a human resolution: the record leaves the pending list (see
+     * {@link #removePendingReversal}) but its identity, amount, attempt count and the
+     * operator's reason survive in history — a resolved record is never silently gone.
+     */
+    public void addResolvedToHistory(PendingReversal reversal, String resolution, String resolvedBy) {
+        pushHistory(CompletedReversal.resolved(reversal, resolution, resolvedBy));
+        journal.appendEvent("resolve", reversal, "by=" + resolvedBy + " reason=" + resolution);
+    }
+
+    private void pushHistory(CompletedReversal completed) {
         List<CompletedReversal> history = getCompletedHistory();
-
-        CompletedReversal completed = new CompletedReversal();
-        completed.setTransactionId(reversal.getTransactionId());
-        completed.setAmountCents(reversal.getAmountCents());
-        completed.setCreatedTime(reversal.getCreatedTime());
-        completed.setCompletedTime(System.currentTimeMillis());
-        completed.setSuccess(success);
-        completed.setAttempts(reversal.getAttemptCount());
-
         history.add(0, completed); // Add to beginning
 
         // Trim history
@@ -801,6 +806,10 @@ public class ReversalPersistenceManager {
         private long completedTime;
         private boolean success;
         private int attempts;
+        /** Operator's reason when a record was resolved by hand instead of sent; "" otherwise. */
+        private String resolution = "";
+        /** Who resolved it ("SUPER" / "NORMAL" admin tier); "" for drain results. */
+        private String resolvedBy = "";
 
         // Getters and setters
         public String getTransactionId() { return transactionId; }
@@ -821,6 +830,36 @@ public class ReversalPersistenceManager {
         public int getAttempts() { return attempts; }
         public void setAttempts(int attempts) { this.attempts = attempts; }
 
+        public String getResolution() { return resolution == null ? "" : resolution; }
+        public void setResolution(String resolution) { this.resolution = resolution == null ? "" : resolution; }
+
+        public String getResolvedBy() { return resolvedBy == null ? "" : resolvedBy; }
+        public void setResolvedBy(String resolvedBy) { this.resolvedBy = resolvedBy == null ? "" : resolvedBy; }
+
+        /** History entry for a record the drain finished with (sent, or gave up on). */
+        public static CompletedReversal completed(PendingReversal reversal, boolean success) {
+            CompletedReversal c = new CompletedReversal();
+            c.setTransactionId(reversal.getTransactionId());
+            c.setAmountCents(reversal.getAmountCents());
+            c.setCreatedTime(reversal.getCreatedTime());
+            c.setCompletedTime(System.currentTimeMillis());
+            c.setSuccess(success);
+            c.setAttempts(reversal.getAttemptCount());
+            return c;
+        }
+
+        /**
+         * History entry for a record a human resolved with a stated reason (processor
+         * confirmed the original declined / reversed it manually / duplicate). Never a
+         * success: nothing was sent to the host — the reason is the evidence.
+         */
+        public static CompletedReversal resolved(PendingReversal reversal, String resolution, String resolvedBy) {
+            CompletedReversal c = completed(reversal, false);
+            c.setResolution(resolution);
+            c.setResolvedBy(resolvedBy);
+            return c;
+        }
+
         public String getFormattedAmount() {
             return String.format(Locale.US, "$%.2f", amountCents / 100.0);
         }
@@ -839,6 +878,8 @@ public class ReversalPersistenceManager {
                 obj.put("completedTime", completedTime);
                 obj.put("success", success);
                 obj.put("attempts", attempts);
+                obj.put("resolution", resolution == null ? "" : resolution);
+                obj.put("resolvedBy", resolvedBy == null ? "" : resolvedBy);
             } catch (JSONException e) {
                 Log.e(TAG, "Error converting to JSON: " + e.getMessage());
             }
@@ -853,6 +894,8 @@ public class ReversalPersistenceManager {
             rev.completedTime = obj.optLong("completedTime", 0);
             rev.success = obj.optBoolean("success", false);
             rev.attempts = obj.optInt("attempts", 0);
+            rev.resolution = obj.optString("resolution", "");
+            rev.resolvedBy = obj.optString("resolvedBy", "");
             return rev;
         }
     }
