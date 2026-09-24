@@ -42,13 +42,20 @@ public final class CasHubParams {
                 public void onReceive(Context c, android.content.Intent intent) {
                     try {
                         Log.w(TAG, "PARAMETER_UPDATED received — re-applying CasHUB config");
-                        if (applyToConfig(appCtx)) {
+                        Applied a = applyToConfigDetailed(appCtx);
+                        if (a.anyRows) {
                             KmsConfigStore.backup();
                             // Re-persist to SharedPreferences so admin screen /
                             // hasHostConfiguration() reflect the live update too.
                             if (GlobalPara.mainActivity != null) {
                                 AtmSettingsManager sm = GlobalPara.mainActivity.getAtmSettingsManager();
                                 if (sm != null) sm.persistCurrentToPrefs();
+                                // POS settings changed: restart the POS stack live so the
+                                // lane picks up the new proxy / credential / on-off state
+                                // without waiting for the nightly reboot.
+                                if (a.posDiff != null && a.posDiff.any()) {
+                                    GlobalPara.mainActivity.onPosParamsChanged(a.posDiff);
+                                }
                             }
                         }
                     } catch (Throwable t) {
@@ -112,30 +119,74 @@ public final class CasHubParams {
      * re-applied on every startup, so a CasHUB-managed terminal never needs local
      * entry. Recognized JSON keys mirror KmsConfigStore: host_address, host_port,
      * terminal_id, processor_type, protocol_type, use_flat_fee, flat_fee,
-     * percentage_fee, min_amount, max_amount.
+     * percentage_fee, min_amount, max_amount — plus the POS-mode keys pos_enabled,
+     * pos_proxy_url, pos_terminal_access_key (see {@link #applyToConfigDetailed}).
      *
      * @return true if at least one parameter row was found and applied
      */
     public static boolean applyToConfig(Context ctx) {
+        return applyToConfigDetailed(ctx).anyRows;
+    }
+
+    /** Outcome of one apply: whether any rows existed, and what the POS keys changed. */
+    public static final class Applied {
+        public final boolean anyRows;
+        /** Null when no pos_* key was present. */
+        public final castech.emvtxn.pos.PosParams.Diff posDiff;
+        Applied(boolean anyRows, castech.emvtxn.pos.PosParams.Diff posDiff) {
+            this.anyRows = anyRows;
+            this.posDiff = posDiff;
+        }
+    }
+
+    /**
+     * Same as {@link #applyToConfig} but also reports what the POS-mode keys
+     * ({@code pos_enabled}, {@code pos_proxy_url}, {@code pos_terminal_access_key})
+     * changed. Those keys go to {@link castech.emvtxn.pos.PosConfig} — the single
+     * owner of POS settings, which the admin screen also reads — and are kept out
+     * of the host-config payload (and therefore out of the KMS-II backup, which
+     * must never carry the access key). Absent keys leave local values alone;
+     * present-but-invalid values are logged and ignored.
+     */
+    public static Applied applyToConfigDetailed(Context ctx) {
         java.util.LinkedHashMap<String, String> merged = new java.util.LinkedHashMap<>();
         int rows = mergeRows(ctx, URI_TERMINAL, merged);
         rows += mergeRows(ctx, URI_MERCHANT, merged);
-        if (merged.isEmpty()) return false;
+        if (merged.isEmpty()) return new Applied(false, null);
 
         if (rows > 1) {
             Log.w(TAG, "CasHUB has " + rows + " parameter rows for this package; merged "
                     + "last-wins. Consolidate to a single parameter to avoid ambiguity.");
         }
 
+        // POS-mode keys → PosConfig
+        castech.emvtxn.pos.PosParams pos = castech.emvtxn.pos.PosParams.parse(merged);
+        castech.emvtxn.pos.PosParams.Diff posDiff = null;
+        if (!pos.isEmpty()) {
+            for (String problem : pos.problems) {
+                Log.w(TAG, "CasHUB POS param ignored — " + problem);
+            }
+            castech.emvtxn.pos.PosConfig cfg = new castech.emvtxn.pos.PosConfig(ctx);
+            posDiff = pos.applyTo(cfg);
+            // Never the key itself — it is a bearer credential.
+            Log.w(TAG, "Applied CasHUB POS config: enabled=" + cfg.isEnabled()
+                    + " proxy=" + cfg.getProxyBaseUrl()
+                    + " accessKey=" + (cfg.getTerminalAccessKey().isEmpty() ? "[none]" : "[set]")
+                    + (posDiff.any() ? " (changed: enabled=" + posDiff.enabledChanged
+                        + " credentials=" + posDiff.credentialsChanged + ")" : " (unchanged)"));
+        }
+
+        // Everything else → the host-config mapping
         StringBuilder payload = new StringBuilder();
         for (java.util.Map.Entry<String, String> e : merged.entrySet()) {
+            if (castech.emvtxn.pos.PosParams.KEYS.contains(e.getKey())) continue;
             payload.append(e.getKey()).append('=').append(e.getValue()).append('\n');
         }
         KmsConfigStore.applyPayload(payload.toString());
         Log.w(TAG, "Applied CasHUB central config: host=" + GlobalPara.atmHostAddress
                 + " port=" + GlobalPara.atmHostPort + " tid=" + GlobalPara.atmTerminalId
                 + " processor=" + GlobalPara.atmProcessorType);
-        return true;
+        return new Applied(true, posDiff);
     }
 
     /**
@@ -220,6 +271,7 @@ public final class CasHubParams {
                         } catch (Throwable t) {
                             v = "<non-string type>";
                         }
+                        if (v != null) v = castech.emvtxn.pos.PosParams.maskForLog(v);   // never log the access key
                         if (v != null && v.length() > 300) v = v.substring(0, 300) + "...(" + v.length() + ")";
                         sb.append(c.getColumnName(i)).append('=').append(v).append(" | ");
                     }

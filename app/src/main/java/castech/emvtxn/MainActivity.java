@@ -1178,6 +1178,63 @@ public class MainActivity extends AppCompatActivity {
     }
 
     /**
+     * CasHUB pushed a change to the POS-mode settings (see CasHubParams). Apply it
+     * live: restart the POS stack so the lane picks up the new proxy URL / access
+     * key / on-off state without waiting for the nightly reboot. Safe to call from
+     * any thread.
+     */
+    public void onPosParamsChanged(final castech.emvtxn.pos.PosParams.Diff diff) {
+        if (diff == null || !diff.any()) return;
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                restartPosMode(diff.credentialsChanged, 0);
+            }
+        });
+    }
+
+    /** 20 × 3 s: how long a live POS-settings change waits for an in-flight register transaction. */
+    private static final int POS_RESTART_MAX_DEFERRALS = 20;
+
+    /**
+     * Stops the running POS stack (if any) and starts it again from the current
+     * PosConfig. Main thread only. A restart while a register transaction is in
+     * flight would drop that transaction's reply, so it is deferred in 3 s steps
+     * until the POS slot is free (bounded — after 60 s it proceeds regardless).
+     */
+    private void restartPosMode(final boolean credentialsChanged, final int deferrals) {
+        if (castech.emvtxn.pos.PosTransactionObserver.isArmed() && deferrals < POS_RESTART_MAX_DEFERRALS) {
+            Log.w(TAG, "POS settings changed while a POS transaction is in flight — deferring restart ("
+                    + (deferrals + 1) + "/" + POS_RESTART_MAX_DEFERRALS + ")");
+            new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    restartPosMode(credentialsChanged, deferrals + 1);
+                }
+            }, 3000);
+            return;
+        }
+        if (posOrchestrator != null) {
+            Log.w(TAG, "Stopping POS orchestrator — POS settings changed via CasHUB");
+            try {
+                posOrchestrator.stop();
+            } catch (Exception e) {
+                Log.w(TAG, "POS orchestrator stop failed: " + e.getMessage());
+            }
+            posOrchestrator = null;
+        }
+        castech.emvtxn.pos.PosConfig cfg = new castech.emvtxn.pos.PosConfig(this);
+        if (credentialsChanged) {
+            // The cached JWT was issued against the old proxy / access key; force a
+            // fresh registration rather than presenting it to the new endpoint.
+            cfg.clearJwt();
+        }
+        startPosModeIfEnabled();
+        Log.w(TAG, "POS mode re-applied from CasHUB: enabled=" + cfg.isEnabled()
+                + " running=" + (posOrchestrator != null));
+    }
+
+    /**
      * Performs working key renewal on startup if needed.
      * Called automatically after ATM Host Service is initialized.
      */
