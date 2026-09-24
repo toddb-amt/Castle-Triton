@@ -443,18 +443,76 @@ public class MainActivity extends AppCompatActivity {
         return outOfPaper;
     }
 
+    /** Paper half of the service banner (see {@link #updateServiceBanner()}). */
+    private boolean paperBannerShown = false;
+    /** Reversal half of the service banner; null = nothing to show. */
+    private String reversalBannerText = null;
+
     /**
-     * Shows/hides the persistent bottom service banner. UI thread only.
+     * Shows/hides the out-of-paper notice on the persistent bottom service banner. UI thread only.
      */
     public void updatePaperBanner(boolean outOfPaper) {
+        paperBannerShown = outOfPaper;
+        updateServiceBanner();
+    }
+
+    /**
+     * Reversal state on the service banner (6.2.7 reversal policy). A FAILED record
+     * shows a service-required notice while the terminal keeps transacting; the
+     * safety stop (2+ FAILED) shows the out-of-service notice. UI thread only.
+     */
+    public void updateReversalBanner(int activeCount, int failedCount, boolean outOfService) {
+        if (outOfService) {
+            reversalBannerText = getString(R.string.banner_out_of_service);
+        } else if (failedCount > 0) {
+            reversalBannerText = getString(R.string.banner_reversal_pending);
+        } else {
+            reversalBannerText = null;
+        }
+        updateServiceBanner();
+    }
+
+    /** Composes paper + reversal notices onto the one banner view. UI thread only. */
+    private void updateServiceBanner() {
         try {
             android.widget.TextView banner = findViewById(R.id.txvServiceBanner);
-            if (banner != null) {
-                banner.setVisibility(outOfPaper ? View.VISIBLE : View.GONE);
+            if (banner == null) return;
+            StringBuilder sb = new StringBuilder();
+            if (paperBannerShown) sb.append(getString(R.string.banner_out_of_paper));
+            if (reversalBannerText != null) {
+                if (sb.length() > 0) sb.append("\n");
+                sb.append(reversalBannerText);
             }
+            banner.setText(sb.toString());
+            banner.setVisibility(sb.length() > 0 ? View.VISIBLE : View.GONE);
         } catch (Throwable t) {
             Log.w(TAG, "Banner update failed: " + t.getMessage());
         }
+    }
+
+    /**
+     * Applies a record-level reversal message to the receipt of the transaction on
+     * screen. Only called for the current transaction's own record.
+     */
+    private void applyReversalStatusToReceipt(String body) {
+        GlobalPara.atmReversalStatus = body;
+        String lower = body == null ? "" : body.toLowerCase();
+        if (lower.contains("in progress")) {
+            GlobalPara.atmReversalInProgress = true;
+        } else {
+            GlobalPara.atmReversalInProgress = false;
+            if (lower.contains("approved") || lower.contains("complete")) {
+                GlobalPara.atmReversalSent = true;
+            }
+        }
+        // Refresh so the customer sees the status update without waiting for a tap.
+        runOnUiThread(() -> {
+            SectionsPagerAdapter adapter = mSectionsPagerAdapter;
+            if (adapter != null) {
+                Fragment_page_receipt receipt = adapter.getReceiptFragment();
+                if (receipt != null) receipt.refreshDisplay();
+            }
+        });
     }
 
     // ── Toolbar status: WiFi signal + battery level/charging ──────────────────
@@ -484,7 +542,15 @@ public class MainActivity extends AppCompatActivity {
                     (android.net.ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
             if (cm != null) {
                 wifiNetworkCallback = new android.net.ConnectivityManager.NetworkCallback() {
-                    @Override public void onAvailable(android.net.Network n) { runOnUiThread(() -> updateSignalIcon()); }
+                    @Override public void onAvailable(android.net.Network n) {
+                        runOnUiThread(() -> updateSignalIcon());
+                        // Network recovery is the moment a stuck reversal is most likely to
+                        // go through — retry FAILED records shortly (never on a customer's txn).
+                        AtmHostService svc = atmHostService;
+                        if (svc != null) {
+                            try { svc.onNetworkAvailable(); } catch (Throwable t) { Log.w(TAG, "onNetworkAvailable: " + t.getMessage()); }
+                        }
+                    }
                     @Override public void onLost(android.net.Network n) { runOnUiThread(() -> updateSignalIcon()); }
                     @Override public void onCapabilitiesChanged(android.net.Network n,
                             android.net.NetworkCapabilities caps) { runOnUiThread(() -> updateSignalIcon()); }
@@ -920,32 +986,38 @@ public class MainActivity extends AppCompatActivity {
                         @Override
                         public void onProgress(String message) {
                             Log.d(TAG, "ATM Host Progress: " + message);
-                            // Route [REVERSAL] progress messages to the GlobalPara fields the
-                            // receipt fragment displays. Customer-visible — they should see
-                            // the reversal actually happening, not silently in logs.
-                            if (message != null && message.startsWith("[REVERSAL] ")) {
-                                String body = message.substring("[REVERSAL] ".length());
-                                GlobalPara.atmReversalStatus = body;
-                                if (body.toLowerCase().contains("in progress")) {
-                                    GlobalPara.atmReversalInProgress = true;
+                            // Reversal progress is scoped: [REVERSAL:<id>] is about ONE record
+                            // and reaches the receipt only when that record belongs to the
+                            // transaction on screen. [DRAIN] is terminal-wide state — the
+                            // banner and Admin screen get it via onReversalBacklog, never the
+                            // receipt. (A field terminal printed "REVERSAL IN PROGRESS" on
+                            // every customer's receipt for weeks because the drain's messages
+                            // for an old stuck record were treated as the current receipt's.)
+                            castech.emvtxn.atm.host.ReversalProgress rp =
+                                    castech.emvtxn.atm.host.ReversalProgress.parse(message);
+                            if (rp.kind == castech.emvtxn.atm.host.ReversalProgress.Kind.RECORD) {
+                                if (rp.appliesToReceipt(GlobalPara.atmCurrentReversalId)) {
+                                    applyReversalStatusToReceipt(rp.body);
                                 } else {
-                                    // Any non-"in progress" message marks the drain as finished.
-                                    GlobalPara.atmReversalInProgress = false;
-                                    if (body.toLowerCase().contains("approved")
-                                            || body.toLowerCase().contains("complete")) {
-                                        GlobalPara.atmReversalSent = true;
-                                    }
+                                    Log.d(TAG, "Reversal progress for another transaction ("
+                                            + rp.transactionId + ") — not shown on this receipt");
                                 }
-                                // Ask the receipt fragment to refresh so the customer sees the
-                                // status update without waiting for a tap.
-                                runOnUiThread(() -> {
-                                    SectionsPagerAdapter adapter = mSectionsPagerAdapter;
-                                    if (adapter != null) {
-                                        Fragment_page_receipt receipt = adapter.getReceiptFragment();
-                                        if (receipt != null) receipt.refreshDisplay();
-                                    }
-                                });
                             }
+                        }
+
+                        @Override
+                        public void onReversalBacklog(int activeCount, int failedCount, boolean outOfService) {
+                            Log.w(TAG, "Reversal backlog: active=" + activeCount + " failed=" + failedCount
+                                    + (outOfService ? " OUT OF SERVICE" : ""));
+                            runOnUiThread(() -> updateReversalBanner(activeCount, failedCount, outOfService));
+                        }
+
+                        @Override
+                        public void onOperatorAlert(String message) {
+                            // Operator condition, not a transaction error: must NOT reach
+                            // onError (which fails the current transaction, counts down the
+                            // latch and can answer the POS). The banner carries it.
+                            Log.w(TAG, "ATM Host OPERATOR ALERT: " + message);
                         }
 
                         @Override
@@ -1043,6 +1115,9 @@ public class MainActivity extends AppCompatActivity {
                     };
                     atmHostService.setEventListener(atmTransactionEventListener);
                     Log.d(TAG, "ATM Host Service event listener set");
+                    // Banner reflects records left over from before this boot right away
+                    // (the boot drain below refreshes it again when it finishes).
+                    atmHostService.publishReversalBacklog();
 
                     // Process any pending reversals from previous sessions
                     processPendingReversalsOnStartup();

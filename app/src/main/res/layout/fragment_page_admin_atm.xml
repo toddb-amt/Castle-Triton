@@ -452,15 +452,13 @@
                 android:enabled="false"
                 android:layout_marginBottom="8dp"/>
 
-            <!-- Clear Reversals Button (use with caution) -->
-            <Button
-                android:id="@+id/btnClearReversals"
+            <!-- Per-record diagnostics with Retry / Resolve (6.2.7). Populated by
+                 Fragment_page_admin_atm.updateReversalStatus(); replaces "Clear All". -->
+            <LinearLayout
+                android:id="@+id/layReversalRecords"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="Clear All Pending (Caution!)"
-                android:textSize="12sp"
-                android:backgroundTint="#F44336"
-                android:visibility="gone"
+                android:orientation="vertical"
                 android:layout_marginBottom="16dp"/>
 
             <View

@@ -112,7 +112,7 @@ public class Fragment_page_admin_atm extends Fragment {
     // UI Elements - Reversal Management
     private TextView txvReversalStatus;
     private Button btnProcessReversals;
-    private Button btnClearReversals;
+    private LinearLayout layReversalRecords;
 
     // UI Elements - POS Mode (semi-integrated proxy)
     private CheckBox cbEnablePosMode;
@@ -281,7 +281,7 @@ public class Fragment_page_admin_atm extends Fragment {
         // Reversal Management
         txvReversalStatus = rootView.findViewById(R.id.txvReversalStatus);
         btnProcessReversals = rootView.findViewById(R.id.btnProcessReversals);
-        btnClearReversals = rootView.findViewById(R.id.btnClearReversals);
+        layReversalRecords = rootView.findViewById(R.id.layReversalRecords);
 
         // Kiosk Mode
         switchKioskMode = rootView.findViewById(R.id.switchKioskMode);
@@ -701,9 +701,6 @@ public class Fragment_page_admin_atm extends Fragment {
         if (btnProcessReversals != null) {
             btnProcessReversals.setOnClickListener(v -> processPendingReversals());
         }
-        if (btnClearReversals != null) {
-            btnClearReversals.setOnClickListener(v -> clearPendingReversals());
-        }
 
         // Update reversal status
         updateReversalStatus();
@@ -846,10 +843,11 @@ public class Fragment_page_admin_atm extends Fragment {
         // Kiosk is the last section — 0 = "to end of column"
         setSectionEnabled(R.id.hdrKiosk,        0,                    sup);
 
-        // Destructive "Clear" actions live inside the two normal sections, so
-        // re-apply them AFTER the section pass above: Super-only, greyed for Normal.
-        setViewEnabledDimmed(rootView.findViewById(R.id.btnClearReversals), sup);
+        // Destructive "Clear" actions live inside the normal sections, so re-apply
+        // them AFTER the section pass above: Super-only, greyed for Normal. (Per-record
+        // reversal Resolve buttons are built in updateReversalStatus() with the tier.)
         setViewEnabledDimmed(rootView.findViewById(R.id.btnClearHistory), sup);
+        updateReversalStatus();
 
         // "Request New Working Key" is available to BOTH tiers even though it
         // sits in the (otherwise Super-only) Host Settings section — a field tech
@@ -1783,39 +1781,152 @@ public class Fragment_page_admin_atm extends Fragment {
         if (txvReversalStatus == null) return;
 
         AtmHostService hostService = (mainActivity != null) ? mainActivity.getAtmHostService() : null;
-        if (hostService != null && hostService.isInitialized()) {
-            int pendingCount = hostService.getPendingReversalCount();
-            txvReversalStatus.setText("Pending Reversals: " + pendingCount);
-            if (btnProcessReversals != null) {
-                btnProcessReversals.setEnabled(pendingCount > 0);
-            }
-            if (btnClearReversals != null) {
-                // Super-only: clearing deletes unsent reversal records (money exposure).
-                // This refresh also runs after Process Reversals / Request New Key —
-                // paths a Normal admin may use — so it must re-apply the tier, not
-                // just the count, or it silently re-enables the button that
-                // applyAccessLevel() greyed at login.
-                boolean isSuper = accessLevel == ACCESS_SUPER;
-                btnClearReversals.setEnabled(pendingCount > 0 && isSuper);
-                btnClearReversals.setAlpha(isSuper ? 1f : 0.4f);
-                // Toggle visibility — the XML defaults this button to gone so
-                // operators can't accidentally tap it when no reversals exist.
-                // Show it ONLY when there's something to clear (greyed for Normal);
-                // the AlertDialog in clearPendingReversals() guards against typos.
-                btnClearReversals.setVisibility(pendingCount > 0 ? View.VISIBLE : View.GONE);
-            }
-        } else {
+        if (hostService == null || !hostService.isInitialized()) {
             txvReversalStatus.setText("Pending Reversals: N/A (Host not configured)");
             if (btnProcessReversals != null) btnProcessReversals.setEnabled(false);
-            if (btnClearReversals != null) {
-                btnClearReversals.setEnabled(false);
-                btnClearReversals.setVisibility(View.GONE);
-            }
+            if (layReversalRecords != null) layReversalRecords.removeAllViews();
+            return;
         }
+
+        castech.emvtxn.atm.host.ReversalPersistenceManager mgr = hostService.getReversalManager();
+        List<castech.emvtxn.atm.host.ReversalPersistenceManager.PendingReversal> records =
+                (mgr != null) ? mgr.getPendingReversals() : new ArrayList<>();
+        AtmHostService.ReversalBacklog backlog = hostService.getReversalBacklog();
+        castech.emvtxn.atm.host.ReversalGatePolicy.Decision gate = backlog.gate();
+
+        String gateText;
+        switch (gate.outcome) {
+            case OUT_OF_SERVICE:   gateText = "OUT OF SERVICE — safety stop ("
+                    + castech.emvtxn.atm.host.ReversalGatePolicy.SAFETY_STOP_FAILED_RECORDS
+                    + "+ failed). Resolve or retry to restore service."; break;
+            case WAIT_DRAIN_RUNNING: gateText = "Drain running — customers wait"; break;
+            case WAIT_START_DRAIN:   gateText = "Active records — next customer starts the drain"; break;
+            default:                 gateText = backlog.failedCount > 0
+                    ? "In service — failed record(s) retried in background every 15 min"
+                    : "In service"; break;
+        }
+        txvReversalStatus.setText("Pending Reversals: " + records.size()
+                + " (active " + backlog.activeCount + ", failed " + backlog.failedCount + ")\n" + gateText);
+        if (btnProcessReversals != null) {
+            btnProcessReversals.setEnabled(!records.isEmpty() && !backlog.drainRunning);
+        }
+        renderReversalRecords(hostService, records);
     }
 
     /**
-     * Processes all pending reversals.
+     * One card per pending record: when / seq / amount / status / attempts / last error,
+     * with Retry (any admin) and Resolve (Super only, reason required, kept in history).
+     */
+    private void renderReversalRecords(final AtmHostService hostService,
+                                       List<castech.emvtxn.atm.host.ReversalPersistenceManager.PendingReversal> records) {
+        if (layReversalRecords == null || getContext() == null) return;
+        layReversalRecords.removeAllViews();
+        final boolean isSuper = accessLevel == ACCESS_SUPER;
+        final java.text.SimpleDateFormat fmt = new java.text.SimpleDateFormat("MM/dd HH:mm", java.util.Locale.US);
+        for (final castech.emvtxn.atm.host.ReversalPersistenceManager.PendingReversal rec : records) {
+            LinearLayout card = new LinearLayout(getContext());
+            card.setOrientation(LinearLayout.VERTICAL);
+            card.setPadding(12, 8, 12, 8);
+            card.setBackgroundColor(0xFFF5F5F5);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+            lp.bottomMargin = 8;
+            card.setLayoutParams(lp);
+
+            boolean failed = castech.emvtxn.atm.host.ReversalPersistenceManager.PendingReversal.STATUS_FAILED
+                    .equals(rec.getStatus());
+            String last = rec.getLastAttemptTime() > 0 ? fmt.format(new java.util.Date(rec.getLastAttemptTime())) : "never";
+            String err = (rec.getLastError() == null || rec.getLastError().isEmpty()) ? "—" : rec.getLastError();
+
+            TextView head = new TextView(getContext());
+            head.setTextSize(13);
+            head.setTextColor(failed ? 0xFFD32F2F : 0xFF333333);
+            head.setText(fmt.format(new java.util.Date(rec.getCreatedTime()))
+                    + "  seq " + rec.getSequenceNumber()
+                    + "  " + rec.getFormattedAmount()
+                    + "  " + rec.getStatus().toUpperCase(java.util.Locale.US));
+            card.addView(head);
+
+            TextView detail = new TextView(getContext());
+            detail.setTextSize(11);
+            detail.setTextColor(0xFF666666);
+            detail.setText("Attempts: " + rec.getAttemptCount() + "   Last: " + last
+                    + (rec.getRetrievalReference() != null && !rec.getRetrievalReference().isEmpty()
+                        ? "   RRN: " + rec.getRetrievalReference() : "")
+                    + "\nLast error: " + err);
+            card.addView(detail);
+
+            LinearLayout row = new LinearLayout(getContext());
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            Button btnRetry = new Button(getContext());
+            btnRetry.setText("Retry now");
+            btnRetry.setTextSize(12);
+            btnRetry.setOnClickListener(v -> retryReversal(hostService, rec));
+            row.addView(btnRetry, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+            Button btnResolve = new Button(getContext());
+            btnResolve.setText("Resolve…");
+            btnResolve.setTextSize(12);
+            btnResolve.setEnabled(isSuper);
+            btnResolve.setAlpha(isSuper ? 1f : 0.4f);
+            btnResolve.setOnClickListener(v -> resolveReversal(hostService, rec));
+            row.addView(btnResolve, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+            card.addView(row);
+
+            layReversalRecords.addView(card);
+        }
+    }
+
+    private void retryReversal(AtmHostService hostService,
+                               castech.emvtxn.atm.host.ReversalPersistenceManager.PendingReversal rec) {
+        if (hostService.isTransactionInProgress()) {
+            Toast.makeText(getContext(), "Transaction in progress — try again shortly", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        txvReversalStatus.setText("Retrying reversal seq " + rec.getSequenceNumber() + "…");
+        if (btnProcessReversals != null) btnProcessReversals.setEnabled(false);
+        hostService.retryReversal(rec.getTransactionId(), reversalUiCallback());
+    }
+
+    /**
+     * Super-only. Removes the record from the pending list with a REQUIRED reason; it
+     * stays in history (reason + who). Lifts the safety stop if the failed count drops
+     * under it. This is the field escape hatch for a record the host will never accept.
+     */
+    private void resolveReversal(final AtmHostService hostService,
+                                 final castech.emvtxn.atm.host.ReversalPersistenceManager.PendingReversal rec) {
+        if (accessLevel != ACCESS_SUPER) {
+            Log.w(TAG, "resolveReversal refused — Super Admin only (tier=" + accessLevel + ")");
+            Toast.makeText(getContext(), "Super Admin only", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        final EditText input = new EditText(getContext());
+        input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
+        input.setHint("Reason (required) — e.g. processor confirmed original declined");
+        new AlertDialog.Builder(getContext())
+            .setTitle("Resolve reversal seq " + rec.getSequenceNumber() + " (" + rec.getFormattedAmount() + ")")
+            .setMessage("Removes this record from the pending list WITHOUT sending it. "
+                    + "It stays in history with your reason.\n\n"
+                    + "Only resolve after confirming with the processor that the original "
+                    + "was declined or has already been reversed. Last error:\n"
+                    + (rec.getLastError() == null ? "—" : rec.getLastError()))
+            .setView(input)
+            .setPositiveButton("Resolve", (dialog, which) -> {
+                String reason = input.getText() == null ? "" : input.getText().toString().trim();
+                if (reason.length() < 4) {
+                    Toast.makeText(getContext(), "A reason is required", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                boolean ok = hostService.resolveReversal(rec.getTransactionId(), reason, "super-admin");
+                Toast.makeText(getContext(), ok ? "Reversal resolved — kept in history" : "Record not found",
+                        Toast.LENGTH_SHORT).show();
+                updateReversalStatus();
+            })
+            .setNegativeButton("Cancel", null)
+            .show();
+    }
+
+    /**
+     * Processes all pending reversals (FAILED ones included) on the drain executor.
      */
     private void processPendingReversals() {
         AtmHostService hostService = (mainActivity != null) ? mainActivity.getAtmHostService() : null;
@@ -1833,14 +1944,19 @@ public class Fragment_page_admin_atm extends Fragment {
         // Disable button during processing
         if (btnProcessReversals != null) btnProcessReversals.setEnabled(false);
         txvReversalStatus.setText("Processing " + pendingCount + " reversal(s)...");
+        hostService.processPendingReversals(reversalUiCallback());
+    }
 
-        hostService.processPendingReversals(new AtmHostService.ReversalProcessingCallback() {
+    /** Shared UI callback for Process / Retry: shows WHY a record failed, not just a count. */
+    private AtmHostService.ReversalProcessingCallback reversalUiCallback() {
+        final List<String> failures = new ArrayList<>();
+        return new AtmHostService.ReversalProcessingCallback() {
             @Override
             public void onProcessingReversal(castech.emvtxn.atm.host.ReversalPersistenceManager.PendingReversal reversal) {
                 if (getActivity() != null) {
-                    getActivity().runOnUiThread(() -> {
-                        txvReversalStatus.setText("Processing: " + reversal.getFormattedAmount());
-                    });
+                    getActivity().runOnUiThread(() ->
+                            txvReversalStatus.setText("Processing: " + reversal.getFormattedAmount()
+                                    + " (seq " + reversal.getSequenceNumber() + ")"));
                 }
             }
 
@@ -1852,6 +1968,7 @@ public class Fragment_page_admin_atm extends Fragment {
             @Override
             public void onReversalFailed(castech.emvtxn.atm.host.ReversalPersistenceManager.PendingReversal reversal, String error) {
                 Log.w(TAG, "Reversal failed: " + reversal.getTransactionId() + " - " + error);
+                failures.add("seq " + reversal.getSequenceNumber() + ": " + error);
             }
 
             @Override
@@ -1860,52 +1977,12 @@ public class Fragment_page_admin_atm extends Fragment {
                     getActivity().runOnUiThread(() -> {
                         updateReversalStatus();
                         String message = successCount + " succeeded, " + failCount + " failed";
-                        Toast.makeText(getContext(), "Reversal processing complete: " + message, Toast.LENGTH_LONG).show();
+                        if (!failures.isEmpty()) message += "\n" + String.join("\n", failures);
+                        Toast.makeText(getContext(), "Reversal processing: " + message, Toast.LENGTH_LONG).show();
                     });
                 }
             }
-        });
-    }
-
-    /**
-     * Clears all pending reversals (with confirmation).
-     */
-    private void clearPendingReversals() {
-        // Tier check at the ACTION, not only at the button: status refreshes can
-        // re-enable the button, and this deletes reversal records.
-        if (accessLevel != ACCESS_SUPER) {
-            Log.w(TAG, "clearPendingReversals refused — Super Admin only (tier=" + accessLevel + ")");
-            Toast.makeText(getContext(), "Super Admin only", Toast.LENGTH_SHORT).show();
-            return;
-        }
-        AtmHostService hostService = (mainActivity != null) ? mainActivity.getAtmHostService() : null;
-        if (hostService == null || !hostService.isInitialized()) {
-            Toast.makeText(getContext(), "Host service not initialized", Toast.LENGTH_SHORT).show();
-            return;
-        }
-
-        int pendingCount = hostService.getPendingReversalCount();
-        if (pendingCount == 0) {
-            Toast.makeText(getContext(), "No pending reversals to clear", Toast.LENGTH_SHORT).show();
-            return;
-        }
-
-        // Show confirmation dialog
-        new AlertDialog.Builder(getContext())
-            .setTitle("Clear Pending Reversals")
-            .setMessage("Are you sure you want to clear " + pendingCount + " pending reversal(s)?\n\n" +
-                       "WARNING: This will delete the reversal records without processing them. " +
-                       "Only do this if you're certain the original transactions were not approved.")
-            .setPositiveButton("Clear", (dialog, which) -> {
-                castech.emvtxn.atm.host.ReversalPersistenceManager reversalMgr = hostService.getReversalManager();
-                if (reversalMgr != null) {
-                    reversalMgr.clearAllPendingReversals();
-                    updateReversalStatus();
-                    Toast.makeText(getContext(), "Pending reversals cleared", Toast.LENGTH_SHORT).show();
-                }
-            })
-            .setNegativeButton("Cancel", null)
-            .show();
+        };
     }
 
     private void applyKioskSettings() {
