@@ -65,9 +65,9 @@ now shows each record with its attempts and the host's last answer, with per-rec
 history. "Clear All Pending" is gone.
 
 **POS mode can now be configured centrally.** The three POS-mode settings — on/off, proxy
-URL and terminal access key — are CasHUB parameters, so a POS site is provisioned from
-MyAdmin like its host settings, and a pushed change takes effect on the terminal
-immediately (the POS connection restarts; no reboot). This closes the gap behind 6.2.6's
+URL and terminal access key — are CasHUB parameters, entered in CasHUB by TFI operations
+exactly like the terminal's host parameters, and a pushed change takes effect on the
+terminal immediately (the POS connection restarts; no reboot). This closes the gap behind 6.2.6's
 ADM-05: the POS flag is centrally owned instead of living only in an on-terminal checkbox.
 
 ### What operators and customers will notice
@@ -93,8 +93,8 @@ ADM-05: the POS flag is centrally owned instead of living only in an on-terminal
   for an older record never reaches another customer's receipt again.
 
 **POS mode configuration**
-- **MyAdmin / CasHUB can turn POS mode on or off and set the proxy URL and access key**
-  per terminal. Absent keys leave the terminal's local value alone, exactly as the host
+- **CasHUB can turn POS mode on or off and set the proxy URL and access key** per
+  terminal, entered manually in CasHUB like the host parameters. Absent keys leave the terminal's local value alone, exactly as the host
   settings behave; CasHUB wins for any key it carries, at every boot and on a live push.
 - **A pushed change applies live.** The terminal's POS connection restarts on the new
   settings within seconds. If a register transaction is in flight at that moment, the
@@ -127,7 +127,7 @@ ADM-05: the POS flag is centrally owned instead of living only in an on-terminal
 - `pos_enabled`, `pos_proxy_url`, `pos_terminal_access_key` are recognised CasHUB
   parameters (`CFG-01`). `pos_proxy_url` must be `wss://` or `ws://`; an invalid value is
   logged on the terminal and ignored rather than breaking the connection.
-- The `cashub` CLI and MyAdmin's parameter push know the new keys (no "unknown key" warning).
+- The `cashub` CLI knows the new keys (no "unknown key" warning).
 
 ### Security / PCI
 
@@ -141,8 +141,6 @@ ADM-05: the POS flag is centrally owned instead of living only in an on-terminal
 - MyView alert and remote resolve for a pending reversal (`REV-02`) — 6.2.8. Until then the
   terminal's banner and the Admin screen are the only signals.
 - Host-layer robustness (backlog R2), `HOST-14`, `LOG-01`, `TEST-01` — unchanged from 6.2.6.
-- The MyAdmin fleet form's new POS fields push only what is filled in; the tri-state
-  "POS mode" selector defaults to *leave unchanged*.
 
 ### Verification
 
