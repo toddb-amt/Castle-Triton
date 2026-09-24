@@ -46,6 +46,8 @@ Recognized keys (anything else warns — the app ignores unknown keys):
 use_flat_fee, flat_fee, percentage_fee, min_amount, max_amount`
 (source of truth: `CasHubParams.java` / `KmsConfigStore.java`).
 
+POS-mode keys (app 6.2.7+; applied live — the terminal restarts its proxy connection, no reboot): `pos_enabled` (true/false), `pos_proxy_url` (`wss://host:port`), `pos_terminal_access_key`. Absent keys leave the terminal's local value alone; an invalid value is logged on the terminal and ignored. `pos_terminal_access_key` is a bearer credential: the app never logs it — treat manifests containing it as secrets.
+
 **Merchant-level pushes** (`params push-merchant`) are for SHARED values only
 (fees, limits). The app merges merchant parameters OVER terminal parameters
 (last-wins in `CasHubParams.applyToConfig`), so the tool hard-refuses

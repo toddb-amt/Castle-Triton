@@ -37,6 +37,10 @@ const STATE_PATH = path.join(HERE, '.cashub-state.json');
 const RECOGNIZED_KEYS = new Set([
   'host_address', 'host_port', 'terminal_id', 'processor_type', 'protocol_type',
   'use_flat_fee', 'flat_fee', 'percentage_fee', 'min_amount', 'max_amount',
+  // POS-mode settings (6.2.7+): pushed to PosConfig, applied live. The access
+  // key is a bearer credential — the app never logs it; keep manifests off
+  // shared drives.
+  'pos_enabled', 'pos_proxy_url', 'pos_terminal_access_key',
 ]);
 
 // CasHubParams merges terminal rows first, merchant rows second, LAST WINS —
