@@ -29,7 +29,7 @@ public class PosParamsTest {
 
     @Test
     public void parse_withNoPosKeys_isEmptyAndTouchesNothing() {
-        PosParams p = PosParams.parse(params("host_address", "18.189.225.36", "terminal_id", "MS008626"));
+        PosParams p = PosParams.parse(params("host_address", "18.189.225.36", "terminal_id", "TEST0001"));
         assertTrue(p.isEmpty());
         assertNull(p.enabled);
         assertNull(p.proxyUrl);
