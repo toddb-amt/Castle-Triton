@@ -328,6 +328,40 @@ public class ReversalPersistenceManager {
         savePendingReversals(pending);
     }
 
+    /** Records WHY the last attempt failed without counting another attempt (Admin diagnostics). */
+    public void noteAttemptFailure(String transactionId, String errorMessage) {
+        if (errorMessage == null) return;
+        List<PendingReversal> pending = getPendingReversals();
+        for (PendingReversal rev : pending) {
+            if (rev.getTransactionId().equals(transactionId)) {
+                rev.setLastError(errorMessage);
+                break;
+            }
+        }
+        savePendingReversals(pending);
+    }
+
+    /** Finds one pending record by id, or null. */
+    public PendingReversal findPendingReversal(String transactionId) {
+        if (transactionId == null) return null;
+        for (PendingReversal rev : getPendingReversals()) {
+            if (transactionId.equals(rev.getTransactionId())) return rev;
+        }
+        return null;
+    }
+
+    /** Puts a FAILED record back to PENDING for an operator/background retry — no attempt counted. */
+    public void markForRetry(String transactionId) {
+        List<PendingReversal> pending = getPendingReversals();
+        for (PendingReversal rev : pending) {
+            if (rev.getTransactionId().equals(transactionId)) {
+                rev.setStatus(PendingReversal.STATUS_PENDING);
+                break;
+            }
+        }
+        savePendingReversals(pending);
+    }
+
     /**
      * Clears all pending reversals (use with caution!).
      */

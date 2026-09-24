@@ -234,6 +234,9 @@ public class GlobalPara
 	public static volatile boolean atmHostCallInProgress = false;
 	public static volatile boolean atmHostCallSuccess = false;
 	public static volatile boolean atmNeedsReversal = false;
+	/** Id of the reversal record belonging to the CURRENT transaction (pre-send record); "" when none.
+	 *  Only progress messages tagged with this id may touch the receipt's reversal block. */
+	public static volatile String atmCurrentReversalId = "";
 
 	// Balance inquiry mode
 	public static volatile boolean atmBalanceInquiryMode = false;
@@ -291,6 +294,7 @@ public class GlobalPara
 		atmReversalStatus = "";
 		atmReversalInProgress = false;
 		atmReversalSent = false;
+		atmCurrentReversalId = "";
 		atmIssuerAuthData = null;
 		atmIssuerScript71 = null;
 		atmIssuerScript72 = null;

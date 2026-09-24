@@ -71,7 +71,17 @@ public class ReversalGatePolicyTest {
         assertTrue(ReversalGatePolicy.isActive(ReversalPersistenceManager.PendingReversal.STATUS_PENDING_RECONNECT_AND_REVERSE));
         assertEquals(false, ReversalGatePolicy.isActive(ReversalPersistenceManager.PendingReversal.STATUS_FAILED));
         assertEquals(false, ReversalGatePolicy.isActive(ReversalPersistenceManager.PendingReversal.STATUS_PENDING_PRESEND));
-        assertEquals(false, ReversalGatePolicy.isActive(ReversalPersistenceManager.PendingReversal.STATUS_PROCESSING));
+    }
+
+    /**
+     * A record is PROCESSING only while the drain holds it. One left in that state after a
+     * crash or power cut mid-drain must still be drained (and still gate customers) —
+     * otherwise it is orphaned: never retried, never counted, never shown.
+     */
+    @Test
+    public void processingLeftOverFromACrash_isStillActive() {
+        assertTrue(ReversalGatePolicy.isActive(ReversalPersistenceManager.PendingReversal.STATUS_PROCESSING));
+        assertTrue(ReversalGatePolicy.isRetryable(ReversalPersistenceManager.PendingReversal.STATUS_PROCESSING));
     }
 
     @Test
@@ -79,6 +89,5 @@ public class ReversalGatePolicyTest {
         assertTrue(ReversalGatePolicy.isRetryable(ReversalPersistenceManager.PendingReversal.STATUS_FAILED));
         assertTrue(ReversalGatePolicy.isRetryable(ReversalPersistenceManager.PendingReversal.STATUS_PENDING));
         assertEquals(false, ReversalGatePolicy.isRetryable(ReversalPersistenceManager.PendingReversal.STATUS_PENDING_PRESEND));
-        assertEquals(false, ReversalGatePolicy.isRetryable(ReversalPersistenceManager.PendingReversal.STATUS_PROCESSING));
     }
 }

@@ -221,6 +221,8 @@ public class AtmTransactionManager {
             }
 
             reversalManager.promoteToStatus(preSend.getTransactionId(), reason, targetState);
+            // Record-scoped: only this transaction's receipt reacts (see ReversalProgress).
+            notifyProgress(ReversalProgress.record(preSend.getTransactionId(), "Reversal pending"));
             currentPreSendReversal = null;
             return;
         }
@@ -419,6 +421,7 @@ public class AtmTransactionManager {
                             retrievalRef,
                             request.getStatusMonitoring(),
                             request.getEmvData());
+                        castech.emvtxn.GlobalPara.atmCurrentReversalId = currentPreSendReversal.getTransactionId();
                         Log.d(TAG, "Pre-persisted reversal record for seq "
                             + request.getSequenceNumber()
                             + " (id=" + currentPreSendReversal.getTransactionId()
@@ -630,6 +633,7 @@ public class AtmTransactionManager {
                             retrievalRef,
                             request.getStatusMonitoring(),
                             request.getEmvData());
+                        castech.emvtxn.GlobalPara.atmCurrentReversalId = currentPreSendReversal.getTransactionId();
                         Log.d(TAG, "Pre-persisted reversal record for BI seq "
                             + request.getSequenceNumber()
                             + " (id=" + currentPreSendReversal.getTransactionId()
@@ -1311,9 +1315,17 @@ public class AtmTransactionManager {
      *
      * @return true if the host accepted the reversal (response code "00")
      */
+    /** Why the last {@link #sendReversalDirect} failed — host code or connection error; null after success. */
+    private volatile String lastReversalFailure;
+
+    public String getLastReversalFailure() {
+        return lastReversalFailure;
+    }
+
     public boolean sendReversalDirect(ReversalRequest reversal) {
         if (reversal == null) {
             Log.w(TAG, "sendReversalDirect: null reversal request");
+            lastReversalFailure = "no reversal request";
             return false;
         }
         try {
@@ -1321,17 +1333,20 @@ public class AtmTransactionManager {
             if (response != null && response.isAccepted()) {
                 Log.d(TAG, "Reversal accepted (direct, responseCode="
                         + response.getResponseCode() + ")");
+                lastReversalFailure = null;
                 notifyReversalComplete(true);
                 return true;
             } else {
                 String code = (response != null) ? response.getResponseCode() : "(null response)";
                 String desc = (response != null) ? response.getResponseDescription() : "no response object";
                 Log.w(TAG, "Reversal not accepted (direct) — responseCode=" + code + " (" + desc + ")");
+                lastReversalFailure = "host responded " + code + " (" + desc + ")";
                 notifyReversalComplete(false);
                 return false;
             }
         } catch (Exception e) {
             Log.e(TAG, "Reversal direct send failed: " + e.getMessage());
+            lastReversalFailure = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
             notifyReversalComplete(false);
             return false;
         }

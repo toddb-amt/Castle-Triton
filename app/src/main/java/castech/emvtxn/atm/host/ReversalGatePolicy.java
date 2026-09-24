@@ -77,7 +77,10 @@ public final class ReversalGatePolicy {
     public static boolean isActive(String status) {
         return PendingReversal.STATUS_PENDING.equals(status)
                 || PendingReversal.STATUS_PENDING_RECONNECT_AND_EXIT.equals(status)
-                || PendingReversal.STATUS_PENDING_RECONNECT_AND_REVERSE.equals(status);
+                || PendingReversal.STATUS_PENDING_RECONNECT_AND_REVERSE.equals(status)
+                // PROCESSING outlives the drain only after a crash/power cut mid-attempt;
+                // such a record must still be drained, not orphaned.
+                || PendingReversal.STATUS_PROCESSING.equals(status);
     }
 
     /**
