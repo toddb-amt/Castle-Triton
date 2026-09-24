@@ -133,6 +133,10 @@ transactions" while the proxy is connected. See POS-12 and decision D5.
   **Fails when:** watchdog clears the slot and sends `host_unreachable` → the real approval hits `cb == null` and is dropped → **customer debited, POS told "error", no reversal** (the terminal saw an approval). With the slot free but `GlobalPara.atmTransactionInProgress` still true, a retry `sale` passes the gateway and hits POS-03.
   **Fix (6.2.6):** size the watchdog above the full flow (card + PIN + 150 s gate + margin). **Fix (with SDK-01 full):** on fire call `abortTransaction()` so slot and flow release together.
 
+- [x] **CFG-01** · MED (operability) · ✔ · `CasHubParams.applyToConfigDetailed`, `pos/PosParams`, `MainActivity.onPosParamsChanged` — **shipped 6.2.7 `8543d78` + `5a7e7c6`**
+  **Gap:** POS mode, proxy URL and terminal access key existed only as on-terminal Admin fields; a POS site could not be provisioned or corrected from MyAdmin/CasHUB, and (ADM-05) the flag could be lost by a local save with no central record to restore it.
+  **Fix:** three CasHUB parameter keys (`pos_enabled`, `pos_proxy_url`, `pos_terminal_access_key`) applied to `PosConfig` with the host-settings precedence (CasHUB wins for keys it carries; absent keys leave local values). Applied live: the POS stack restarts on the new settings (JWT cleared when URL/key changed), deferred while a register transaction is in flight. Access key kept out of the host-config payload / KMS-II backup and masked in diagnostics. `PosParamsTest` (10). CLI + MyAdmin recognise the keys.
+
 ---
 
 ## R1-SWITCH — POS/SYS release switch (own PR, target **v6.2.7**, before go-live)

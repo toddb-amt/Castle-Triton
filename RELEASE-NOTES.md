@@ -48,6 +48,66 @@ Template:
 
 ---
 
+## 6.2.7 — 2026-09-24 · PR #3 · base 6.2.6 · versionCode 69
+
+### Highlights
+
+POS mode can now be configured centrally. The three POS-mode settings — on/off, proxy URL
+and terminal access key — are CasHUB parameters, so a POS site is provisioned from MyAdmin
+like its host settings, and a pushed change takes effect on the terminal immediately (the
+POS connection restarts; no reboot). This closes the gap behind 6.2.6's ADM-05: the POS flag
+is centrally owned instead of living only in an on-terminal checkbox.
+
+### What operators and customers will notice
+
+- **MyAdmin / CasHUB can turn POS mode on or off and set the proxy URL and access key**
+  per terminal. Absent keys leave the terminal's local value alone, exactly as the host
+  settings behave; CasHUB wins for any key it carries, at every boot and on a live push.
+- **A pushed change applies live.** The terminal's POS connection restarts on the new
+  settings within seconds. If a register transaction is in flight at that moment, the
+  restart waits for it (up to 60 s) so the register still gets its answer.
+- The Admin screen's POS section shows the pushed values (it reads the same store).
+- Nothing changes for walk-up-only terminals.
+
+### Fixes
+
+**Configuration**
+- `pos_enabled`, `pos_proxy_url`, `pos_terminal_access_key` are recognised CasHUB
+  parameters (`CFG-01`). `pos_proxy_url` must be `wss://` or `ws://`; an invalid value is
+  logged on the terminal and ignored rather than breaking the connection.
+- The `cashub` CLI and MyAdmin's parameter push know the new keys (no "unknown key" warning).
+
+### Security / PCI
+
+- The terminal access key is a bearer credential. It is kept out of the host-config path
+  and the KMS-II backup, never written to the log, and masked in the parameter diagnostic
+  dump. Treat CasHUB parameter manifests that contain it as secrets.
+
+### Known issues and deferred
+
+- POS/SYS manual release switch (`POS-12`) — on hold; will be 6.2.8 when resumed.
+- Host-layer robustness (backlog R2), `HOST-14`, `LOG-01`, `TEST-01` — unchanged from 6.2.6.
+- The MyAdmin fleet form's new POS fields push only what is filled in; the tri-state
+  "POS mode" selector defaults to *leave unchanged*.
+
+### Verification
+
+- `PosParamsTest` — 10 JVM tests written before the parser: boolean/URL/key parsing,
+  invalid values ignored with a reason, change detection, access-key masking. Full suite
+  193 tests; the 3 pre-existing `TEST-01` failures only.
+- Device: pending — push the three keys to terminal …680 from CasHUB, confirm
+  `Applied CasHUB POS config` in the log and a fresh `POS connected` on the new URL
+  without a reboot; then a register balance inquiry.
+
+### Upgrade notes
+
+- CasHUB plain-install push of `S1FP-TFI-v6.2.7.apk`. No configuration migration.
+- To move a POS site under central control, push `pos_enabled`, `pos_proxy_url` and
+  `pos_terminal_access_key` for that terminal once; from then on the terminal follows
+  CasHUB. Sites not pushed keep their local settings.
+
+---
+
 ## 6.2.6 — 2026-09-18 · [PR #2](https://github.com/toddb-amt/Castle-Triton/pull/2) · base 6.2.5 · versionCode 68
 
 ### Highlights
