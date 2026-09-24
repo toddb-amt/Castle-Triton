@@ -26,7 +26,7 @@ public class LogMaskTest {
     @Test
     public void pan_showsLastFourOnly() {
         assertEquals("****1111", LogMask.pan(PAN));
-        assertEquals("****1111", LogMask.pan("4430 4100 4807 8318"));   // non-digits ignored
+        assertEquals("****1111", LogMask.pan("4111 1111 1111 1111"));   // non-digits ignored
         assertEquals("****", LogMask.pan("1234"));
         assertEquals("[null]", LogMask.pan(null));
         assertEquals("[empty]", LogMask.pan("  "));
