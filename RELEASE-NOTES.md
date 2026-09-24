@@ -52,14 +52,47 @@ Template:
 
 ### Highlights
 
-POS mode can now be configured centrally. The three POS-mode settings — on/off, proxy URL
-and terminal access key — are CasHUB parameters, so a POS site is provisioned from MyAdmin
-like its host settings, and a pushed change takes effect on the terminal immediately (the
-POS connection restarts; no reboot). This closes the gap behind 6.2.6's ADM-05: the POS flag
-is centrally owned instead of living only in an on-terminal checkbox.
+**A stuck reversal no longer anchors the terminal.** A field terminal running 6.2.6 sat for
+weeks refusing every customer with "processing pending transactions" and printing
+"REVERSAL IN PROGRESS" on strangers' receipts, because one reversal record the host kept
+rejecting was retried on every customer, forever. 6.2.7 replaces that behaviour with a
+policy: customers are held only while a reversal is actually being drained; once its
+retries are exhausted the terminal trades again, shows a service-required banner, and keeps
+retrying that record in the background (every 15 minutes, on network recovery, at boot).
+Only a *pattern* — two failed records — takes the terminal out of service. The Admin screen
+now shows each record with its attempts and the host's last answer, with per-record
+**Retry now** and a Super-only **Resolve** that requires a reason and keeps the record in
+history. "Clear All Pending" is gone.
+
+**POS mode can now be configured centrally.** The three POS-mode settings — on/off, proxy
+URL and terminal access key — are CasHUB parameters, so a POS site is provisioned from
+MyAdmin like its host settings, and a pushed change takes effect on the terminal
+immediately (the POS connection restarts; no reboot). This closes the gap behind 6.2.6's
+ADM-05: the POS flag is centrally owned instead of living only in an on-terminal checkbox.
 
 ### What operators and customers will notice
 
+**Reversals**
+- **Customers wait only while a drain is running** ("Please wait — processing pending
+  transactions"). After the drain gives up on a record, the next customer transacts
+  normally.
+- **Bottom banner:** "SERVICE REQUIRED — a prior transaction is awaiting reversal.
+  Transactions continue." while one failed record exists; "OUT OF SERVICE — pending
+  reversals. Contact TFI." at two. It shares the banner with the out-of-paper notice.
+- **Out of service is recoverable in the field:** a background retry that succeeds, an
+  Admin **Retry now** that succeeds, or a Super-admin **Resolve** brings the failed count
+  under two and the terminal returns to service on its own — no reboot, no reinstall.
+- **Admin → Reversal Management** lists each pending record: time, sequence, amount,
+  status, attempts, last attempt, RRN and the host's last response (for example
+  `host responded 06 (…)` or `host unreachable (reconnect failed)`), plus the gate state.
+  **Process Pending Reversals** now reports *why* a record failed, not just a count.
+- **Resolve (Super admin only)** removes a record without sending it. A reason is
+  required and is kept in the reversal history and journal with who resolved it. Use it
+  only after the processor confirms the original was declined or already reversed.
+- **Receipts** show the REVERSAL block only for the customer's own transaction. Progress
+  for an older record never reaches another customer's receipt again.
+
+**POS mode configuration**
 - **MyAdmin / CasHUB can turn POS mode on or off and set the proxy URL and access key**
   per terminal. Absent keys leave the terminal's local value alone, exactly as the host
   settings behave; CasHUB wins for any key it carries, at every boot and on a live push.
@@ -70,6 +103,25 @@ is centrally owned instead of living only in an on-terminal checkbox.
 - Nothing changes for walk-up-only terminals.
 
 ### Fixes
+
+**Reversals (`REV-01`)**
+- Gate decisions come from one place (`ReversalGatePolicy`): FAILED records no longer
+  count as drainable for the customer gate, so a rejected record is not retried on every
+  customer; the post-transaction drain attempts active records only.
+- After exhaustion the terminal returns to READY (trade-and-alert) instead of a permanent
+  `OUT_OF_SERVICE` that only a restart cleared. Safety stop at two FAILED records; lifted
+  automatically when the count drops back under two.
+- Background retry schedule for FAILED records (15 min, network recovery, boot, Admin),
+  never on a customer's transaction; one drain at a time on the drain executor (the old
+  Admin/boot path ran its own thread and could race the drain).
+- The host's actual answer (response code / connection error) is stored on the record as
+  its last error and shown in Admin; previously only "All 5 retries exhausted".
+- A record left in PROCESSING by a crash or power cut mid-drain is drained at the next
+  opportunity instead of being orphaned (it was neither drainable nor counted).
+- Operator alerts no longer route through the transaction error path (which failed the
+  current transaction and could answer the POS); they log and drive the banner.
+- Per-record `Retry now` and `Resolve` (reason required, Super only) replace `Clear All
+  Pending`; resolutions are journaled (`resolve` event) and visible in history.
 
 **Configuration**
 - `pos_enabled`, `pos_proxy_url`, `pos_terminal_access_key` are recognised CasHUB
@@ -86,17 +138,26 @@ is centrally owned instead of living only in an on-terminal checkbox.
 ### Known issues and deferred
 
 - POS/SYS manual release switch (`POS-12`) — on hold; will be 6.2.8 when resumed.
+- MyView alert and remote resolve for a pending reversal (`REV-02`) — 6.2.8. Until then the
+  terminal's banner and the Admin screen are the only signals.
 - Host-layer robustness (backlog R2), `HOST-14`, `LOG-01`, `TEST-01` — unchanged from 6.2.6.
 - The MyAdmin fleet form's new POS fields push only what is filled in; the tri-state
   "POS mode" selector defaults to *leave unchanged*.
 
 ### Verification
 
+- `ReversalGatePolicyTest` (10), `ReversalProgressTest` (4), `ReversalRecordHistoryTest`
+  (3) — written before the code: gate outcomes incl. the safety stop and its precedence
+  over a running drain, status classification (PROCESSING-after-crash), receipt scoping of
+  progress messages, resolved-with-reason history entries.
 - `PosParamsTest` — 10 JVM tests written before the parser: boolean/URL/key parsing,
-  invalid values ignored with a reason, change detection, access-key masking. Full suite
-  193 tests; the 3 pre-existing `TEST-01` failures only.
-- Device: pending — push the three keys to terminal …680 from CasHUB, confirm
-  `Applied CasHUB POS config` in the log and a fresh `POS connected` on the new URL
+  invalid values ignored with a reason, change detection, access-key masking.
+- Full suite 210 tests; the 3 pre-existing `TEST-01` failures only.
+- Device: pending — (1) reversal: pull WiFi during "Online Processing…" on a withdrawal,
+  confirm the record promotes, the drain runs once on the next customer, the banner
+  appears after exhaustion and the next customer transacts; retry from Admin after WiFi
+  returns and confirm the banner clears; (2) CasHUB: push the three POS keys to terminal
+  …680, confirm `Applied CasHUB POS config` and a fresh `POS connected` on the new URL
   without a reboot; then a register balance inquiry.
 
 ### Upgrade notes
