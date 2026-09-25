@@ -38,7 +38,7 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent">
 
-        <!-- Row 1: $20, $40, $60 -->
+        <!-- Row 1: $10, $20, $40 (labels set from AmountPresets) -->
         <Button
             android:id="@+id/btnPreset0"
             android:layout_width="0dp"
@@ -49,7 +49,7 @@
             android:layout_marginEnd="8dp"
             app:layout_constraintTop_toTopOf="parent"
             app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintEnd_toStartOf="@+id/btn40"
+            app:layout_constraintEnd_toStartOf="@id/btnPreset1"
             app:layout_constraintHorizontal_weight="1"/>
 
         <Button
@@ -62,8 +62,8 @@
             android:layout_marginEnd="8dp"
             android:layout_marginStart="8dp"
             app:layout_constraintTop_toTopOf="parent"
-            app:layout_constraintStart_toEndOf="@+id/btn20"
-            app:layout_constraintEnd_toStartOf="@+id/btn60"
+            app:layout_constraintStart_toEndOf="@id/btnPreset0"
+            app:layout_constraintEnd_toStartOf="@id/btnPreset2"
             app:layout_constraintHorizontal_weight="1"/>
 
         <Button
@@ -75,11 +75,11 @@
             android:textStyle="bold"
             android:layout_marginStart="8dp"
             app:layout_constraintTop_toTopOf="parent"
-            app:layout_constraintStart_toEndOf="@+id/btn40"
+            app:layout_constraintStart_toEndOf="@id/btnPreset1"
             app:layout_constraintEnd_toEndOf="parent"
             app:layout_constraintHorizontal_weight="1"/>
 
-        <!-- Row 2: $100, $200, $500 -->
+        <!-- Row 2: $60, $100, $200 (labels set from AmountPresets) -->
         <Button
             android:id="@+id/btnPreset3"
             android:layout_width="0dp"
@@ -89,9 +89,9 @@
             android:textStyle="bold"
             android:layout_marginEnd="8dp"
             android:layout_marginTop="12dp"
-            app:layout_constraintTop_toBottomOf="@+id/btn20"
+            app:layout_constraintTop_toBottomOf="@id/btnPreset0"
             app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintEnd_toStartOf="@+id/btn200"
+            app:layout_constraintEnd_toStartOf="@id/btnPreset4"
             app:layout_constraintHorizontal_weight="1"/>
 
         <Button
@@ -104,9 +104,9 @@
             android:layout_marginEnd="8dp"
             android:layout_marginStart="8dp"
             android:layout_marginTop="12dp"
-            app:layout_constraintTop_toBottomOf="@+id/btn40"
-            app:layout_constraintStart_toEndOf="@+id/btn100"
-            app:layout_constraintEnd_toStartOf="@+id/btn500"
+            app:layout_constraintTop_toBottomOf="@id/btnPreset1"
+            app:layout_constraintStart_toEndOf="@id/btnPreset3"
+            app:layout_constraintEnd_toStartOf="@id/btnPreset5"
             app:layout_constraintHorizontal_weight="1"/>
 
         <Button
@@ -118,8 +118,8 @@
             android:textStyle="bold"
             android:layout_marginStart="8dp"
             android:layout_marginTop="12dp"
-            app:layout_constraintTop_toBottomOf="@+id/btn60"
-            app:layout_constraintStart_toEndOf="@+id/btn200"
+            app:layout_constraintTop_toBottomOf="@id/btnPreset2"
+            app:layout_constraintStart_toEndOf="@id/btnPreset4"
             app:layout_constraintEnd_toEndOf="parent"
             app:layout_constraintHorizontal_weight="1"/>
 
@@ -133,7 +133,7 @@
             android:textStyle="bold"
             android:layout_marginTop="12dp"
             android:layout_marginEnd="8dp"
-            app:layout_constraintTop_toBottomOf="@+id/btn100"
+            app:layout_constraintTop_toBottomOf="@id/btnPreset3"
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintEnd_toStartOf="@+id/btnCheckBalance"
             app:layout_constraintHorizontal_weight="1"/>
@@ -149,7 +149,7 @@
             android:layout_marginTop="12dp"
             android:layout_marginStart="8dp"
             android:backgroundTint="#4CAF50"
-            app:layout_constraintTop_toBottomOf="@+id/btn500"
+            app:layout_constraintTop_toBottomOf="@id/btnPreset5"
             app:layout_constraintStart_toEndOf="@+id/btnCustomAmount"
             app:layout_constraintEnd_toEndOf="parent"
             app:layout_constraintHorizontal_weight="1"/>
