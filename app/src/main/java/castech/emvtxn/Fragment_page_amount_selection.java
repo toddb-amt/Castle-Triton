@@ -128,13 +128,16 @@ public class Fragment_page_amount_selection extends Fragment {
             @Override
             public void onClick(View v) {
                 if (selectedAmount > 0) {
-                    // Store the selected amount and fee in global parameters
-                    GlobalPara.atmSelectedAmount = String.format("%.2f", selectedAmount);
-                    GlobalPara.atmFee = String.format("%.2f", calculateFee(selectedAmount));
-                    GlobalPara.atmTotal = String.format("%.2f", selectedAmount + calculateFee(selectedAmount));
-                    // Convert total to cents for EMV SDK (no decimals)
-                    int totalCents = (int) ((selectedAmount + calculateFee(selectedAmount)) * 100);
-                    GlobalPara.strAmount = String.valueOf(totalCents);
+                    // Cents first (Money rounds; (int)(x*100) truncated and could drop a
+                    // cent), then every string and the chip amount from the SAME integers.
+                    long amountCents = Money.toCents(selectedAmount);
+                    long feeCents = Money.feeCents(amountCents, GlobalPara.atmUseFlatFee,
+                            GlobalPara.atmFlatFeeAmount, GlobalPara.atmPercentageFee);
+                    GlobalPara.atmSelectedAmount = Money.dollars(amountCents);
+                    GlobalPara.atmFee = Money.dollars(feeCents);
+                    GlobalPara.atmTotal = Money.dollars(amountCents + feeCents);
+                    // Chip amount (9F02) = total in cents, no decimals
+                    GlobalPara.strAmount = String.valueOf(amountCents + feeCents);
 
                     android.util.Log.d("AmountSelection", "Continue clicked - amount=" + GlobalPara.atmSelectedAmount +
                         ", balanceInquiry=" + GlobalPara.atmBalanceInquiryMode);
@@ -247,12 +250,10 @@ public class Fragment_page_amount_selection extends Fragment {
         builder.show();
     }
 
+    /** Fee in dollars for display — derived from the rounded cents so the screen, the receipt and the wire agree. */
     private double calculateFee(double amount) {
-        if (GlobalPara.atmUseFlatFee) {
-            return GlobalPara.atmFlatFeeAmount;
-        } else {
-            return amount * (GlobalPara.atmPercentageFee / 100.0);
-        }
+        return Money.feeCents(Money.toCents(amount), GlobalPara.atmUseFlatFee,
+                GlobalPara.atmFlatFeeAmount, GlobalPara.atmPercentageFee) / 100.0;
     }
 
     private void updateDisplay() {
@@ -310,7 +311,7 @@ public class Fragment_page_amount_selection extends Fragment {
         GlobalPara.atmSelectedAmount = "0.00";
         GlobalPara.atmFee = "0.00";
         GlobalPara.atmTotal = "0.00";
-        GlobalPara.strAmount = "0.00";
+        GlobalPara.strAmount = "0";   // chip amount in cents — "0.00" is not a valid cents string
 
         // Navigate to transaction (account type defaults to Checking)
         GlobalPara.atmAccountType = GlobalPara.ATM_ACCOUNT_CHECKING;

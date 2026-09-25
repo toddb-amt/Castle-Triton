@@ -1392,6 +1392,25 @@ public class MainActivity extends AppCompatActivity {
      * Processes any pending reversals from previous sessions.
      * Called automatically after ATM Host Service is initialized.
      */
+    /**
+     * The surcharge to put on the wire, in cents: the fee already shown to the customer
+     * (GlobalPara.atmFee). Falls back to the fee configuration if that string is unusable.
+     * Zero for a balance inquiry.
+     */
+    static long surchargeCentsFromReceipt(long amountCents) {
+        if (GlobalPara.atmBalanceInquiryMode) return 0L;
+        try {
+            String fee = GlobalPara.atmFee;
+            if (fee != null && !fee.trim().isEmpty()) {
+                return Money.toCents(Double.parseDouble(fee.trim()));
+            }
+        } catch (NumberFormatException ignore) {
+            // fall through to the configured fee
+        }
+        return Money.feeCents(amountCents, GlobalPara.atmUseFlatFee,
+                GlobalPara.atmFlatFeeAmount, GlobalPara.atmPercentageFee);
+    }
+
     private void processPendingReversalsOnStartup() {
         if (atmHostService == null || !atmHostService.isInitialized()) {
             Log.d(TAG, "ATM Host Service not ready - skipping pending reversals");
@@ -3035,8 +3054,13 @@ public class MainActivity extends AppCompatActivity {
                     // In ATM mode, amount is already set from amount selection screen
                     // Only read from EditText if NOT in ATM mode
                     try {
-                        if (GlobalPara.atmSelectedAmount == null || "0.00".equals(GlobalPara.atmSelectedAmount)) {
-                            // Balance inquiry or non-ATM mode - read from EditText field
+                        if (GlobalPara.atmBalanceInquiryMode) {
+                            // BI-01: a balance inquiry's chip amount is always 0 — it used to be
+                            // read from the transaction page's hidden legacy field, which held
+                            // "0" or "1000" depending on when the ViewPager had created that view.
+                            GlobalPara.strAmount = "0";
+                        } else if (GlobalPara.atmSelectedAmount == null || "0.00".equals(GlobalPara.atmSelectedAmount)) {
+                            // Non-ATM (sample-app) mode - read from EditText field
                             if (GlobalPara.edtamount != null) {
                                 GlobalPara.strAmount = GlobalPara.edtamount.getText().toString();
                             } else {
@@ -4526,12 +4550,16 @@ public class MainActivity extends AppCompatActivity {
                                     // The host computes the cardholder charge as F4 + F6.
                                     double amtValue = Double.parseDouble(
                                         GlobalPara.atmSelectedAmount.isEmpty() ? "0" : GlobalPara.atmSelectedAmount);
-                                    amountCents = (long)(amtValue * 100);
+                                    amountCents = Money.toCents(amtValue);
                                 } catch (Exception e) {
                                     Log.e(TAG, "ATM HOST (CL): Error parsing amount: " + e.getMessage());
                                 }
 
-                                long surchargeCents = (long)(GlobalPara.atmFlatFeeAmount * 100);
+                                // Surcharge on the wire = the fee the receipt shows (GlobalPara.atmFee, set by
+                                // the amount screen or the POS gateway). This used to be the FLAT fee always
+                                // — even in percentage mode and even for a POS-supplied surcharge (FEE-01) —
+                                // and truncated ($2.95 → 294) (CENTS-01).
+                                long surchargeCents = surchargeCentsFromReceipt(amountCents);
 
                                 // Send to host — loops PIN entry on "55 Incorrect PIN"
                                 // (see sendAtmHostRequestWithPinRetry / PIN_RETRY_ON_INCORRECT)
@@ -4665,12 +4693,16 @@ public class MainActivity extends AppCompatActivity {
                                     // The host computes the cardholder charge as F4 + F6.
                                     double amtValue = Double.parseDouble(
                                         GlobalPara.atmSelectedAmount.isEmpty() ? "0" : GlobalPara.atmSelectedAmount);
-                                    amountCents = (long)(amtValue * 100);
+                                    amountCents = Money.toCents(amtValue);
                                 } catch (Exception e) {
                                     Log.e(TAG, "ATM HOST (CT): Error parsing amount: " + e.getMessage());
                                 }
 
-                                long surchargeCents = (long)(GlobalPara.atmFlatFeeAmount * 100);
+                                // Surcharge on the wire = the fee the receipt shows (GlobalPara.atmFee, set by
+                                // the amount screen or the POS gateway). This used to be the FLAT fee always
+                                // — even in percentage mode and even for a POS-supplied surcharge (FEE-01) —
+                                // and truncated ($2.95 → 294) (CENTS-01).
+                                long surchargeCents = surchargeCentsFromReceipt(amountCents);
 
                                 // Send to host — loops PIN entry on "55 Incorrect PIN"
                                 // (see sendAtmHostRequestWithPinRetry / PIN_RETRY_ON_INCORRECT)
