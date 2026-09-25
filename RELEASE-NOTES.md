@@ -73,6 +73,22 @@ the rule was decided.
 
 ### Fixes
 
+**Money handling (`CENTS-01`, `FEE-01`, `BI-01`)** — found while reading the terminal log after the
+amount-screen work; all three were in the shipped 6.2.7 and earlier.
+- **Dollars-to-cents conversions rounded, not truncated.** `(int)(2.95 * 100)` is 294 in
+  binary floating point, so a $2.95 fee reached the host as $2.94 while the receipt said
+  $2.95; the same cast sat under the chip amount, the host amount and the surcharge. All of
+  them now go through `Money.toCents` (rounds) and the receipt strings are derived from the
+  same integers, so screen, receipt, chip and wire can no longer disagree by a cent.
+- **The surcharge on the wire is the fee the receipt shows.** It was always the configured
+  *flat* fee, even when the terminal is in percentage-fee mode and even for a POS sale whose
+  surcharge came from the register. Now it is taken from the fee already shown to the
+  customer, with the fee configuration as the fallback.
+- **A balance inquiry's chip amount is always zero.** It was read from a hidden legacy field
+  on the transaction page, which held 0 or $10.00 depending on when the screen had been
+  pre-created, so the cryptogram amount for a balance inquiry varied between runs. The
+  request to the host was always $0 and was approved either way.
+
 **Amount entry (`AMT-01`, `AMT-02`)**
 - `AmountRounding` (pure, cents arithmetic; the dollar overload converts through cents so
   binary-double noise cannot pick the wrong step) applied in the custom-amount dialog.
@@ -92,9 +108,12 @@ the rule was decided.
   multiples, non-whole-dollar minimum, no usable step, float-drift safety.
 - `AmountPresetsTest` (5) — written before the class: the exact ascending list, below-min
   and above-max presets not offered, non-positive limits hide nothing.
-- Full suite 221 tests; the 3 pre-existing `TEST-01` failures only.
-- Device: pending — buttons read $10 $20 $40 $60 $100 $200; with the terminal's $10
-  minimum all six are active; custom $12.50 shows $20 and the rounding note, custom $5
+- `MoneyTest` (5) — written before the class: rounding of awkward values ($2.95, $1.15,
+  $4.35, 10 + 0.3), flat and percentage fees in cents, formatting, and receipt/wire agreement.
+- Full suite 226 tests; the 3 pre-existing `TEST-01` failures only.
+- Device: pending — a balance inquiry logs `strAmount=0` every time; a withdrawal's
+  `Sending … amount=… surcharge=…` line matches the receipt's fee to the cent; buttons read
+  $10 $20 $40 $60 $100 $200; with the terminal's $10 minimum all six are active; custom $12.50 shows $20 and the rounding note, custom $5
   shows $10, custom $20 stays $20, preset $20 stays $20, custom $495 → $500, custom $501 →
   "Amount too high".
 
