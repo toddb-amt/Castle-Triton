@@ -149,6 +149,9 @@ transactions" while the proxy is connected. See POS-12 and decision D5.
 - [x] **AMT-02** · LOW (business rule) · `AmountPresets`, `Fragment_page_amount_selection`, `fragment_page_amount_selection.xml` — **shipped 6.2.8** (user 2026-09-25: remove $500, add $10, keep ascending)
   **Change:** presets $10 · $20 · $40 · $60 · $100 · $200 from one list (`AmountPresets.PRESET_CENTS`, `AmountPresetsTest` 5); buttons relabelled/wired from it (`btnPreset0..5`); presets outside min/max greyed (`isOffered`), re-applied on every show so a CasHUB limit change applies live. A $10 button under the code-default $20 minimum would otherwise only ever produce "Amount too low".
 
+- [ ] **BI-01** · LOW · ● (log 2026-09-25, pre-existing, shipped in 6.2.7) · `MainActivity` ~3037 (`if atmSelectedAmount == "0.00" → strAmount = edtamount.getText()`), `Fragment_page_transaction.java:154` (`edtAmount.setText("1000")`)
+  **Observation:** for a balance inquiry the chip amount (9F02 / `strAmount`) is read from the legacy transaction-page EditText, so it is `0` or `1000` depending on that hidden field's state (yesterday's BI logged `strAmount=0`, today's `strAmount=1000`); the host request itself carries Amount=$0 and EFX approved both. **Fix (later):** BI sets `strAmount = "0"` deterministically (or a documented nominal) and never reads the legacy field in ATM mode.
+
 - [ ] **REV-02** · MED · target **6.2.8** — MyView: terminal posts the reversal backlog (active/failed/out-of-service, last error) so a pending reversal raises an alert in MyView, and a remote **Resolve** (with reason, audited) exists for the case where nobody is on site. Until then the banner + Admin screen are the only signals.
 
 ---
