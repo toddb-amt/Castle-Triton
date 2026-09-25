@@ -146,6 +146,9 @@ transactions" while the proxy is connected. See POS-12 and decision D5.
   **Gap:** the custom-amount entry had no step rule — an entry under the minimum was refused, anything in range went to the host exactly as typed (cents included).
   **Fix:** the minimum is the step; custom entries round UP to its next multiple (cents arithmetic, `AmountRoundingTest` 6), the customer is told ("Rounded up to $20.00 (withdrawals in $10.00 steps)") and still confirms with Continue; presets untouched; maximum still applies to the rounded amount. Not applied to POS-driven amounts (the register owns those).
 
+- [x] **AMT-02** · LOW (business rule) · `AmountPresets`, `Fragment_page_amount_selection`, `fragment_page_amount_selection.xml` — **shipped 6.2.8** (user 2026-09-25: remove $500, add $10, keep ascending)
+  **Change:** presets $10 · $20 · $40 · $60 · $100 · $200 from one list (`AmountPresets.PRESET_CENTS`, `AmountPresetsTest` 5); buttons relabelled/wired from it (`btnPreset0..5`); presets outside min/max greyed (`isOffered`), re-applied on every show so a CasHUB limit change applies live. A $10 button under the code-default $20 minimum would otherwise only ever produce "Amount too low".
+
 - [ ] **REV-02** · MED · target **6.2.8** — MyView: terminal posts the reversal backlog (active/failed/out-of-service, last error) so a pending reversal raises an alert in MyView, and a remote **Resolve** (with reason, audited) exists for the case where nobody is on site. Until then the banner + Admin screen are the only signals.
 
 ---

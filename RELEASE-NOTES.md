@@ -52,25 +52,34 @@ Template:
 
 ### Highlights
 
-**Custom amounts round up to the next multiple of the minimum.** The configured minimum is
-also the step. With a $10 minimum, $12.50 becomes $20 and $5 becomes $10; $20 stays $20.
-Previously an entry under the minimum was refused and anything in range went to the host
-exactly as typed, cents included. This was pulled out of 6.2.7 because that build had
-already shipped to terminals when the rule was decided.
+**Amount screen changes.** The preset buttons are now **$10, $20, $40, $60, $100, $200**
+($500 removed, $10 added, still ascending), and a preset outside the terminal's configured
+limits is greyed out instead of failing when tapped. **Custom amounts round up to the next
+multiple of the minimum.** The configured minimum is also the step: with a $10 minimum,
+$12.50 becomes $20 and $5 becomes $10; $20 stays $20. Previously an entry under the minimum
+was refused and anything in range went to the host exactly as typed, cents included. The
+rounding was pulled out of 6.2.7 because that build had already shipped to terminals when
+the rule was decided.
 
 ### What operators and customers will notice
 
+- **Preset buttons:** $10 · $20 · $40 · $60 · $100 · $200. A site with a $20 minimum
+  sees the $10 button greyed; a site with a $100 maximum sees $200 greyed. Presets are
+  exact and never round.
 - **Amount screen, custom entry:** the rounded amount is what the screen shows, with a
   brief "Rounded up to $20.00 (withdrawals in $10.00 steps)" note. The customer still
-  presses Continue. Preset buttons are exact and never round. The maximum still applies to
-  the rounded amount.
+  presses Continue. The maximum still applies to the rounded amount.
 - Nothing changes for POS-driven sales; the register owns those amounts.
 
 ### Fixes
 
-**Amount entry (`AMT-01`)**
+**Amount entry (`AMT-01`, `AMT-02`)**
 - `AmountRounding` (pure, cents arithmetic; the dollar overload converts through cents so
   binary-double noise cannot pick the wrong step) applied in the custom-amount dialog.
+- `AmountPresets` is the single source of truth for the six preset buttons (labels, click
+  amounts, order) and for whether a preset is offered under the current min/max; the
+  screen re-applies the limits every time it is shown, so a CasHUB limit change takes
+  effect without a restart.
 
 ### Known issues and deferred
 
@@ -80,11 +89,14 @@ already shipped to terminals when the rule was decided.
 ### Verification
 
 - `AmountRoundingTest` (6) — written before the helper: below-minimum, between steps, exact
-  multiples, non-whole-dollar minimum, no usable step, float-drift safety. Full suite 216
-  tests; the 3 pre-existing `TEST-01` failures only.
-- Device: pending — custom $12.50 with a $10 minimum shows $20 and the rounding note,
-  custom $5 shows $10, custom $20 stays $20, preset $20 stays $20, custom $495 → $500,
-  custom $501 → "Amount too high".
+  multiples, non-whole-dollar minimum, no usable step, float-drift safety.
+- `AmountPresetsTest` (5) — written before the class: the exact ascending list, below-min
+  and above-max presets not offered, non-positive limits hide nothing.
+- Full suite 221 tests; the 3 pre-existing `TEST-01` failures only.
+- Device: pending — buttons read $10 $20 $40 $60 $100 $200; with the terminal's $10
+  minimum all six are active; custom $12.50 shows $20 and the rounding note, custom $5
+  shows $10, custom $20 stays $20, preset $20 stays $20, custom $495 → $500, custom $501 →
+  "Amount too high".
 
 ### Upgrade notes
 
