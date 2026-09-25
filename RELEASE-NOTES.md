@@ -69,11 +69,13 @@ the rule was decided.
 - **Amount screen, custom entry:** the rounded amount is what the screen shows, with a
   brief "Rounded up to $20.00 (withdrawals in $10.00 steps)" note. The customer still
   presses Continue. The maximum still applies to the rounded amount.
-- Nothing changes for POS-driven sales; the register owns those amounts.
+- **POS-driven sales:** the register sends the cash amount; the terminal adds its own fee
+  and tells the register the applied surcharge and total. Preset/rounding rules do not
+  apply to register amounts.
 
 ### Fixes
 
-**Money handling (`CENTS-01`, `FEE-01`, `BI-01`)** — found while reading the terminal log after the
+**Money handling (`CENTS-01`, `FEE-01`, `FEE-02`, `BI-01`)** — found while reading the terminal log after the
 amount-screen work; all three were in the shipped 6.2.7 and earlier.
 - **Dollars-to-cents conversions rounded, not truncated.** `(int)(2.95 * 100)` is 294 in
   binary floating point, so a $2.95 fee reached the host as $2.94 while the receipt said
@@ -84,6 +86,12 @@ amount-screen work; all three were in the shipped 6.2.7 and earlier.
   *flat* fee, even when the terminal is in percentage-fee mode and even for a POS sale whose
   surcharge came from the register. Now it is taken from the fee already shown to the
   customer, with the fee configuration as the fallback.
+- **POS sales: the fee is the terminal's (decision D7).** A register no longer has to send a
+  surcharge, and one it does send is never applied; the terminal's own fee configuration
+  (flat or percentage, pushed via CasHUB) sets the fee exactly as for a walk-up, and the
+  reply to the register now reports the surcharge actually applied plus `total_cents`.
+  This also makes the chip amount identical for both paths (amount + fee), closing the
+  EMV-01 question.
 - **A balance inquiry's chip amount is always zero.** It was read from a hidden legacy field
   on the transaction page, which held 0 or $10.00 depending on when the screen had been
   pre-created, so the cryptogram amount for a balance inquiry varied between runs. The
@@ -110,7 +118,9 @@ amount-screen work; all three were in the shipped 6.2.7 and earlier.
   and above-max presets not offered, non-positive limits hide nothing.
 - `MoneyTest` (5) — written before the class: rounding of awkward values ($2.95, $1.15,
   $4.35, 10 + 0.3), flat and percentage fees in cents, formatting, and receipt/wire agreement.
-- Full suite 226 tests; the 3 pre-existing `TEST-01` failures only.
+- `PosSaleFeeTest` (3) — written before the class: terminal fee governs whatever the register
+  sent (flat and percentage), mismatch flagged for the log, chip amount = amount + fee.
+- Full suite 229 tests; the 3 pre-existing `TEST-01` failures only.
 - Device (terminal …680, 2026-09-25, debug build of 7c7b437): balance inquiry logs
   `strAmount=0` (was 0 or 1000 before); withdrawal via a custom amount that rounded up to
   $10 → chip 1350, host `amount=1000 surcharge=350`, receipt $10.00 / $3.50 / $13.50 —
