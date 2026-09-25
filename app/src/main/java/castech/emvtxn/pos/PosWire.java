@@ -63,7 +63,7 @@ public final class PosWire {
     // ---- Transaction request fields (proxy → terminal) ------------------------
 
     public static final String TXN_AMOUNT        = "amount";         // integer cents
-    public static final String TXN_SURCHARGE     = "surcharge";      // integer cents (optional)
+    public static final String TXN_SURCHARGE     = "surcharge";      // integer cents (optional) — ADVISORY on a sale request: the terminal's fee configuration governs (D7); in the reply it is the surcharge actually applied
     public static final String TXN_ACCOUNT_TYPE  = "account_type";   // "checking" | "savings" | "credit"
     public static final String TXN_TENDER_TYPE   = "tender_type";    // "debit" | "credit"
     public static final String TXN_INVOICE_NO    = "invoice_no";     // optional
@@ -82,6 +82,7 @@ public final class PosWire {
     public static final String RSP_AVAILABLE_BALANCE_CENTS = "available_balance_cents";
     public static final String RSP_DISPLAY_MESSAGE         = "display_message";
     public static final String RSP_RETAIN_CARD             = "retain_card";
+    public static final String RSP_TOTAL_CENTS             = "total_cents";  // amount + applied surcharge, as charged to the cardholder (sale only)
 
     // ---- Standard error codes (resource error.code) ---------------------------
 

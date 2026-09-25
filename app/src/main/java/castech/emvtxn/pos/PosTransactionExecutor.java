@@ -68,7 +68,7 @@ public final class PosTransactionExecutor implements PosCommandDispatcher.Transa
             return;
         }
 
-        Log.d(TAG, "POS sale flow=" + flowId + " amt=" + amount + " surcharge=" + surcharge + " acct=" + accountType);
+        Log.d(TAG, "POS sale flow=" + flowId + " amt=" + amount + " surcharge(advisory)=" + surcharge + " acct=" + accountType);
         gateway.startSale(amount, surcharge, accountType, new TxnBridge(flowId, amount, surcharge));
     }
 
@@ -221,11 +221,16 @@ public final class PosTransactionExecutor implements PosCommandDispatcher.Transa
                 resource.put(PosWire.RSP_ACCOUNT_BALANCE_CENTS, r.accountBalanceCents);
                 resource.put(PosWire.RSP_AVAILABLE_BALANCE_CENTS, r.availableBalanceCents);
                 resource.put(PosWire.RSP_DISPLAY_MESSAGE, r.displayMessage);
-                if (amountCents > 0)    resource.put(PosWire.TXN_AMOUNT, amountCents);
-                if (surchargeCents > 0) resource.put(PosWire.TXN_SURCHARGE, surchargeCents);
+                if (amountCents > 0) {
+                    // D7: report what the TERMINAL charged, not what the register asked for.
+                    resource.put(PosWire.TXN_AMOUNT, amountCents);
+                    resource.put(PosWire.TXN_SURCHARGE, r.surchargeCents);
+                    resource.put(PosWire.RSP_TOTAL_CENTS, r.totalCents > 0 ? r.totalCents : amountCents + r.surchargeCents);
+                }
             } catch (JSONException ignored) {}
             reply(flowId, "approved rc=" + r.responseCode + " rrn=" + r.referenceNumber
-                    + " amt=" + amountCents, PosEnvelope.response(flowId, resource, null));
+                    + " amt=" + amountCents + " surcharge=" + r.surchargeCents,
+                    PosEnvelope.response(flowId, resource, null));
         }
 
         @Override
