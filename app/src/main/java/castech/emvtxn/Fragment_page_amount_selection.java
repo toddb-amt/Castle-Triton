@@ -199,7 +199,19 @@ public class Fragment_page_amount_selection extends Fragment {
                 String amountStr = input.getText().toString();
                 if (!amountStr.isEmpty()) {
                     try {
-                        double amount = Double.parseDouble(amountStr);
+                        double entered = Double.parseDouble(amountStr);
+                        // The minimum is the step: round UP to its next multiple
+                        // (min $10: $12.50 → $20, $5 → $10). The rounded amount is
+                        // what the screen shows and what goes to the host; the
+                        // customer still has to press Continue. Presets are exact
+                        // and never go through this.
+                        double amount = AmountRounding.roundUpToStep(entered, GlobalPara.atmMinAmount);
+                        if (amount != entered && getContext() != null) {
+                            android.widget.Toast.makeText(getContext(),
+                                "Rounded up to " + currencyFormat.format(amount)
+                                    + " (withdrawals in " + currencyFormat.format(GlobalPara.atmMinAmount) + " steps)",
+                                android.widget.Toast.LENGTH_LONG).show();
+                        }
                         selectAmount(amount);
                     } catch (NumberFormatException e) {
                         showErrorDialog("Invalid Amount", "Please enter a valid number");
