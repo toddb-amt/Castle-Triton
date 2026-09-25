@@ -115,11 +115,23 @@ public interface PosTerminalGateway {
         public final long   accountBalanceCents;
         public final long   availableBalanceCents;
         public final String displayMessage;
+        /** Surcharge actually applied by the terminal (D7: terminal fee config, not the register's value); 0 for BI. */
+        public final long   surchargeCents;
+        /** amount + surchargeCents as charged to the cardholder; 0 for BI. */
+        public final long   totalCents;
 
         public TransactionResult(String responseCode, String referenceNumber, String authCode,
                                  String authDate, String authTime,
                                  long accountBalanceCents, long availableBalanceCents,
                                  String displayMessage) {
+            this(responseCode, referenceNumber, authCode, authDate, authTime, accountBalanceCents, availableBalanceCents, displayMessage, 0L, 0L);
+        }
+
+        public TransactionResult(String responseCode, String referenceNumber, String authCode,
+                                 String authDate, String authTime,
+                                 long accountBalanceCents, long availableBalanceCents,
+                                 String displayMessage,
+                                 long surchargeCents, long totalCents) {
             this.responseCode = nz(responseCode);
             this.referenceNumber = nz(referenceNumber);
             this.authCode = nz(authCode);
@@ -128,6 +140,8 @@ public interface PosTerminalGateway {
             this.accountBalanceCents = accountBalanceCents;
             this.availableBalanceCents = availableBalanceCents;
             this.displayMessage = nz(displayMessage);
+            this.surchargeCents = surchargeCents;
+            this.totalCents = totalCents;
         }
         private static String nz(String s) { return s == null ? "" : s; }
     }

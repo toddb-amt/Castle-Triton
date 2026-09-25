@@ -48,6 +48,91 @@ Template:
 
 ---
 
+## 6.2.8 — 2026-09-25 · PR #4 · base 6.2.7 · versionCode 70
+
+### Highlights
+
+**Amount screen changes.** The preset buttons are now **$10, $20, $40, $60, $100, $200**
+($500 removed, $10 added, still ascending), and a preset outside the terminal's configured
+limits is greyed out instead of failing when tapped. **Custom amounts round up to the next
+multiple of the minimum.** The configured minimum is also the step: with a $10 minimum,
+$12.50 becomes $20 and $5 becomes $10; $20 stays $20. Previously an entry under the minimum
+was refused and anything in range went to the host exactly as typed, cents included. The
+rounding was pulled out of 6.2.7 because that build had already shipped to terminals when
+the rule was decided.
+
+### What operators and customers will notice
+
+- **Preset buttons:** $10 · $20 · $40 · $60 · $100 · $200. A site with a $20 minimum
+  sees the $10 button greyed; a site with a $100 maximum sees $200 greyed. Presets are
+  exact and never round.
+- **Amount screen, custom entry:** the rounded amount is what the screen shows, with a
+  brief "Rounded up to $20.00 (withdrawals in $10.00 steps)" note. The customer still
+  presses Continue. The maximum still applies to the rounded amount.
+- **POS-driven sales:** the register sends the cash amount; the terminal adds its own fee
+  and tells the register the applied surcharge and total. Preset/rounding rules do not
+  apply to register amounts.
+
+### Fixes
+
+**Money handling (`CENTS-01`, `FEE-01`, `FEE-02`, `BI-01`)** — found while reading the terminal log after the
+amount-screen work; all three were in the shipped 6.2.7 and earlier.
+- **Dollars-to-cents conversions rounded, not truncated.** `(int)(2.95 * 100)` is 294 in
+  binary floating point, so a $2.95 fee reached the host as $2.94 while the receipt said
+  $2.95; the same cast sat under the chip amount, the host amount and the surcharge. All of
+  them now go through `Money.toCents` (rounds) and the receipt strings are derived from the
+  same integers, so screen, receipt, chip and wire can no longer disagree by a cent.
+- **The surcharge on the wire is the fee the receipt shows.** It was always the configured
+  *flat* fee, even when the terminal is in percentage-fee mode and even for a POS sale whose
+  surcharge came from the register. Now it is taken from the fee already shown to the
+  customer, with the fee configuration as the fallback.
+- **POS sales: the fee is the terminal's (decision D7).** A register no longer has to send a
+  surcharge, and one it does send is never applied; the terminal's own fee configuration
+  (flat or percentage, pushed via CasHUB) sets the fee exactly as for a walk-up, and the
+  reply to the register now reports the surcharge actually applied plus `total_cents`.
+  This also makes the chip amount identical for both paths (amount + fee), closing the
+  EMV-01 question.
+- **A balance inquiry's chip amount is always zero.** It was read from a hidden legacy field
+  on the transaction page, which held 0 or $10.00 depending on when the screen had been
+  pre-created, so the cryptogram amount for a balance inquiry varied between runs. The
+  request to the host was always $0 and was approved either way.
+
+**Amount entry (`AMT-01`, `AMT-02`)**
+- `AmountRounding` (pure, cents arithmetic; the dollar overload converts through cents so
+  binary-double noise cannot pick the wrong step) applied in the custom-amount dialog.
+- `AmountPresets` is the single source of truth for the six preset buttons (labels, click
+  amounts, order) and for whether a preset is offered under the current min/max; the
+  screen re-applies the limits every time it is shown, so a CasHUB limit change takes
+  effect without a restart.
+
+### Known issues and deferred
+
+- MyView alert and remote resolve for a pending reversal (`REV-02`), POS/SYS release switch
+  (`POS-12`), host-layer robustness (R2), `HOST-14`, `LOG-01`, `TEST-01` — unchanged.
+
+### Verification
+
+- `AmountRoundingTest` (6) — written before the helper: below-minimum, between steps, exact
+  multiples, non-whole-dollar minimum, no usable step, float-drift safety.
+- `AmountPresetsTest` (5) — written before the class: the exact ascending list, below-min
+  and above-max presets not offered, non-positive limits hide nothing.
+- `MoneyTest` (5) — written before the class: rounding of awkward values ($2.95, $1.15,
+  $4.35, 10 + 0.3), flat and percentage fees in cents, formatting, and receipt/wire agreement.
+- `PosSaleFeeTest` (3) — written before the class: terminal fee governs whatever the register
+  sent (flat and percentage), mismatch flagged for the log, chip amount = amount + fee.
+- Full suite 229 tests; the 3 pre-existing `TEST-01` failures only.
+- Device (terminal …680, 2026-09-25, debug build of 7c7b437): balance inquiry logs
+  `strAmount=0` (was 0 or 1000 before); withdrawal via a custom amount that rounded up to
+  $10 → chip 1350, host `amount=1000 surcharge=350`, receipt $10.00 / $3.50 / $13.50 —
+  all one set of numbers; approved, pre-send reversal record cleared on approval; six
+  preset buttons in two rows, all active at the $10 minimum. Still to run: custom $501 →
+  "Amount too high", a $20 minimum greying the $10 button, and the 6.2.7 reversal path.
+
+### Upgrade notes
+
+- Installs in place over 6.2.7 (same signing key). No settings change; the step is the
+  existing `min_amount` parameter.
+
 ## 6.2.7 — 2026-09-24 · PR #3 · base 6.2.6 · versionCode 69
 
 ### Highlights

@@ -20,7 +20,8 @@ public class Fragment_page_amount_selection extends Fragment {
     private static MainActivity mainActivity = null;
 
     // UI Components
-    private Button btn20, btn40, btn60, btn100, btn200, btn500;
+    /** The six preset buttons, in layout order = AmountPresets.PRESET_CENTS order. */
+    private final Button[] presetButtons = new Button[AmountPresets.PRESET_CENTS.length];
     private Button btnCustomAmount, btnCheckBalance;
     private Button btnCancel, btnContinue;
     private TextView txvSelectedAmount, txvFee, txvTotal;
@@ -65,13 +66,16 @@ public class Fragment_page_amount_selection extends Fragment {
     }
 
     private void initializeComponents() {
-        // Amount preset buttons
-        btn20 = view.findViewById(R.id.btn20);
-        btn40 = view.findViewById(R.id.btn40);
-        btn60 = view.findViewById(R.id.btn60);
-        btn100 = view.findViewById(R.id.btn100);
-        btn200 = view.findViewById(R.id.btn200);
-        btn500 = view.findViewById(R.id.btn500);
+        // Amount preset buttons — labelled from AmountPresets so the list lives in one place
+        int[] presetIds = {R.id.btnPreset0, R.id.btnPreset1, R.id.btnPreset2,
+                           R.id.btnPreset3, R.id.btnPreset4, R.id.btnPreset5};
+        for (int i = 0; i < presetButtons.length; i++) {
+            presetButtons[i] = view.findViewById(presetIds[i]);
+            if (presetButtons[i] != null) {
+                presetButtons[i].setText(currencyFormat.format(AmountPresets.PRESET_CENTS[i] / 100.0)
+                        .replace(".00", ""));
+            }
+        }
 
         // Special buttons
         btnCustomAmount = view.findViewById(R.id.btnCustomAmount);
@@ -86,31 +90,14 @@ public class Fragment_page_amount_selection extends Fragment {
     }
 
     private void setupButtonListeners() {
-        // Preset amount buttons
-        btn20.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) { selectAmount(20.0); }
-        });
-        btn40.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) { selectAmount(40.0); }
-        });
-        btn60.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) { selectAmount(60.0); }
-        });
-        btn100.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) { selectAmount(100.0); }
-        });
-        btn200.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) { selectAmount(200.0); }
-        });
-        btn500.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) { selectAmount(500.0); }
-        });
+        // Preset amount buttons (exact amounts; never rounded)
+        for (int i = 0; i < presetButtons.length; i++) {
+            final double amount = AmountPresets.PRESET_CENTS[i] / 100.0;
+            if (presetButtons[i] != null) {
+                presetButtons[i].setOnClickListener(v -> selectAmount(amount));
+            }
+        }
+        applyPresetLimits();
 
         // Custom amount button
         btnCustomAmount.setOnClickListener(new View.OnClickListener() {
@@ -141,13 +128,16 @@ public class Fragment_page_amount_selection extends Fragment {
             @Override
             public void onClick(View v) {
                 if (selectedAmount > 0) {
-                    // Store the selected amount and fee in global parameters
-                    GlobalPara.atmSelectedAmount = String.format("%.2f", selectedAmount);
-                    GlobalPara.atmFee = String.format("%.2f", calculateFee(selectedAmount));
-                    GlobalPara.atmTotal = String.format("%.2f", selectedAmount + calculateFee(selectedAmount));
-                    // Convert total to cents for EMV SDK (no decimals)
-                    int totalCents = (int) ((selectedAmount + calculateFee(selectedAmount)) * 100);
-                    GlobalPara.strAmount = String.valueOf(totalCents);
+                    // Cents first (Money rounds; (int)(x*100) truncated and could drop a
+                    // cent), then every string and the chip amount from the SAME integers.
+                    long amountCents = Money.toCents(selectedAmount);
+                    long feeCents = Money.feeCents(amountCents, GlobalPara.atmUseFlatFee,
+                            GlobalPara.atmFlatFeeAmount, GlobalPara.atmPercentageFee);
+                    GlobalPara.atmSelectedAmount = Money.dollars(amountCents);
+                    GlobalPara.atmFee = Money.dollars(feeCents);
+                    GlobalPara.atmTotal = Money.dollars(amountCents + feeCents);
+                    // Chip amount (9F02) = total in cents, no decimals
+                    GlobalPara.strAmount = String.valueOf(amountCents + feeCents);
 
                     android.util.Log.d("AmountSelection", "Continue clicked - amount=" + GlobalPara.atmSelectedAmount +
                         ", balanceInquiry=" + GlobalPara.atmBalanceInquiryMode);
@@ -162,6 +152,23 @@ public class Fragment_page_amount_selection extends Fragment {
                 }
             }
         });
+    }
+
+    /**
+     * Greys out presets outside the configured min/max (a $10 button under a $20 minimum
+     * would only ever produce "Amount too low"). Called on setup and whenever the screen
+     * is shown, since the limits can change via CasHUB.
+     */
+    private void applyPresetLimits() {
+        long minCents = Math.round(GlobalPara.atmMinAmount * 100.0);
+        long maxCents = Math.round(GlobalPara.atmMaxAmount * 100.0);
+        for (int i = 0; i < presetButtons.length; i++) {
+            Button b = presetButtons[i];
+            if (b == null) continue;
+            boolean offered = AmountPresets.isOffered(AmountPresets.PRESET_CENTS[i], minCents, maxCents);
+            b.setEnabled(offered);
+            b.setAlpha(offered ? 1f : 0.35f);
+        }
     }
 
     private void selectAmount(double amount) {
@@ -199,7 +206,23 @@ public class Fragment_page_amount_selection extends Fragment {
                 String amountStr = input.getText().toString();
                 if (!amountStr.isEmpty()) {
                     try {
-                        double amount = Double.parseDouble(amountStr);
+                        double entered = Double.parseDouble(amountStr);
+                        // The minimum is the step: round UP to its next multiple
+                        // (min $10: $12.50 → $20, $5 → $10). The rounded amount is
+                        // what the screen shows and what goes to the host; the
+                        // customer still has to press Continue. Presets are exact
+                        // and never go through this.
+                        double amount = AmountRounding.roundUpToStep(entered, GlobalPara.atmMinAmount);
+                        if (amount != entered) {
+                            android.util.Log.d("AmountSelection", "Custom amount " + entered
+                                + " rounded up to " + amount + " (step " + GlobalPara.atmMinAmount + ")");
+                        }
+                        if (amount != entered && getContext() != null) {
+                            android.widget.Toast.makeText(getContext(),
+                                "Rounded up to " + currencyFormat.format(amount)
+                                    + " (withdrawals in " + currencyFormat.format(GlobalPara.atmMinAmount) + " steps)",
+                                android.widget.Toast.LENGTH_LONG).show();
+                        }
                         selectAmount(amount);
                     } catch (NumberFormatException e) {
                         showErrorDialog("Invalid Amount", "Please enter a valid number");
@@ -231,12 +254,10 @@ public class Fragment_page_amount_selection extends Fragment {
         builder.show();
     }
 
+    /** Fee in dollars for display — derived from the rounded cents so the screen, the receipt and the wire agree. */
     private double calculateFee(double amount) {
-        if (GlobalPara.atmUseFlatFee) {
-            return GlobalPara.atmFlatFeeAmount;
-        } else {
-            return amount * (GlobalPara.atmPercentageFee / 100.0);
-        }
+        return Money.feeCents(Money.toCents(amount), GlobalPara.atmUseFlatFee,
+                GlobalPara.atmFlatFeeAmount, GlobalPara.atmPercentageFee) / 100.0;
     }
 
     private void updateDisplay() {
@@ -263,6 +284,7 @@ public class Fragment_page_amount_selection extends Fragment {
     @Override
     public void onResume() {
         super.onResume();
+        applyPresetLimits();   // limits may have changed via CasHUB since setup
         // Only reset if user is actually viewing this page
         // Don't reset here - it interferes with Balance Inquiry mode
     }
@@ -293,7 +315,7 @@ public class Fragment_page_amount_selection extends Fragment {
         GlobalPara.atmSelectedAmount = "0.00";
         GlobalPara.atmFee = "0.00";
         GlobalPara.atmTotal = "0.00";
-        GlobalPara.strAmount = "0.00";
+        GlobalPara.strAmount = "0";   // chip amount in cents — "0.00" is not a valid cents string
 
         // Navigate to transaction (account type defaults to Checking)
         GlobalPara.atmAccountType = GlobalPara.ATM_ACCOUNT_CHECKING;

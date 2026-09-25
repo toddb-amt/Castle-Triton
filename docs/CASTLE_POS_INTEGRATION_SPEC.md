@@ -198,7 +198,11 @@ Registration error codes:
 ```
 
 - `amount` — **required**, integer cents, must be > 0
-- `surcharge` — optional, integer cents, must be >= 0, default 0
+- `surcharge` — optional, integer cents, must be >= 0, default 0. **Advisory only (terminal 6.2.8+, decision D7):**
+  the surcharge is controlled at the terminal (its fee configuration — flat or percentage, pushed via
+  CasHUB), exactly as for a walk-up withdrawal. The register does not have to send it and a value it
+  does send is never applied; if it differs from the terminal's fee the terminal logs a warning. The
+  approved response carries the surcharge actually applied and the resulting `total_cents`.
 - `account_type` — optional, `"checking"` | `"savings"` | `"credit"`, default `"checking"`
 - `tender_type`, `invoice_no`, `clerk_id` — optional, passed through to host as available
 
@@ -219,10 +223,15 @@ Registration error codes:
     "available_balance_cents": 12000,
     "display_message": "APPROVED",
     "amount": 5000,
-    "surcharge": 250
+    "surcharge": 350,
+    "total_cents": 5350
   }
 }
 ```
+
+- `amount` — the cash amount requested
+- `surcharge` — the surcharge the **terminal** applied (its fee configuration), not the request's value
+- `total_cents` — `amount + surcharge`, what the cardholder was charged (6.2.8+)
 
 **Response (declined):**
 ```json
