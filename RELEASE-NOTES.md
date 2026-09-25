@@ -92,14 +92,6 @@ ADM-05: the POS flag is centrally owned instead of living only in an on-terminal
 - **Receipts** show the REVERSAL block only for the customer's own transaction. Progress
   for an older record never reaches another customer's receipt again.
 
-**Amount screen**
-- **A custom amount rounds up to the next multiple of the minimum.** With a $10 minimum,
-  $12.50 becomes $20 and $5 becomes $10; $20 stays $20. The customer sees the rounded
-  amount on screen with a brief "Rounded up to …" note and still has to press Continue.
-  Preset buttons are exact and never round. The maximum still applies to the rounded
-  amount. Previously an entry under the minimum was refused and any amount in range was
-  accepted exactly as typed, cents included.
-
 **POS mode configuration**
 - **CasHUB can turn POS mode on or off and set the proxy URL and access key** per
   terminal, entered manually in CasHUB like the host parameters. Absent keys leave the terminal's local value alone, exactly as the host
@@ -131,11 +123,6 @@ ADM-05: the POS flag is centrally owned instead of living only in an on-terminal
 - Per-record `Retry now` and `Resolve` (reason required, Super only) replace `Clear All
   Pending`; resolutions are journaled (`resolve` event) and visible in history.
 
-**Amount entry (`AMT-01`)**
-- `AmountRounding` (pure, cents arithmetic): custom entries round up to a multiple of the
-  configured minimum; no step rule existed before, so odd amounts and cents reached the
-  host.
-
 **Configuration**
 - `pos_enabled`, `pos_proxy_url`, `pos_terminal_access_key` are recognised CasHUB
   parameters (`CFG-01`). `pos_proxy_url` must be `wss://` or `ws://`; an invalid value is
@@ -163,11 +150,8 @@ ADM-05: the POS flag is centrally owned instead of living only in an on-terminal
   progress messages, resolved-with-reason history entries.
 - `PosParamsTest` — 10 JVM tests written before the parser: boolean/URL/key parsing,
   invalid values ignored with a reason, change detection, access-key masking.
-- `AmountRoundingTest` (6) — written before the helper: below-minimum, between steps, exact
-  multiples, non-whole-dollar minimum, no usable step, float-drift safety.
-- Full suite 216 tests; the 3 pre-existing `TEST-01` failures only.
-- Device: pending — (0) amount screen: custom $12.50 with a $10 minimum shows $20 and the
-  rounding note, custom $5 shows $10, preset $20 stays $20; (1) reversal: pull WiFi during "Online Processing…" on a withdrawal,
+- Full suite 210 tests; the 3 pre-existing `TEST-01` failures only.
+- Device: pending — (1) reversal: pull WiFi during "Online Processing…" on a withdrawal,
   confirm the record promotes, the drain runs once on the next customer, the banner
   appears after exhaustion and the next customer transacts; retry from Admin after WiFi
   returns and confirm the banner clears; (2) CasHUB: push the three POS keys to terminal
