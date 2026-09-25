@@ -213,6 +213,10 @@ public class Fragment_page_amount_selection extends Fragment {
                         // customer still has to press Continue. Presets are exact
                         // and never go through this.
                         double amount = AmountRounding.roundUpToStep(entered, GlobalPara.atmMinAmount);
+                        if (amount != entered) {
+                            android.util.Log.d("AmountSelection", "Custom amount " + entered
+                                + " rounded up to " + amount + " (step " + GlobalPara.atmMinAmount + ")");
+                        }
                         if (amount != entered && getContext() != null) {
                             android.widget.Toast.makeText(getContext(),
                                 "Rounded up to " + currencyFormat.format(amount)

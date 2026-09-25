@@ -111,11 +111,12 @@ amount-screen work; all three were in the shipped 6.2.7 and earlier.
 - `MoneyTest` (5) — written before the class: rounding of awkward values ($2.95, $1.15,
   $4.35, 10 + 0.3), flat and percentage fees in cents, formatting, and receipt/wire agreement.
 - Full suite 226 tests; the 3 pre-existing `TEST-01` failures only.
-- Device: pending — a balance inquiry logs `strAmount=0` every time; a withdrawal's
-  `Sending … amount=… surcharge=…` line matches the receipt's fee to the cent; buttons read
-  $10 $20 $40 $60 $100 $200; with the terminal's $10 minimum all six are active; custom $12.50 shows $20 and the rounding note, custom $5
-  shows $10, custom $20 stays $20, preset $20 stays $20, custom $495 → $500, custom $501 →
-  "Amount too high".
+- Device (terminal …680, 2026-09-25, debug build of 7c7b437): balance inquiry logs
+  `strAmount=0` (was 0 or 1000 before); withdrawal via a custom amount that rounded up to
+  $10 → chip 1350, host `amount=1000 surcharge=350`, receipt $10.00 / $3.50 / $13.50 —
+  all one set of numbers; approved, pre-send reversal record cleared on approval; six
+  preset buttons in two rows, all active at the $10 minimum. Still to run: custom $501 →
+  "Amount too high", a $20 minimum greying the $10 button, and the 6.2.7 reversal path.
 
 ### Upgrade notes
 
