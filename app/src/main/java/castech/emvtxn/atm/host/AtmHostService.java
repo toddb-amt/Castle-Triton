@@ -64,6 +64,10 @@ public class AtmHostService {
      * connection state fresh and detect connection drops between transactions.
      */
     private ScheduledExecutorService healthCheckScheduler;
+    /** Slow background retry of FAILED reversal records (never on a customer's transaction). */
+    private ScheduledExecutorService reversalRetryScheduler;
+    /** Detail of the last failed reversal attempt on the drain thread (host code or connection error). */
+    private volatile String lastAttemptDetail;
     private ScheduledFuture<?> healthCheckTask;
     private volatile boolean healthCheckRunning = false;
 
@@ -169,6 +173,7 @@ public class AtmHostService {
             // Task #8: auto-start periodic Type 89 health check if enabled
             if (processorConfig.isHealthCheckEnabled()) {
                 startPeriodicHealthCheck();
+                startReversalRetrySchedule();
             }
 
             // Task #7: cleanup expired reversal journal files at startup
@@ -235,6 +240,7 @@ public class AtmHostService {
      */
     public void disconnect() {
         stopPeriodicHealthCheck();
+        stopReversalRetrySchedule();
         if (transactionManager != null) {
             transactionManager.disconnect();
         }
@@ -760,15 +766,7 @@ public class AtmHostService {
         // are pending or being processed. Matches FUN_0006a280 + FUN_00070280
         // post-transaction recovery pattern — terminal cannot return to the
         // "ready for customer" state until the reversal queue clears.
-        if (processingReversals) {
-            Log.w(TAG, "performWithdrawal blocked: reversal drain in progress");
-            notifyError("Please wait — processing pending transactions");
-            return;
-        }
-        if (hasDrainablePendingReversals()) {
-            Log.w(TAG, "performWithdrawal blocked: pending reversals on disk, triggering drain");
-            notifyError("Please wait — processing pending transactions");
-            triggerReversalDrain();
+        if (blockedByReversalGate("performWithdrawal")) {
             return;
         }
 
@@ -797,15 +795,7 @@ public class AtmHostService {
         ensureInitialized();
 
         // BlueVerse compliance: block customer transactions during reversal recovery
-        if (processingReversals) {
-            Log.w(TAG, "performBalanceInquiry blocked: reversal drain in progress");
-            notifyError("Please wait — processing pending transactions");
-            return;
-        }
-        if (hasDrainablePendingReversals()) {
-            Log.w(TAG, "performBalanceInquiry blocked: pending reversals on disk, triggering drain");
-            notifyError("Please wait — processing pending transactions");
-            triggerReversalDrain();
+        if (blockedByReversalGate("performBalanceInquiry")) {
             return;
         }
 
@@ -908,14 +898,172 @@ public class AtmHostService {
      * transactions and are managed by the active transaction handler.</p>
      */
     public boolean hasDrainablePendingReversals() {
-        if (reversalManager == null) return false;
-        List<ReversalPersistenceManager.PendingReversal> all = reversalManager.getPendingReversals();
-        for (ReversalPersistenceManager.PendingReversal r : all) {
-            if (ReversalPersistenceManager.isDrainableStatus(r.getStatus())) {
-                return true;
-            }
+        return countReversals(false) > 0;
+    }
+
+    /** Records a drain may attempt now: active ones, plus FAILED ones when {@code includeFailed}. */
+    private boolean hasRetryableReversals(boolean includeFailed) {
+        return countReversals(includeFailed) > 0;
+    }
+
+    /** Active records (see {@link ReversalGatePolicy#isActive}); with {@code includeFailed}, FAILED ones too. */
+    private int countReversals(boolean includeFailed) {
+        if (reversalManager == null) return 0;
+        int n = 0;
+        for (ReversalPersistenceManager.PendingReversal r : reversalManager.getPendingReversals()) {
+            String st = r.getStatus();
+            if (ReversalGatePolicy.isActive(st)) n++;
+            else if (includeFailed && ReversalGatePolicy.isRetryable(st)) n++;
         }
-        return false;
+        return n;
+    }
+
+    private int countFailedReversals() {
+        if (reversalManager == null) return 0;
+        int n = 0;
+        for (ReversalPersistenceManager.PendingReversal r : reversalManager.getPendingReversals()) {
+            if (ReversalPersistenceManager.PendingReversal.STATUS_FAILED.equals(r.getStatus())) n++;
+        }
+        return n;
+    }
+
+    /** Snapshot of the reversal backlog for the banner, the Admin screen and the POS info reply. */
+    public static final class ReversalBacklog {
+        public final int activeCount;
+        public final int failedCount;
+        public final boolean drainRunning;
+        public final boolean outOfService;
+        ReversalBacklog(int activeCount, int failedCount, boolean drainRunning, boolean outOfService) {
+            this.activeCount = activeCount;
+            this.failedCount = failedCount;
+            this.drainRunning = drainRunning;
+            this.outOfService = outOfService;
+        }
+        public ReversalGatePolicy.Decision gate() {
+            return ReversalGatePolicy.decide(drainRunning, activeCount, failedCount);
+        }
+    }
+
+    public ReversalBacklog getReversalBacklog() {
+        int failed = countFailedReversals();
+        return new ReversalBacklog(countReversals(false), failed, processingReversals,
+                failed >= ReversalGatePolicy.SAFETY_STOP_FAILED_RECORDS);
+    }
+
+    /**
+     * The customer-transaction gate (see {@link ReversalGatePolicy}). Returns true — and
+     * has already told the customer why — when the transaction must not start.
+     */
+    private boolean blockedByReversalGate(String who) {
+        ReversalGatePolicy.Decision d = ReversalGatePolicy.decide(
+                processingReversals, countReversals(false), countFailedReversals());
+        if (d.allowed()) return false;
+        Log.w(TAG, who + " blocked by reversal gate: " + d.outcome);
+        notifyError(d.customerMessage);
+        if (d.outcome == ReversalGatePolicy.Outcome.WAIT_START_DRAIN) {
+            triggerReversalDrain(false);
+        } else if (d.outcome == ReversalGatePolicy.Outcome.OUT_OF_SERVICE) {
+            enterOutOfService();
+        }
+        return true;
+    }
+
+    private void enterOutOfService() {
+        try { sessionState.outOfService(); } catch (IllegalStateException ignore) {}
+        notifyOperatorAlert(ReversalGatePolicy.MSG_OUT_OF_SERVICE);
+    }
+
+    /** Tells the UI the current backlog (banner / Admin). Safe from any thread. */
+    public void publishReversalBacklog() {
+        ReversalBacklog b = getReversalBacklog();
+        if (b.outOfService) {
+            try { sessionState.outOfService(); } catch (IllegalStateException ignore) {}
+        } else if (sessionState.getState() == AtmSessionState.OUT_OF_SERVICE) {
+            // OUT_OF_SERVICE is only ever entered by the reversal safety stop; once the
+            // FAILED count is back under it (retry succeeded / record resolved) the
+            // terminal returns to service.
+            Log.w(TAG, "Reversal safety stop lifted (failed=" + b.failedCount + ")");
+            sessionState.operatorReset();
+        }
+        AtmEventListener l = listener;
+        if (l != null) {
+            try { l.onReversalBacklog(b.activeCount, b.failedCount, b.outOfService); }
+            catch (Throwable t) { Log.w(TAG, "onReversalBacklog listener threw", t); }
+        }
+    }
+
+    // ---- Background retry of FAILED records (15 min / network recovery / boot) ----
+
+    private static final long REVERSAL_RETRY_PERIOD_MS = 15 * 60_000L;
+
+    private synchronized void startReversalRetrySchedule() {
+        if (reversalRetryScheduler != null && !reversalRetryScheduler.isShutdown()) return;
+        reversalRetryScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "ReversalRetry");
+            t.setDaemon(true);
+            return t;
+        });
+        reversalRetryScheduler.scheduleWithFixedDelay(this::backgroundRetryTick,
+                REVERSAL_RETRY_PERIOD_MS, REVERSAL_RETRY_PERIOD_MS, TimeUnit.MILLISECONDS);
+    }
+
+    private synchronized void stopReversalRetrySchedule() {
+        if (reversalRetryScheduler != null) {
+            reversalRetryScheduler.shutdownNow();
+            reversalRetryScheduler = null;
+        }
+    }
+
+    private void backgroundRetryTick() {
+        try {
+            if (!initialized || processingReversals || isTransactionInProgress()) return;
+            if (countReversals(true) == 0) return;
+            Log.d(TAG, "Background reversal retry tick — attempting FAILED records");
+            triggerReversalDrain(true);
+        } catch (Throwable t) {
+            Log.w(TAG, "Background reversal retry tick failed: " + t.getMessage());
+        }
+    }
+
+    /** Network came back: retry FAILED records shortly, without waiting for the 15-minute tick. */
+    public void onNetworkAvailable() {
+        ScheduledExecutorService sched = reversalRetryScheduler;
+        if (sched == null || sched.isShutdown()) return;
+        if (countReversals(true) == 0) return;
+        try { sched.schedule(this::backgroundRetryTick, 10, TimeUnit.SECONDS); }
+        catch (Exception ignore) {}
+    }
+
+    // ---- Operator actions on a single record (Admin screen) ----
+
+    /** Puts one FAILED record back to PENDING and drains it now. */
+    public void retryReversal(final String transactionId, final ReversalProcessingCallback callback) {
+        if (!initialized || reversalManager == null) {
+            if (callback != null) callback.onProcessingComplete(0, 0);
+            return;
+        }
+        reversalManager.markForRetry(transactionId);
+        reversalDrainExecutor.execute(() -> {
+            DrainResult r = drainPendingReversalsBlocking(false, callback);
+            if (callback != null) callback.onProcessingComplete(r.cleared, r.failed);
+        });
+    }
+
+    /**
+     * A human resolves a record with a stated reason (the processor confirmed the
+     * original declined / reversed it manually / duplicate). The record leaves the
+     * pending list but survives in history with the reason. If that takes the
+     * failed count back under the safety stop, the terminal returns to service.
+     */
+    public boolean resolveReversal(String transactionId, String reason, String resolvedBy) {
+        if (reversalManager == null || transactionId == null) return false;
+        ReversalPersistenceManager.PendingReversal rec = reversalManager.findPendingReversal(transactionId);
+        if (rec == null) return false;
+        reversalManager.addResolvedToHistory(rec, reason, resolvedBy);
+        reversalManager.removePendingReversal(transactionId);
+        Log.w(TAG, "Reversal " + transactionId + " resolved by " + resolvedBy + ": " + reason);
+        publishReversalBacklog(); // lifts the safety stop if the failed count is back under it
+        return true;
     }
 
     /**
@@ -930,7 +1078,19 @@ public class AtmHostService {
      * or operator action.</p>
      */
     public void triggerReversalDrain() {
-        reversalDrainExecutor.execute(this::drainPendingReversalsBlocking);
+        triggerReversalDrain(false);
+    }
+
+    /** @param includeFailed also attempt FAILED (retry-exhausted) records — background/operator only */
+    public void triggerReversalDrain(final boolean includeFailed) {
+        reversalDrainExecutor.execute(() -> drainPendingReversalsBlocking(includeFailed, null));
+    }
+
+    /** Outcome of one drain run. */
+    static final class DrainResult {
+        final int cleared;
+        final int failed;
+        DrainResult(int cleared, int failed) { this.cleared = cleared; this.failed = failed; }
     }
 
     /**
@@ -980,24 +1140,23 @@ public class AtmHostService {
      * {@code STATUS_PENDING_PRESEND} records are skipped — they belong to in-flight
      * transactions.</p>
      */
-    private void drainPendingReversalsBlocking() {
+    private DrainResult drainPendingReversalsBlocking(boolean includeFailed, ReversalProcessingCallback callback) {
         if (!initialized) {
             Log.d(TAG, "drainPendingReversals: not initialized, skipping");
-            return;
+            return new DrainResult(0, 0);
         }
         if (processingReversals) {
             Log.d(TAG, "drainPendingReversals: already running, skipping");
-            return;
+            return new DrainResult(0, 0);
         }
-        if (!hasDrainablePendingReversals()) {
-            return; // common case, no log noise
+        if (!hasRetryableReversals(includeFailed)) {
+            return new DrainResult(0, 0); // common case, no log noise
         }
 
         processingReversals = true;
-        Log.d(TAG, "Reversal drain loop starting");
-        // User-visible: announce reversal start. Prefixed with [REVERSAL] so
-        // MainActivity's onProgress can route these specifically to receipt UI.
-        notifyDrainProgress("Reversal in progress…");
+        Log.d(TAG, "Reversal drain loop starting (includeFailed=" + includeFailed + ")");
+        notifyDrainProgress(ReversalProgress.drain("Reversal in progress…"));
+        publishReversalBacklog();
         try {
             sessionState.postTransactionCheck(true);
         } catch (IllegalStateException ignore) {
@@ -1008,57 +1167,71 @@ public class AtmHostService {
         int failed = 0;
         boolean exhaustionReached = false;
         try {
-            while (hasDrainablePendingReversals()) {
-                ReversalPersistenceManager.PendingReversal next = pickNextDrainable();
+            while (hasRetryableReversals(includeFailed)) {
+                ReversalPersistenceManager.PendingReversal next = pickNextDrainable(includeFailed);
                 if (next == null) break;
+                final String id = next.getTransactionId();
 
-                Log.d(TAG, "Drain: processing reversal " + next.getTransactionId()
-                        + " (seq=" + next.getSequenceNumber() + ")");
+                Log.d(TAG, "Drain: processing reversal " + id + " (seq=" + next.getSequenceNumber() + ")");
+                if (callback != null) { try { callback.onProcessingReversal(next); } catch (Throwable ignore) {} }
+                notifyDrainProgress(ReversalProgress.record(id, "Reversal in progress…"));
 
                 boolean cleared = attemptReversalWithBackoff(next);
 
                 if (cleared) {
                     processed++;
-                    notifyDrainProgress("Reversal approved (seq " + next.getSequenceNumber() + ")");
+                    notifyDrainProgress(ReversalProgress.record(id, "Reversal approved"));
+                    if (callback != null) { try { callback.onReversalSuccess(next); } catch (Throwable ignore) {} }
                 } else {
                     failed++;
-                    Log.w(TAG, "Drain: reversal " + next.getTransactionId()
-                            + " exhausted retries — leaving as FAILED");
+                    String why = lastAttemptDetail == null ? "retries exhausted" : lastAttemptDetail;
+                    Log.w(TAG, "Drain: reversal " + id + " exhausted retries — leaving as FAILED (" + why + ")");
+                    notifyDrainProgress(ReversalProgress.record(id, "Reversal pending — service required"));
+                    if (callback != null) { try { callback.onReversalFailed(next, why); } catch (Throwable ignore) {} }
                     exhaustionReached = true;
-                    // Exit loop: persistent failure means host is unreachable or
-                    // rejecting reversals. Leave remaining records for next drain.
+                    // Persistent failure means the host is unreachable or rejecting reversals;
+                    // hammering the remaining records now would not help. The background
+                    // schedule picks them up.
                     break;
                 }
             }
         } finally {
             processingReversals = false;
-            Log.d(TAG, "Reversal drain loop complete: " + processed + " cleared, "
-                    + failed + " failed");
-            if (exhaustionReached) {
-                // Task #3: escalate to operator alert when retries exhausted
-                Log.e(TAG, "Reversal retry exhausted — terminal entering OUT_OF_SERVICE");
-                try { sessionState.outOfService(); } catch (IllegalStateException ignore) {}
-                notifyDrainProgress("Reversal pending — please contact merchant");
-                notifyOperatorAlert("Pending reversals could not be processed — service required");
+            Log.d(TAG, "Reversal drain loop complete: " + processed + " cleared, " + failed + " failed");
+            int failedOnDisk = countFailedReversals();
+            if (failedOnDisk >= ReversalGatePolicy.SAFETY_STOP_FAILED_RECORDS) {
+                // Safety stop: a pattern of unsendable reversals, not one stuck record.
+                Log.e(TAG, failedOnDisk + " FAILED reversal records — terminal entering OUT_OF_SERVICE");
+                notifyDrainProgress(ReversalProgress.drain("Out of service — pending reversals"));
+                enterOutOfService();
+            } else if (exhaustionReached) {
+                // Trade and alert: the terminal stays in service; the record is retried
+                // in the background and shown on the banner / Admin screen.
+                notifyDrainProgress(ReversalProgress.drain("Reversal pending — service required"));
+                notifyOperatorAlert("Reversal pending — service required");
+                try { sessionState.reversalRecoveryCleared(); } catch (IllegalStateException ignore) {}
             } else if (processed > 0) {
-                notifyDrainProgress("Reversal complete (" + processed + " sent)");
+                notifyDrainProgress(ReversalProgress.drain("Reversal complete (" + processed + " sent)"));
                 try { sessionState.reversalRecoveryCleared(); } catch (IllegalStateException ignore) {}
             } else {
                 try { sessionState.reversalRecoveryCleared(); } catch (IllegalStateException ignore) {}
             }
+            publishReversalBacklog();
         }
+        return new DrainResult(processed, failed);
     }
 
     /**
-     * Send a user-visible reversal-progress message. Prefixed with [REVERSAL]
-     * so the receipt UI (MainActivity.atmTransactionEventListener.onProgress)
-     * can route these specifically to a status line rather than dropping them.
+     * Send a user-visible reversal-progress message. Callers pass a message already
+     * prefixed by {@link ReversalProgress} ([DRAIN] for terminal-wide state, [REVERSAL:id]
+     * for one record) so MainActivity can route drain state to the banner and record
+     * state to the one receipt it belongs to.
      */
     private void notifyDrainProgress(String message) {
         AtmEventListener l = listener;
         if (l != null) {
             try {
-                l.onProgress("[REVERSAL] " + message);
+                l.onProgress(message);
             } catch (Throwable t) {
                 Log.w(TAG, "notifyDrainProgress: listener threw", t);
             }
@@ -1084,6 +1257,7 @@ public class AtmHostService {
     private boolean attemptReversalWithBackoff(ReversalPersistenceManager.PendingReversal rev) {
         String state = rev.getStatus();
         long backoff = REVERSAL_BACKOFF_INITIAL_MS;
+        lastAttemptDetail = null;
         for (int attempt = 1; attempt <= reversalMaxRetries; attempt++) {
             reversalManager.updateReversalStatus(rev.getTransactionId(),
                     ReversalPersistenceManager.PendingReversal.STATUS_PROCESSING, null);
@@ -1093,6 +1267,7 @@ public class AtmHostService {
                 ok = attemptByState(rev, state, attempt);
             } catch (Throwable t) {
                 ok = false;
+                lastAttemptDetail = t.getClass().getSimpleName() + ": " + t.getMessage();
                 Log.e(TAG, "Drain: attempt " + attempt + " threw: " + t.getMessage(), t);
             }
 
@@ -1107,8 +1282,13 @@ public class AtmHostService {
                         + " cleared on attempt " + attempt + " (state was " + state + ")");
                 return true;
             }
+            // Keep the reason on the record so the Admin screen can show WHY it is stuck.
+            if (lastAttemptDetail == null && transactionManager != null) {
+                lastAttemptDetail = transactionManager.getLastReversalFailure();
+            }
+            reversalManager.noteAttemptFailure(rev.getTransactionId(), lastAttemptDetail);
             Log.w(TAG, "Drain: attempt " + attempt + "/" + reversalMaxRetries
-                    + " failed for " + rev.getTransactionId() + " (state " + state + ")");
+                    + " failed for " + rev.getTransactionId() + " (state " + state + "): " + lastAttemptDetail);
             if (attempt < reversalMaxRetries) {
                 try {
                     Thread.sleep(backoff);
@@ -1121,7 +1301,8 @@ public class AtmHostService {
         }
         reversalManager.updateReversalStatus(rev.getTransactionId(),
                 ReversalPersistenceManager.PendingReversal.STATUS_FAILED,
-                "All " + reversalMaxRetries + " retries exhausted");
+                (lastAttemptDetail == null ? "All " + reversalMaxRetries + " retries exhausted"
+                        : lastAttemptDetail + " (after " + reversalMaxRetries + " attempts)"));
         return false;
     }
 
@@ -1140,6 +1321,7 @@ public class AtmHostService {
                 Log.d(TAG, "Drain: RECONNECT_AND_EXIT — host reachable, clearing without send");
                 return true;
             }
+            lastAttemptDetail = "host unreachable (reconnect failed)";
             return false;
         }
 
@@ -1148,6 +1330,7 @@ public class AtmHostService {
             boolean openOk = openSession();
             if (!openOk) {
                 Log.d(TAG, "Drain: RECONNECT_AND_REVERSE — reconnect failed on attempt " + attempt);
+                lastAttemptDetail = "host unreachable (reconnect failed)";
                 return false;
             }
             // Reconnected — now dispatch the reversal
@@ -1294,11 +1477,15 @@ public class AtmHostService {
      * Picks the next drainable pending reversal. Returns null if none.
      * Skips {@code STATUS_PENDING_PRESEND} records (those belong to in-flight transactions).
      */
-    private ReversalPersistenceManager.PendingReversal pickNextDrainable() {
+    private ReversalPersistenceManager.PendingReversal pickNextDrainable(boolean includeFailed) {
         List<ReversalPersistenceManager.PendingReversal> all = reversalManager.getPendingReversals();
+        // Active records first; FAILED ones only when asked (background / operator).
         for (ReversalPersistenceManager.PendingReversal r : all) {
-            if (ReversalPersistenceManager.isDrainableStatus(r.getStatus())) {
-                return r;
+            if (ReversalGatePolicy.isActive(r.getStatus())) return r;
+        }
+        if (includeFailed) {
+            for (ReversalPersistenceManager.PendingReversal r : all) {
+                if (ReversalGatePolicy.isRetryable(r.getStatus())) return r;
             }
         }
         return null;
@@ -1310,102 +1497,29 @@ public class AtmHostService {
      *
      * @param callback Callback for processing results
      */
-    public void processPendingReversals(ReversalProcessingCallback callback) {
+    public void processPendingReversals(final ReversalProcessingCallback callback) {
+        if (!initialized || reversalManager == null) {
+            if (callback != null) callback.onProcessingComplete(0, 0);
+            return;
+        }
         if (processingReversals) {
             Log.w(TAG, "Already processing reversals");
-            if (callback != null) {
-                callback.onProcessingComplete(0, 0);
-            }
+            if (callback != null) callback.onProcessingComplete(0, 0);
             return;
         }
-
-        java.util.List<ReversalPersistenceManager.PendingReversal> pending = reversalManager.getPendingReversals();
-        if (pending.isEmpty()) {
+        if (!hasRetryableReversals(true)) {
             Log.d(TAG, "No pending reversals to process");
-            if (callback != null) {
-                callback.onProcessingComplete(0, 0);
-            }
+            if (callback != null) callback.onProcessingComplete(0, 0);
             return;
         }
-
-        processingReversals = true;
-        Log.d(TAG, "Processing " + pending.size() + " pending reversals");
-
-        // Process reversals on background thread
-        final java.util.List<ReversalPersistenceManager.PendingReversal> pendingList = pending;
-        final ReversalProcessingCallback finalCallback = callback;
-        new Thread(new Runnable() {
-            @Override
-            public void run() {
-                int successCount = 0;
-                int failCount = 0;
-
-                for (ReversalPersistenceManager.PendingReversal rev : pendingList) {
-                    try {
-                        if (finalCallback != null) {
-                            finalCallback.onProcessingReversal(rev);
-                        }
-
-                        // Update status to processing
-                        reversalManager.updateReversalStatus(rev.getTransactionId(),
-                            ReversalPersistenceManager.PendingReversal.STATUS_PROCESSING, null);
-
-                        // Send the reversal
-                        boolean success = sendReversalSync(rev);
-
-                        if (success) {
-                            successCount++;
-                            // Move to completed history
-                            reversalManager.addToCompletedHistory(rev, true);
-                            reversalManager.removePendingReversal(rev.getTransactionId());
-                            Log.d(TAG, "Reversal successful: " + rev.getTransactionId());
-
-                            if (finalCallback != null) {
-                                finalCallback.onReversalSuccess(rev);
-                            }
-                        } else {
-                            failCount++;
-                            reversalManager.updateReversalStatus(rev.getTransactionId(),
-                                ReversalPersistenceManager.PendingReversal.STATUS_FAILED, "Host rejected reversal");
-                            Log.w(TAG, "Reversal failed: " + rev.getTransactionId());
-
-                            if (finalCallback != null) {
-                                finalCallback.onReversalFailed(rev, "Host rejected reversal");
-                            }
-                        }
-
-                    } catch (Exception e) {
-                        failCount++;
-                        String error = e.getMessage() != null ? e.getMessage() : "Unknown error";
-                        reversalManager.updateReversalStatus(rev.getTransactionId(),
-                            ReversalPersistenceManager.PendingReversal.STATUS_FAILED, error);
-                        Log.e(TAG, "Reversal error: " + error);
-
-                        if (finalCallback != null) {
-                            finalCallback.onReversalFailed(rev, error);
-                        }
-                    }
-
-                    // Brief delay between reversals
-                    try {
-                        Thread.sleep(500);
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                        break;
-                    }
-                }
-
-                processingReversals = false;
-                final int success = successCount;
-                final int fail = failCount;
-
-                if (finalCallback != null) {
-                    finalCallback.onProcessingComplete(success, fail);
-                }
-
-                Log.d(TAG, "Reversal processing complete: " + success + " success, " + fail + " failed");
-            }
-        }).start();
+        // Operator / boot path: attempts FAILED records too, on the single drain
+        // executor (one drain at a time, same backoff, same bookkeeping as the
+        // post-transaction drain — the old separate thread raced the drain).
+        reversalDrainExecutor.execute(() -> {
+            DrainResult r = drainPendingReversalsBlocking(true, callback);
+            if (callback != null) callback.onProcessingComplete(r.cleared, r.failed);
+            Log.d(TAG, "Reversal processing complete: " + r.cleared + " success, " + r.failed + " failed");
+        });
     }
 
     /**
@@ -1605,6 +1719,7 @@ public class AtmHostService {
             keyManager = null;
         }
 
+        stopReversalRetrySchedule();
         initialized = false;
     }
 
@@ -1861,6 +1976,12 @@ public class AtmHostService {
          * Called when an error occurs.
          */
         void onError(String error);
+
+        /**
+         * Reversal backlog changed: counts of active and FAILED records and whether the
+         * safety stop has taken the terminal out of service. Drives the service banner.
+         */
+        default void onReversalBacklog(int activeCount, int failedCount, boolean outOfService) {}
 
         /**
          * Called when an operator-attention condition is detected (task #9).

@@ -16,5 +16,7 @@
 
     <!-- Service banner shown while the receipt printer is out of paper -->
     <string name="banner_out_of_paper">OUT OF PAPER — receipts shown on screen. Please note your transaction details.</string>
+    <string name="banner_reversal_pending">SERVICE REQUIRED — a prior transaction is awaiting reversal. Transactions continue.</string>
+    <string name="banner_out_of_service">OUT OF SERVICE — pending reversals. Contact TFI.</string>
 
 </resources>

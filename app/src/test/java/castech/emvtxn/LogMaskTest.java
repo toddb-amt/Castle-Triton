@@ -15,7 +15,7 @@ import org.junit.Test;
  */
 public class LogMaskTest {
 
-    private static final String PAN = "4430410048078318";
+    private static final String PAN = "4111111111111111";
     private static final String TRACK2_ASCII = ";" + PAN + "=2905201104001927?";       // 35 chars
     private static final String TRACK2_HEX = PAN + "D2905201104001927F";               // 17 bytes
     private static final String PIN_BLOCK = "B1D99A4E151864FE";
@@ -25,8 +25,8 @@ public class LogMaskTest {
 
     @Test
     public void pan_showsLastFourOnly() {
-        assertEquals("****8318", LogMask.pan(PAN));
-        assertEquals("****8318", LogMask.pan("4430 4100 4807 8318"));   // non-digits ignored
+        assertEquals("****1111", LogMask.pan(PAN));
+        assertEquals("****1111", LogMask.pan("4111 1111 1111 1111"));   // non-digits ignored
         assertEquals("****", LogMask.pan("1234"));
         assertEquals("[null]", LogMask.pan(null));
         assertEquals("[empty]", LogMask.pan("  "));
@@ -37,9 +37,9 @@ public class LogMaskTest {
     @Test
     public void track2_neverEchoesPanOrDiscretionaryData() {
         String ascii = LogMask.track2(TRACK2_ASCII);
-        assertEquals("[Track 2: 35 chars, PAN ****8318]", ascii);
+        assertEquals("[Track 2: 35 chars, PAN ****1111]", ascii);
         String hex = LogMask.track2(TRACK2_HEX);
-        assertEquals("[Track 2: 34 chars, PAN ****8318]", hex);
+        assertEquals("[Track 2: 34 chars, PAN ****1111]", hex);
         assertFalse(ascii.contains("2905"));
         assertFalse(hex.contains("2905"));
         assertEquals("[Track 2: null]", LogMask.track2(null));
@@ -109,7 +109,7 @@ public class LogMaskTest {
 
         assertTrue(out, out.startsWith("["));
         assertTrue(out, out.contains("MS008628<FS>85<FS>CWCACA<FS>0003"));
-        assertTrue(out, out.contains("[Track 2: 35 chars, PAN ****8318]"));
+        assertTrue(out, out.contains("[Track 2: 35 chars, PAN ****1111]"));
         assertTrue(out, out.contains("<FS>[8 bytes]<FS>1000<FS>350<FS>1<FS>"));
         assertTrue(out, out.contains("ud9F0902008C5A08[8 bytes redacted]9F2608" + ARQC));
         assertFalse(out, out.contains(PAN));

@@ -8,12 +8,22 @@
     "min_amount": 10,
     "max_amount": 500,
     "use_flat_fee": true,
-    "flat_fee": 3.5
+    "flat_fee": 3.5,
+    "pos_enabled": false,
+    "pos_proxy_url": "wss://proxy.myviewonline.com:60000"
   },
   "terminals": [
     {
       "match": "REPLACE — CasHUB terminal name, hardware serial, or self-defined ID",
-      "params": { "terminal_id": "MS008623" }
+      "params": { "terminal_id": "TEST0001" }
+    },
+    {
+      "match": "REPLACE — a POS-integrated site",
+      "params": {
+        "terminal_id": "TEST0002",
+        "pos_enabled": true,
+        "pos_terminal_access_key": "REPLACE — per-terminal access key from the proxy (secret; never at merchant level)"
+      }
     }
   ]
 }
