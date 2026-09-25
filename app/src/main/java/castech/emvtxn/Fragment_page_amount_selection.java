@@ -20,7 +20,8 @@ public class Fragment_page_amount_selection extends Fragment {
     private static MainActivity mainActivity = null;
 
     // UI Components
-    private Button btn20, btn40, btn60, btn100, btn200, btn500;
+    /** The six preset buttons, in layout order = AmountPresets.PRESET_CENTS order. */
+    private final Button[] presetButtons = new Button[AmountPresets.PRESET_CENTS.length];
     private Button btnCustomAmount, btnCheckBalance;
     private Button btnCancel, btnContinue;
     private TextView txvSelectedAmount, txvFee, txvTotal;
@@ -65,13 +66,16 @@ public class Fragment_page_amount_selection extends Fragment {
     }
 
     private void initializeComponents() {
-        // Amount preset buttons
-        btn20 = view.findViewById(R.id.btn20);
-        btn40 = view.findViewById(R.id.btn40);
-        btn60 = view.findViewById(R.id.btn60);
-        btn100 = view.findViewById(R.id.btn100);
-        btn200 = view.findViewById(R.id.btn200);
-        btn500 = view.findViewById(R.id.btn500);
+        // Amount preset buttons — labelled from AmountPresets so the list lives in one place
+        int[] presetIds = {R.id.btnPreset0, R.id.btnPreset1, R.id.btnPreset2,
+                           R.id.btnPreset3, R.id.btnPreset4, R.id.btnPreset5};
+        for (int i = 0; i < presetButtons.length; i++) {
+            presetButtons[i] = view.findViewById(presetIds[i]);
+            if (presetButtons[i] != null) {
+                presetButtons[i].setText(currencyFormat.format(AmountPresets.PRESET_CENTS[i] / 100.0)
+                        .replace(".00", ""));
+            }
+        }
 
         // Special buttons
         btnCustomAmount = view.findViewById(R.id.btnCustomAmount);
@@ -86,31 +90,14 @@ public class Fragment_page_amount_selection extends Fragment {
     }
 
     private void setupButtonListeners() {
-        // Preset amount buttons
-        btn20.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) { selectAmount(20.0); }
-        });
-        btn40.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) { selectAmount(40.0); }
-        });
-        btn60.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) { selectAmount(60.0); }
-        });
-        btn100.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) { selectAmount(100.0); }
-        });
-        btn200.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) { selectAmount(200.0); }
-        });
-        btn500.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) { selectAmount(500.0); }
-        });
+        // Preset amount buttons (exact amounts; never rounded)
+        for (int i = 0; i < presetButtons.length; i++) {
+            final double amount = AmountPresets.PRESET_CENTS[i] / 100.0;
+            if (presetButtons[i] != null) {
+                presetButtons[i].setOnClickListener(v -> selectAmount(amount));
+            }
+        }
+        applyPresetLimits();
 
         // Custom amount button
         btnCustomAmount.setOnClickListener(new View.OnClickListener() {
@@ -162,6 +149,23 @@ public class Fragment_page_amount_selection extends Fragment {
                 }
             }
         });
+    }
+
+    /**
+     * Greys out presets outside the configured min/max (a $10 button under a $20 minimum
+     * would only ever produce "Amount too low"). Called on setup and whenever the screen
+     * is shown, since the limits can change via CasHUB.
+     */
+    private void applyPresetLimits() {
+        long minCents = Math.round(GlobalPara.atmMinAmount * 100.0);
+        long maxCents = Math.round(GlobalPara.atmMaxAmount * 100.0);
+        for (int i = 0; i < presetButtons.length; i++) {
+            Button b = presetButtons[i];
+            if (b == null) continue;
+            boolean offered = AmountPresets.isOffered(AmountPresets.PRESET_CENTS[i], minCents, maxCents);
+            b.setEnabled(offered);
+            b.setAlpha(offered ? 1f : 0.35f);
+        }
     }
 
     private void selectAmount(double amount) {
@@ -275,6 +279,7 @@ public class Fragment_page_amount_selection extends Fragment {
     @Override
     public void onResume() {
         super.onResume();
+        applyPresetLimits();   // limits may have changed via CasHUB since setup
         // Only reset if user is actually viewing this page
         // Don't reset here - it interferes with Balance Inquiry mode
     }
