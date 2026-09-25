@@ -48,6 +48,49 @@ Template:
 
 ---
 
+## 6.2.8 — 2026-09-25 · PR #4 · base 6.2.7 · versionCode 70
+
+### Highlights
+
+**Custom amounts round up to the next multiple of the minimum.** The configured minimum is
+also the step. With a $10 minimum, $12.50 becomes $20 and $5 becomes $10; $20 stays $20.
+Previously an entry under the minimum was refused and anything in range went to the host
+exactly as typed, cents included. This was pulled out of 6.2.7 because that build had
+already shipped to terminals when the rule was decided.
+
+### What operators and customers will notice
+
+- **Amount screen, custom entry:** the rounded amount is what the screen shows, with a
+  brief "Rounded up to $20.00 (withdrawals in $10.00 steps)" note. The customer still
+  presses Continue. Preset buttons are exact and never round. The maximum still applies to
+  the rounded amount.
+- Nothing changes for POS-driven sales; the register owns those amounts.
+
+### Fixes
+
+**Amount entry (`AMT-01`)**
+- `AmountRounding` (pure, cents arithmetic; the dollar overload converts through cents so
+  binary-double noise cannot pick the wrong step) applied in the custom-amount dialog.
+
+### Known issues and deferred
+
+- MyView alert and remote resolve for a pending reversal (`REV-02`), POS/SYS release switch
+  (`POS-12`), host-layer robustness (R2), `HOST-14`, `LOG-01`, `TEST-01` — unchanged.
+
+### Verification
+
+- `AmountRoundingTest` (6) — written before the helper: below-minimum, between steps, exact
+  multiples, non-whole-dollar minimum, no usable step, float-drift safety. Full suite 216
+  tests; the 3 pre-existing `TEST-01` failures only.
+- Device: pending — custom $12.50 with a $10 minimum shows $20 and the rounding note,
+  custom $5 shows $10, custom $20 stays $20, preset $20 stays $20, custom $495 → $500,
+  custom $501 → "Amount too high".
+
+### Upgrade notes
+
+- Installs in place over 6.2.7 (same signing key). No settings change; the step is the
+  existing `min_amount` parameter.
+
 ## 6.2.7 — 2026-09-24 · PR #3 · base 6.2.6 · versionCode 69
 
 ### Highlights
