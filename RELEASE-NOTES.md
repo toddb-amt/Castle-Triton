@@ -125,8 +125,12 @@ amount-screen work; all three were in the shipped 6.2.7 and earlier.
   `strAmount=0` (was 0 or 1000 before); withdrawal via a custom amount that rounded up to
   $10 → chip 1350, host `amount=1000 surcharge=350`, receipt $10.00 / $3.50 / $13.50 —
   all one set of numbers; approved, pre-send reversal record cleared on approval; six
-  preset buttons in two rows, all active at the $10 minimum. Still to run: custom $501 →
-  "Amount too high", a $20 minimum greying the $10 button, and the 6.2.7 reversal path.
+  preset buttons in two rows, all active at the $10 minimum. 2026-09-27 via the MyView
+  proxy (CasHUB `pos_enabled=true` applied at boot): POS sale with no register surcharge →
+  terminal fee applied (`surcharge(applied)=350`), host `amount=1000 surcharge=350`, approved,
+  reply `surcharge=350`, receipt $10.00 / $3.50 / $13.50; POS balance inquiry approved with chip
+  amount 0; batch close (host totals + reset) printed. Still to run: custom $501 → "Amount too
+  high", a $20 minimum greying the $10 button, and the 6.2.7 reversal path.
 
 ### Upgrade notes
 
