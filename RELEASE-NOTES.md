@@ -94,10 +94,9 @@ the same key download as Request New Working Key).
 
 - `ProcessorLabelTest` (3) — written before the class: codes, case/whitespace tolerance,
   unknown → neutral. Full suite 232 tests; the 3 pre-existing `TEST-01` failures only.
-- Device: pending — Admin as Normal and as Super: three read-only cards, code `E1` and port
-  shown, no host address, full terminal ID; Request New Working Key works for both tiers;
-  Save Settings only touches POS; a walk-up balance inquiry still approves after the change
-  (proves the boot-time config path is intact).
+- Device (terminal …680, debug build of 524a375, 2026-09-30): boot applied the CasHUB host
+  and POS parameters, host service initialized, POS connected; Admin cards, processor code,
+  no host address and Request New Working Key checked by the operator ("6.2.9 looks good").
 
 ### Upgrade notes
 
