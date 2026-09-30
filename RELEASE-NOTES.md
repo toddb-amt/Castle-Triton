@@ -48,6 +48,62 @@ Template:
 
 ---
 
+## 6.2.9 — 2026-09-30 · PR #5 · base 6.2.8 · versionCode 71
+
+### Highlights
+
+**The terminal no longer edits, or names, its processor.** Host settings, fee configuration
+and withdrawal limits are now managed only through CasHUB and shown read-only in Admin for
+both tiers. The processor appears as a short code (E1, S1, D1, F1, C1), never by name, and
+the host address is not shown at all — only the code, the port and the terminal ID. The
+single host action left on the terminal is **Request New Working Key**, available to Admin
+and Super Admin alike. Test Connection and Download Keys are gone (Download Keys performed
+the same key download as Request New Working Key).
+
+### What operators and customers will notice
+
+- **Admin → Fee Configuration / Withdrawal Limits / Host Settings** are read-only cards
+  labelled "Managed centrally via CasHUB". Nothing there can be typed or saved; a CasHUB push
+  changes them (live, or at the next boot).
+- **Host Settings** shows `Processor: E1 · Port 9020 · TLS` and `Terminal ID: MP001194`
+  (full ID, since field techs quote it). The host address is never displayed.
+- A terminal that CasHUB has never provisioned shows **"Awaiting configuration from CasHUB"**
+  in red instead of an empty form, and Request New Working Key refuses with the same message.
+- **Save Settings** now saves only the POS-mode section.
+- Nothing changes for customers, for the CasHUB parameter values (they stay `EFX`,
+  `SWITCH_COMMERCE`, …) or for the wire.
+
+### Fixes / changes
+
+**Admin screen (`ADM-06`, `ADM-07`)**
+- Removed the on-terminal write path for host, fee and limit values (the Admin prefs
+  `processor_index`, `host_address`, `fee_*`, `limit_*` keys are no longer written; boot
+  reads `atm_host_settings` / `atm_settings` as before, then CasHUB overrides). `updateGlobalPara`
+  and the spinner index conversions are gone, so the Admin screen can no longer overwrite a
+  CasHUB value with a stale widget state.
+- `ProcessorLabel.codeFor(processorType)` — display mapping; unknown → `--`.
+- TLS is always on (there was a checkbox; every processor uses TLS).
+
+### Known issues and deferred
+
+- POS-mode section still editable on the terminal (also CasHUB-managed since 6.2.7) — lock
+  it the same way if wanted.
+- `REV-02`, `POS-12`, R2, `HOST-14`, `LOG-01`, `TEST-01` — unchanged.
+
+### Verification
+
+- `ProcessorLabelTest` (3) — written before the class: codes, case/whitespace tolerance,
+  unknown → neutral. Full suite 232 tests; the 3 pre-existing `TEST-01` failures only.
+- Device (terminal …680, debug build of 524a375, 2026-09-30): boot applied the CasHUB host
+  and POS parameters, host service initialized, POS connected; Admin cards, processor code,
+  no host address and Request New Working Key checked by the operator ("6.2.9 looks good").
+
+### Upgrade notes
+
+- Installs in place over 6.2.8. Terminals already provisioned from CasHUB need nothing. A
+  terminal that was configured only by hand in Admin keeps working on its persisted values
+  but can no longer be changed on the terminal — push its parameters from CasHUB.
+
 ## 6.2.8 — 2026-09-25 · PR #4 · base 6.2.7 · versionCode 70
 
 ### Highlights

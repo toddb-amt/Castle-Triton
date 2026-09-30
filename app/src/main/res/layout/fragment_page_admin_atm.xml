@@ -46,7 +46,7 @@
             android:orientation="vertical"
             android:padding="16dp">
 
-            <!-- Fee Configuration Section -->
+            <!-- Fee Configuration Section (CasHUB-managed, read-only since 6.2.9) -->
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
@@ -57,93 +57,30 @@
                 android:textColor="@color/colorPrimary"
                 android:paddingBottom="8dp"/>
 
-            <RadioGroup
-                android:id="@+id/rgFeeType"
+            <TextView
+                android:id="@+id/txvFeeConfig"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:orientation="vertical"
-                android:paddingBottom="12dp">
+                android:text="Fee: —"
+                android:textSize="16sp"
+                android:textColor="#333333"
+                android:paddingBottom="4dp"/>
 
-                <RadioButton
-                    android:id="@+id/rbFlatFee"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Flat Fee"
-                    android:textSize="16sp"
-                    android:checked="true"/>
-
-                <RadioButton
-                    android:id="@+id/rbPercentageFee"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Percentage Fee"
-                    android:textSize="16sp"/>
-            </RadioGroup>
-
-            <!-- Flat Fee Amount -->
-            <LinearLayout
-                android:id="@+id/layoutFlatFee"
+            <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:paddingBottom="8dp">
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Flat Fee Amount: $"
-                    android:textSize="16sp"
-                    android:layout_gravity="center_vertical"/>
-
-                <EditText
-                    android:id="@+id/edtFlatFee"
-                    android:layout_width="100dp"
-                    android:layout_height="wrap_content"
-                    android:inputType="numberDecimal"
-                    android:text="3.00"
-                    android:textSize="16sp"/>
-            </LinearLayout>
-
-            <!-- Percentage Fee -->
-            <LinearLayout
-                android:id="@+id/layoutPercentageFee"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:paddingBottom="16dp"
-                android:visibility="gone">
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Percentage Fee: "
-                    android:textSize="16sp"
-                    android:layout_gravity="center_vertical"/>
-
-                <EditText
-                    android:id="@+id/edtPercentageFee"
-                    android:layout_width="80dp"
-                    android:layout_height="wrap_content"
-                    android:inputType="numberDecimal"
-                    android:text="0.0"
-                    android:textSize="16sp"/>
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text=" %"
-                    android:textSize="16sp"
-                    android:layout_gravity="center_vertical"/>
-            </LinearLayout>
+                android:text="Managed centrally via CasHUB"
+                android:textSize="12sp"
+                android:textColor="#888888"
+                android:paddingBottom="16dp"/>
 
             <View
                 android:layout_width="match_parent"
                 android:layout_height="1dp"
                 android:background="#CCCCCC"
-                android:layout_marginTop="8dp"
                 android:layout_marginBottom="16dp"/>
 
-            <!-- Withdrawal Limits Section -->
+            <!-- Withdrawal Limits Section (CasHUB-managed, read-only since 6.2.9) -->
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
@@ -154,51 +91,22 @@
                 android:textColor="@color/colorPrimary"
                 android:paddingBottom="8dp"/>
 
-            <!-- Minimum Amount -->
-            <LinearLayout
+            <TextView
+                android:id="@+id/txvLimits"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:paddingBottom="8dp">
+                android:text="Minimum: — · Maximum: —"
+                android:textSize="16sp"
+                android:textColor="#333333"
+                android:paddingBottom="4dp"/>
 
-                <TextView
-                    android:layout_width="140dp"
-                    android:layout_height="wrap_content"
-                    android:text="Minimum Amount: $"
-                    android:textSize="16sp"
-                    android:layout_gravity="center_vertical"/>
-
-                <EditText
-                    android:id="@+id/edtMinAmount"
-                    android:layout_width="100dp"
-                    android:layout_height="wrap_content"
-                    android:inputType="numberDecimal"
-                    android:text="20.00"
-                    android:textSize="16sp"/>
-            </LinearLayout>
-
-            <!-- Maximum Amount -->
-            <LinearLayout
+            <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:paddingBottom="16dp">
-
-                <TextView
-                    android:layout_width="140dp"
-                    android:layout_height="wrap_content"
-                    android:text="Maximum Amount: $"
-                    android:textSize="16sp"
-                    android:layout_gravity="center_vertical"/>
-
-                <EditText
-                    android:id="@+id/edtMaxAmount"
-                    android:layout_width="100dp"
-                    android:layout_height="wrap_content"
-                    android:inputType="numberDecimal"
-                    android:text="500.00"
-                    android:textSize="16sp"/>
-            </LinearLayout>
+                android:text="Managed centrally via CasHUB"
+                android:textSize="12sp"
+                android:textColor="#888888"
+                android:paddingBottom="16dp"/>
 
             <View
                 android:layout_width="match_parent"
@@ -232,7 +140,9 @@
                 android:background="#CCCCCC"
                 android:layout_marginBottom="16dp"/>
 
-            <!-- Host Settings Section -->
+            <!-- Host Settings Section (CasHUB-managed, read-only since 6.2.9).
+                 Shows the processor CODE (never its name) and the port — never the host
+                 address. The only action left is Request New Working Key. -->
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
@@ -243,159 +153,24 @@
                 android:textColor="@color/colorPrimary"
                 android:paddingBottom="8dp"/>
 
-            <!-- Processor Type -->
-            <LinearLayout
+            <TextView
+                android:id="@+id/txvHostConfig"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:paddingBottom="8dp">
+                android:text="Processor: — · Port —\nTerminal ID: —"
+                android:textSize="16sp"
+                android:textColor="#333333"
+                android:paddingBottom="4dp"/>
 
-                <TextView
-                    android:layout_width="120dp"
-                    android:layout_height="wrap_content"
-                    android:text="Processor:"
-                    android:textSize="16sp"
-                    android:layout_gravity="center_vertical"/>
-
-                <Spinner
-                    android:id="@+id/spinnerProcessorType"
-                    android:layout_width="0dp"
-                    android:layout_weight="1"
-                    android:layout_height="48dp"
-                    android:background="@android:drawable/btn_dropdown"
-                    android:spinnerMode="dropdown"/>
-            </LinearLayout>
-
-            <!-- Protocol Type -->
-            <LinearLayout
+            <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:gravity="center_vertical"
-                android:layout_marginBottom="8dp">
+                android:text="Managed centrally via CasHUB"
+                android:textSize="12sp"
+                android:textColor="#888888"
+                android:paddingBottom="12dp"/>
 
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Protocol:"
-                    android:textSize="14sp"
-                    android:layout_marginEnd="8dp"/>
-
-                <Spinner
-                    android:id="@+id/spinnerProtocolType"
-                    android:layout_width="0dp"
-                    android:layout_weight="1"
-                    android:layout_height="48dp"
-                    android:background="@android:drawable/btn_dropdown"
-                    android:spinnerMode="dropdown"/>
-            </LinearLayout>
-
-            <!-- Host Address -->
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:paddingBottom="8dp">
-
-                <TextView
-                    android:layout_width="120dp"
-                    android:layout_height="wrap_content"
-                    android:text="Host Address:"
-                    android:textSize="16sp"
-                    android:layout_gravity="center_vertical"/>
-
-                <EditText
-                    android:id="@+id/edtHostAddress"
-                    android:layout_width="0dp"
-                    android:layout_weight="1"
-                    android:layout_height="wrap_content"
-                    android:inputType="textUri"
-                    android:hint="e.g., atm.processor.com"
-                    android:textSize="14sp"/>
-            </LinearLayout>
-
-            <!-- Host Port -->
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:paddingBottom="8dp">
-
-                <TextView
-                    android:layout_width="120dp"
-                    android:layout_height="wrap_content"
-                    android:text="Port:"
-                    android:textSize="16sp"
-                    android:layout_gravity="center_vertical"/>
-
-                <EditText
-                    android:id="@+id/edtHostPort"
-                    android:layout_width="100dp"
-                    android:layout_height="wrap_content"
-                    android:inputType="number"
-                    android:text="8002"
-                    android:textSize="16sp"/>
-
-                <CheckBox
-                    android:id="@+id/chkUseTls"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="TLS"
-                    android:checked="true"
-                    android:layout_marginStart="16dp"/>
-            </LinearLayout>
-
-            <!-- Terminal ID -->
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:paddingBottom="12dp">
-
-                <TextView
-                    android:layout_width="120dp"
-                    android:layout_height="wrap_content"
-                    android:text="Terminal ID:"
-                    android:textSize="16sp"
-                    android:layout_gravity="center_vertical"/>
-
-                <EditText
-                    android:id="@+id/edtTerminalId"
-                    android:layout_width="0dp"
-                    android:layout_weight="1"
-                    android:layout_height="wrap_content"
-                    android:inputType="textCapCharacters"
-                    android:hint="e.g., TERM001"
-                    android:textSize="14sp"/>
-            </LinearLayout>
-
-            <!-- Host Action Buttons -->
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:paddingBottom="8dp">
-
-                <Button
-                    android:id="@+id/btnTestConnection"
-                    android:layout_width="0dp"
-                    android:layout_weight="1"
-                    android:layout_height="wrap_content"
-                    android:text="Test Connection"
-                    android:textSize="14sp"
-                    android:layout_marginEnd="4dp"/>
-
-                <Button
-                    android:id="@+id/btnDownloadKeys"
-                    android:layout_width="0dp"
-                    android:layout_weight="1"
-                    android:layout_height="wrap_content"
-                    android:text="Download Keys"
-                    android:textSize="14sp"
-                    android:layout_marginStart="4dp"/>
-            </LinearLayout>
-
-            <!-- Request New Working Key Button -->
+            <!-- Request New Working Key Button (both admin tiers) -->
             <Button
                 android:id="@+id/btnRequestNewKey"
                 android:layout_width="match_parent"
