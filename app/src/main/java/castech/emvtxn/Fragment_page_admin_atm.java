@@ -88,6 +88,9 @@ public class Fragment_page_admin_atm extends Fragment {
     private Button btnWifiConnect;
     private Button btnWifiStatus;
     private Button btnWifiScan;
+    private android.widget.Switch swWifiPower;
+    /** Set while the code (not the operator) moves the WiFi switch. */
+    private boolean wifiSwitchProgrammatic = false;
     private static final int REQ_WIFI_SCAN_PERMISSION = 4711;
     private Button btnTestCardReader;
     private Button btnSaveSettings;
@@ -264,6 +267,7 @@ public class Fragment_page_admin_atm extends Fragment {
         btnWifiConnect = rootView.findViewById(R.id.btnWifiConnect);
         btnWifiStatus = rootView.findViewById(R.id.btnWifiStatus);
         btnWifiScan = rootView.findViewById(R.id.btnWifiScan);
+        swWifiPower = rootView.findViewById(R.id.swWifiPower);
         setupWifiSection();
     }
 
@@ -289,6 +293,13 @@ public class Fragment_page_admin_atm extends Fragment {
         }
         if (btnWifiStatus != null) {
             btnWifiStatus.setOnClickListener(v -> refreshWifiStatus());
+        }
+        if (swWifiPower != null) {
+            syncWifiSwitch();
+            swWifiPower.setOnCheckedChangeListener((btn, on) -> {
+                if (wifiSwitchProgrammatic) return;
+                onWifiSwitchToggled(on);
+            });
         }
         if (btnWifiScan != null) {
             btnWifiScan.setOnClickListener(v -> scanWifiNetworks());
@@ -510,6 +521,75 @@ public class Fragment_page_admin_atm extends Fragment {
             try { Thread.sleep(3000); } catch (InterruptedException ignored) {}
             refreshWifiStatus();
         }).start();
+    }
+
+    /** Reflects the real radio state on the switch without firing its listener. */
+    private void syncWifiSwitch() {
+        if (swWifiPower == null || getContext() == null) return;
+        boolean on = false;
+        try {
+            android.net.wifi.WifiManager wm = (android.net.wifi.WifiManager)
+                    getContext().getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+            on = wm != null && wm.isWifiEnabled();
+        } catch (Throwable ignore) {}
+        wifiSwitchProgrammatic = true;
+        swWifiPower.setChecked(on);
+        wifiSwitchProgrammatic = false;
+    }
+
+    /** True when the terminal has a cellular data connection it could fall back to. */
+    private boolean cellularDataConnected() {
+        try {
+            android.telephony.TelephonyManager tm = (android.telephony.TelephonyManager)
+                    getContext().getApplicationContext().getSystemService(Context.TELEPHONY_SERVICE);
+            return tm != null && tm.getDataState() == android.telephony.TelephonyManager.DATA_CONNECTED;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /** Operator moved the WiFi switch. Off while WiFi is the only connection asks first. */
+    private void onWifiSwitchToggled(final boolean on) {
+        if (!on && !cellularDataConnected()) {
+            new AlertDialog.Builder(getContext())
+                .setTitle("Turn WiFi off?")
+                .setMessage("WiFi is this terminal's only connection. Turning it off takes the "
+                        + "terminal offline — host, POS and CasHUB — until WiFi is turned back on.")
+                .setPositiveButton("Turn off", (d, w) -> setWifiPower(false))
+                .setNegativeButton("Cancel", (d, w) -> syncWifiSwitch())
+                .setOnCancelListener(d -> syncWifiSwitch())
+                .show();
+            return;
+        }
+        setWifiPower(on);
+    }
+
+    /** Radio on/off through Castle's settings service (same calls Connect uses). */
+    private void setWifiPower(final boolean on) {
+        if (swWifiPower != null) swWifiPower.setEnabled(false);
+        new Thread(() -> {
+            String msg;
+            try {
+                CTOS.CtSettings settings = new CTOS.CtSettings();
+                if (on) settings.openWifi(); else settings.closeWifi();
+                Log.w(TAG, "WiFi radio turned " + (on ? "ON" : "OFF") + " by admin tier="
+                        + (accessLevel == ACCESS_SUPER ? "SUPER" : "NORMAL"));
+                msg = "WiFi " + (on ? "on" : "off");
+            } catch (Throwable t) {
+                Log.e(TAG, "WiFi power change failed", t);
+                msg = "WiFi power change failed: " + t.getMessage();
+            }
+            try { Thread.sleep(1500); } catch (InterruptedException ignored) {}
+            final String m = msg;
+            if (getActivity() != null) {
+                getActivity().runOnUiThread(() -> {
+                    if (swWifiPower != null) swWifiPower.setEnabled(true);
+                    syncWifiSwitch();   // show what the radio actually did
+                    Toast.makeText(getContext(), m, Toast.LENGTH_SHORT).show();
+                });
+            }
+            refreshWifiStatus();
+        }, "WifiPower").start();
     }
 
     private void refreshWifiStatus() {
