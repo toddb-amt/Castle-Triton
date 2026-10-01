@@ -1625,8 +1625,32 @@ public class MainActivity extends AppCompatActivity {
      * @param response    the host totals
      * @param batchClosed true for the Close-Batch (reset) receipt, false for a query
      */
+    /** Terminal-owned batch boundary (spec decision 2): called only after the processor accepted the reset. */
+    private int closeLocalBatchAfterHostReset() {
+        try {
+            castech.emvtxn.atm.TransactionLogManager m =
+                    castech.emvtxn.atm.TransactionLogManager.getInstance(getApplicationContext());
+            int closing = m.currentBatchId();
+            castech.emvtxn.atm.report.DetailReport.Summary s = castech.emvtxn.atm.report.DetailReport.summarize(
+                    castech.emvtxn.atm.report.ReportRows.fromLogs(m.getTransactionsForBatch(closing)));
+            m.closeCurrentBatch(s);
+            return closing;
+        } catch (Throwable t) {
+            Log.w(TAG, "local batch close skipped: " + t.getMessage());
+            return 0;
+        }
+    }
+
+    private int currentBatchIdSafe() {
+        try {
+            return castech.emvtxn.atm.TransactionLogManager.getInstance(getApplicationContext()).currentBatchId();
+        } catch (Throwable t) {
+            return 0;
+        }
+    }
+
     private void printHostTotalsReceipt(final castech.emvtxn.atm.host.HostTotalsResponse response,
-            final boolean batchClosed) {
+            final boolean batchClosed, final int batchId) {
         if (Printer == null) {
             Log.e(TAG, "Printer not available for host totals receipt");
             return;
@@ -1645,6 +1669,8 @@ public class MainActivity extends AppCompatActivity {
         java.text.SimpleDateFormat sdf =
                 new java.text.SimpleDateFormat("MM/dd/yyyy HH:mm:ss", java.util.Locale.US);
         r.append("Date: ").append(sdf.format(new java.util.Date())).append("\n");
+        // 6.2.11: terminal-owned batch number, so this paper matches the Detail Report
+        if (batchId > 0) r.append("Batch #: ").append(String.format(java.util.Locale.US, "%03d", batchId)).append("\n");
         String terminalId = response.getTerminalId();
         if (terminalId != null && !terminalId.isEmpty()) {
             r.append("Terminal: ").append(terminalId).append("\n");
@@ -2324,13 +2350,13 @@ public class MainActivity extends AppCompatActivity {
 
                     if (response.isSuccess()) {
                         // Print the totals, then show them in a dialog.
-                        printHostTotalsReceipt(response, false);
+                        printHostTotalsReceipt(response, false, currentBatchIdSafe());
                         new AlertDialog.Builder(MainActivity.this)
                             .setTitle("Host Totals")
                             .setMessage(response.getSummary())
                             .setPositiveButton("OK", null)
                             .setNeutralButton("Reprint", (dialog, which) -> {
-                                printHostTotalsReceipt(response, false);
+                                printHostTotalsReceipt(response, false, currentBatchIdSafe());
                             })
                             .setNegativeButton("Close Batch", (dialog, which) -> {
                                 // Request totals with reset flag (closes batch on processor)
@@ -2384,7 +2410,10 @@ public class MainActivity extends AppCompatActivity {
                             if (response.isSuccess()) {
                                 // Print batch close receipt on background thread to avoid ANR
                                 new Thread(() -> {
-                                    printHostTotalsReceipt(response, true);
+                                    // 6.2.11: the processor accepted the reset → close the local batch,
+                                    // print its number on the Close Batch receipt
+                                    final int closedBatch = closeLocalBatchAfterHostReset();
+                                    printHostTotalsReceipt(response, true, closedBatch);
                                     runOnUiThread(() -> {
                                         new AlertDialog.Builder(MainActivity.this)
                                             .setTitle("Batch Closed")
