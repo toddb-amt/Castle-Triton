@@ -12,4 +12,9 @@
         android:orderInCategory="200"
         android:title="Host Totals"
         app:showAsAction="never"/>
+    <item
+        android:id="@+id/action_detail_report"
+        android:orderInCategory="300"
+        android:title="Detail Report"
+        app:showAsAction="never"/>
 </menu>

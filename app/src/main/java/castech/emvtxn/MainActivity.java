@@ -1625,6 +1625,67 @@ public class MainActivity extends AppCompatActivity {
      * @param response    the host totals
      * @param batchClosed true for the Close-Batch (reset) receipt, false for a query
      */
+    /** Ellipsis ▸ Detail Report (6.2.11). Same gate as Host Totals: a confirm dialog, no PIN. */
+    public void printDetailReport() {
+        new Thread(() -> {
+            final int batch;
+            final long opened;
+            final java.util.List<castech.emvtxn.atm.report.ReportRow> rows;
+            try {
+                castech.emvtxn.atm.TransactionLogManager m =
+                        castech.emvtxn.atm.TransactionLogManager.getInstance(getApplicationContext());
+                batch = m.currentBatchId();
+                opened = m.currentBatchOpenedAt();
+                rows = castech.emvtxn.atm.report.ReportRows.fromLogs(m.getTransactionsForBatch(batch));
+            } catch (Throwable t) {
+                runOnUiThread(() -> new AlertDialog.Builder(MainActivity.this).setTitle("Detail Report")
+                        .setMessage("Transaction journal unavailable: " + t.getMessage())
+                        .setPositiveButton("OK", null).show());
+                return;
+            }
+            final castech.emvtxn.atm.report.DetailReport.Summary s = castech.emvtxn.atm.report.DetailReport.summarize(rows);
+            final String text = castech.emvtxn.atm.report.DetailReport.render(
+                    new castech.emvtxn.atm.report.DetailReport.Header(batch, opened, System.currentTimeMillis(),
+                            GlobalPara.atmTerminalId), rows);
+            runOnUiThread(() -> new AlertDialog.Builder(MainActivity.this)
+                .setTitle("Print Detail Report?")
+                .setMessage("Batch " + String.format(java.util.Locale.US, "%03d", batch) + " — " + s.withdrawals
+                        + " approved withdrawal(s), $" + castech.emvtxn.Money.dollars(s.amountCents + s.feeCents + s.tipCents)
+                        + " since " + new java.text.SimpleDateFormat("MM/dd HH:mm", java.util.Locale.US).format(new java.util.Date(opened)))
+                .setPositiveButton("Print", (d, w) -> printOrShowReport(text))
+                .setNeutralButton("View", (d, w) -> showReportDialog(text))
+                .setNegativeButton("Cancel", null)
+                .show());
+        }, "DetailReport").start();
+    }
+
+    private void printOrShowReport(final String text) {
+        if (Printer == null || GlobalPara.atmPrinterOutOfPaper) {
+            showReportDialog(text);
+            return;
+        }
+        new Thread(() -> {
+            try {
+                Printer.printf(text);
+                Log.d(TAG, "Detail report printed");
+            } catch (Exception e) {
+                Log.e(TAG, "Detail report print failed: " + e.getMessage());
+                runOnUiThread(() -> showReportDialog(text));
+            }
+        }, "DetailReportPrint").start();
+    }
+
+    private void showReportDialog(String text) {
+        android.widget.TextView tv = new android.widget.TextView(this);
+        tv.setTypeface(android.graphics.Typeface.MONOSPACE);
+        tv.setTextSize(12);
+        tv.setPadding(24, 16, 24, 16);
+        tv.setText(text);
+        android.widget.ScrollView sv = new android.widget.ScrollView(this);
+        sv.addView(tv);
+        new AlertDialog.Builder(this).setTitle("Detail Report").setView(sv).setPositiveButton("Close", null).show();
+    }
+
     /** Terminal-owned batch boundary (spec decision 2): called only after the processor accepted the reset. */
     private int closeLocalBatchAfterHostReset() {
         try {
@@ -1989,6 +2050,10 @@ public class MainActivity extends AppCompatActivity {
         } else if (id == R.id.action_host_totals) {
             // Request Host Totals from processor
             requestHostTotals();
+            return true;
+        } else if (id == R.id.action_detail_report) {
+            // 6.2.11: print the current batch's Detail Report (same gate as Host Totals)
+            printDetailReport();
             return true;
         }
 
