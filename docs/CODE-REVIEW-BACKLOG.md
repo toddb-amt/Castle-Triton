@@ -171,6 +171,9 @@ transactions" while the proxy is connected. See POS-12 and decision D5.
 
 - [x] **NET-03** · LOW · `MainActivity.updateBatteryIcon` — **shipped 6.2.10.** Strip shows "No batt" when `EXTRA_PRESENT` is false (OS reported no battery after a SIM was fitted; read as 0%).
 
+- [x] **ADM-08** · LOW (operability) · `Fragment_page_admin_atm` WiFi section — **shipped 6.2.10** (user 2026-10-01: "stack the connect wifi and refresh status then add a toggle to turn on/off Wifi where the refresh status currently is… same size")
+  **Change:** Connect WiFi + WiFi power `Switch` (120dp) on row 1, Refresh Status + 120dp spacer on row 2 → identical button widths. Toggle reflects `WifiManager.isWifiEnabled()`, switches via `CtSettings.openWifi()/closeWifi()` on a worker thread, re-syncs to the real state afterwards; confirm dialog when no cellular data is connected (WiFi is the only path). Both tiers.
+
 - [ ] **REV-02** · MED · target **6.2.8** — MyView: terminal posts the reversal backlog (active/failed/out-of-service, last error) so a pending reversal raises an alert in MyView, and a remote **Resolve** (with reason, audited) exists for the case where nobody is on site. Until then the banner + Admin screen are the only signals.
 
 ---

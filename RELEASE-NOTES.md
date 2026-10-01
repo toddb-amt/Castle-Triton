@@ -71,8 +71,16 @@ showing what the terminal is actually using, and the status strip stops showing 
   in use, the last CasHUB APN push and its outcome with time, and "Battery: NOT PRESENT"
   when the OS says so.
 - **Status strip** shows "No batt" instead of 0% when the OS reports no battery present.
+- **Admin → WiFi Configuration:** Connect WiFi and Refresh Status are stacked and the same
+  size; a **WiFi on/off toggle** sits beside Connect. The toggle shows the radio's real state,
+  switches it through Castle's settings service, and asks first when WiFi is the terminal's
+  only connection (no cellular data), since turning it off takes the unit offline.
 
 ### Fixes / changes
+
+**Admin (`ADM-08`)**
+- WiFi section rearranged as above; the toggle snaps back and toasts if the settings service
+  refuses; both tiers.
 
 **Network (`NET-01`, `NET-02`, `NET-03`)**
 - `net/ApnParams` (pure, tested first) parses and validates the keys; the password is masked
@@ -90,7 +98,6 @@ showing what the terminal is actually using, and the status strip stops showing 
   the parameter to a terminal with no connectivity). Deployment note.
 - Registration reject cause is not shown on the card (needs `READ_PHONE_STATE`, a runtime
   grant); the Data state line is the practical signal.
-- Admin button rearrangement (user request) — next item.
 
 ### Verification
 
@@ -100,7 +107,8 @@ showing what the terminal is actually using, and the status strip stops showing 
 - Device: pending — on the AT&T unit: push `apn=BROADBAND` → log `APN apply unchanged`;
   push `apn_protocol=IPV4V6` → `setApn3 rc=…`, `APN apply applied`, LTE data still connected;
   Network card shows Cellular / AT&T / connected / APN in use; strip shows "No batt" while the
-  pack is out.
+  pack is out; WiFi toggle off (confirm shown with the SIM out, no confirm with LTE up) and on
+  again, Connect and Refresh the same width.
 
 ### Upgrade notes
 
