@@ -48,6 +48,8 @@ use_flat_fee, flat_fee, percentage_fee, min_amount, max_amount`
 
 POS-mode keys (app 6.2.7+; applied live — the terminal restarts its proxy connection, no reboot): `pos_enabled` (true/false), `pos_proxy_url` (`wss://host:port`), `pos_terminal_access_key`. Absent keys leave the terminal's local value alone; an invalid value is logged on the terminal and ignored. `pos_terminal_access_key` is a bearer credential: the app never logs it — treat manifests containing it as secrets.
 
+Cellular APN keys (app 6.2.10+; applied through Castle's settings service, apply-and-report, no rollback): `apn` (required to trigger; letters/digits/./-), `apn_name` (default = apn), `apn_user`, `apn_password`, `apn_auth_type` (`none|pap|chap|both` or 0-3), `apn_protocol` (`IP|IPV6|IPV4V6`). Absent keys leave the terminal's APN alone. The terminal must have connectivity (WiFi at staging) to receive the parameter in the first place — a cellular-only unit with no APN cannot fetch it. Outcome is shown on the Admin Network card and logged as `APN apply applied|unchanged|failed: …`.
+
 **Merchant-level pushes** (`params push-merchant`) are for SHARED values only
 (fees, limits). The app merges merchant parameters OVER terminal parameters
 (last-wins in `CasHubParams.applyToConfig`), so the tool hard-refuses

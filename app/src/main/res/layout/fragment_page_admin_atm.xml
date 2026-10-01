@@ -140,6 +140,40 @@
                 android:background="#CCCCCC"
                 android:layout_marginBottom="16dp"/>
 
+            <!-- Network Section (6.2.10): transport in use, SIM/carrier, APN, registration — read-only -->
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:id="@+id/hdrNetwork"
+                android:text="Network"
+                android:textSize="18sp"
+                android:textStyle="bold"
+                android:textColor="@color/colorPrimary"
+                android:paddingBottom="8dp"/>
+
+            <TextView
+                android:id="@+id/txvNetwork"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Reading network state…"
+                android:textSize="14sp"
+                android:textColor="#333333"
+                android:paddingBottom="4dp"/>
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="APN managed centrally via CasHUB (apn, apn_name, apn_user, apn_password, apn_auth_type, apn_protocol)"
+                android:textSize="12sp"
+                android:textColor="#888888"
+                android:paddingBottom="16dp"/>
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:background="#CCCCCC"
+                android:layout_marginBottom="16dp"/>
+
             <!-- Host Settings Section (CasHUB-managed, read-only since 6.2.9).
                  Shows the processor CODE (never its name) and the port — never the host
                  address. The only action left is Request New Working Key. -->

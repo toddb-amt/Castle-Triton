@@ -24,6 +24,14 @@
         "pos_enabled": true,
         "pos_terminal_access_key": "REPLACE — per-terminal access key from the proxy (secret; never at merchant level)"
       }
+    },
+    {
+      "match": "REPLACE — a cellular (SIM) unit",
+      "params": {
+        "terminal_id": "TEST0003",
+        "apn": "BROADBAND",
+        "apn_name": "ATT"
+      }
     }
   ]
 }
