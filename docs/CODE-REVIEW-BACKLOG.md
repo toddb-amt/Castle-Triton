@@ -164,6 +164,13 @@ transactions" while the proxy is connected. See POS-12 and decision D5.
 - [x] **ADM-07** · LOW (information exposure) · `ProcessorLabel` — **shipped 6.2.9** (user: "hide the processor on terminal itself ie. Instead of EFX Financial… E1, for Switch S1")
   **Change:** the terminal shows a processor CODE (E1/S1/D1/F1/C1, unknown `--`) and never the name; the host address is not displayed anywhere on the terminal (code + port only); terminal ID shown in full. CasHUB values unchanged. `ProcessorLabelTest` (3).
 
+- [x] **NET-01** · MED (operability) · `net/ApnParams`, `net/ApnApplier`, `CasHubParams` — **shipped 6.2.10** (user 2026-10-01: "is it possible to expose APN as a parameter?")
+  **Change:** cellular APN as CasHUB keys (`apn`, `apn_name`, `apn_user`, `apn_password`, `apn_auth_type`, `apn_protocol`) applied through `CTOS.CtSettings` (`getCurrentApn` → skip if unchanged → `setApn3`/`setApn` → `selectApn` → `setMobileDataEnabled`), apply-and-report (decision D9, no rollback), outcome persisted for Admin + logged; password masked everywhere; keys kept out of host payload/KMS backup. `ApnParamsTest` (9). SDK slot index 0 and return codes to be confirmed on the bench.
+
+- [x] **NET-02** · LOW · `Fragment_page_admin_atm.renderNetworkCard` — **shipped 6.2.10.** Read-only Network card: transport in use, SIM/carrier/registered network/data state/signal, APN in use, last CasHUB APN push + outcome, battery-not-present. No runtime permission needed (reject cause would need READ_PHONE_STATE — deferred).
+
+- [x] **NET-03** · LOW · `MainActivity.updateBatteryIcon` — **shipped 6.2.10.** Strip shows "No batt" when `EXTRA_PRESENT` is false (OS reported no battery after a SIM was fitted; read as 0%).
+
 - [ ] **REV-02** · MED · target **6.2.8** — MyView: terminal posts the reversal backlog (active/failed/out-of-service, last error) so a pending reversal raises an alert in MyView, and a remote **Resolve** (with reason, audited) exists for the case where nobody is on site. Until then the banner + Admin screen are the only signals.
 
 ---
@@ -304,6 +311,7 @@ go-live release.
 ## Decisions pending (block specific items)
 
 - [ ] **D1 — Hardcoded admin PINs** (`SUPER_ADMIN_PIN = "8675309"`, `NORMAL_ADMIN_PIN = "123456"` in `Fragment_page_admin_atm.java`). Chosen deliberately ("only we can change the PIN"). Options: keep as-is; harden the values; deliver PINs via CasHUB parameter push (rotatable without a build). Flagged CRITICAL by the security review; acceptance is a business call.
+- [x] **D9 — Rollback a bad CasHUB APN automatically?** **Decided 2026-10-01: no (apply-and-report).** Units are provisioned on WiFi and a SIM unit keeps WiFi alongside, so a wrong APN is always correctable from CasHUB. Deployment note: the first APN on a cellular-only unit is set at staging.
 - [x] **D8 — Where are host / fee / limit parameters edited?** **Decided 2026-09-30: only in CasHUB.** The terminal shows them read-only (processor as a code, no host address, full TID) for both admin tiers; the only host action on the terminal is Request New Working Key. See ADM-06 / ADM-07.
 - [x] **D7 — Who owns the surcharge on a POS sale?** **Decided 2026-09-25: the terminal.** The register sends the cash amount only; the terminal's fee configuration (CasHUB) sets the fee for POS and walk-up alike; the reply reports the applied surcharge and total. See FEE-02.
 - [x] **D2 — Is POS mode enabled on the go-live units?** **Decided 2026-09-18: YES.** POS mode is integral — go-live units are cashier-driven POS installs (the POS system drives transactions through the MyView proxy), with the walk-up flow as the fallback when the proxy is unavailable. POS-01..06 moved into the go-live gate (section R1-POS); POS-05 and POS-06 raised to HIGH.
