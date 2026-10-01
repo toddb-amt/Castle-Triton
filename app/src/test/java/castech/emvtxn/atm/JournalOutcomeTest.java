@@ -20,6 +20,17 @@ public class JournalOutcomeTest {
         assertEquals("CANCELLED", JournalOutcome.of(false, false, "", "Transaction cancelled").result);
         assertEquals("CANCELLED", JournalOutcome.CANCELLED.result);
     }
+    /** Review #4: a PIN-pad cancel / MSR give-up reaches the tail with no host answer at all. */
+    @Test public void noHostAnswerAtAll_isCancelled() {
+        assertEquals("CANCELLED", JournalOutcome.of(false, false, "", "").result);
+        assertEquals("CANCELLED", JournalOutcome.of(false, false, null, null).result);
+    }
+    /** Review #16: a cancelled balance inquiry stays a balance inquiry. */
+    @Test public void cancelledBalanceInquiry_keepsItsType() {
+        assertEquals("BALANCE_INQUIRY", JournalOutcome.cancelled(true).type);
+        assertEquals("CANCELLED", JournalOutcome.cancelled(true).result);
+        assertEquals("WITHDRAWAL", JournalOutcome.cancelled(false).type);
+    }
     @Test public void balanceInquiry_keepsItsType() {
         assertEquals("BALANCE_INQUIRY", JournalOutcome.of(true, true, "00", "APPROVED").type);
         assertEquals("BALANCE_INQUIRY", JournalOutcome.of(true, false, "05", "DO NOT HONOR").type);

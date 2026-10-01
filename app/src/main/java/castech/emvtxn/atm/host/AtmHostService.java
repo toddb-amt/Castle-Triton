@@ -1279,7 +1279,7 @@ public class AtmHostService {
                 reversalManager.addToCompletedHistory(rev, true);
                 reversalManager.removePendingReversal(rev.getTransactionId());
                 // 6.2.11 journal: an approval that was later reversed leaves the Detail Report lines
-                castech.emvtxn.atm.TransactionJournal.markReversed(context, rev.getSequenceNumber());
+                castech.emvtxn.atm.TransactionJournal.markReversed(context, rev.getTransactionId());
                 Log.d(TAG, "Drain: reversal " + rev.getTransactionId()
                         + " cleared on attempt " + attempt + " (state was " + state + ")");
                 return true;

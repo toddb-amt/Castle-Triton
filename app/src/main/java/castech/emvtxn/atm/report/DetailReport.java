@@ -38,7 +38,9 @@ public final class DetailReport {
     public static Summary summarize(List<ReportRow> rows) {
         Summary s = new Summary();
         for (ReportRow r : rows) {
-            if (r.reversed && "WITHDRAWAL".equals(r.type) && "APPROVED".equals(r.result)) { s.reversed++; continue; }
+            // A withdrawal the processor reversed counts under Reversed whatever the terminal
+            // recorded locally (approved, or declined/timed out before the answer) — review #2.
+            if (r.reversed && "WITHDRAWAL".equals(r.type)) { s.reversed++; continue; }
             if ("BALANCE_INQUIRY".equals(r.type)) { s.balanceInquiries++; continue; }
             if (!"WITHDRAWAL".equals(r.type)) continue;
             if ("APPROVED".equals(r.result)) {
@@ -73,7 +75,13 @@ public final class DetailReport {
                 line(b, String.format(Locale.US, "%-8s  CWDR %s  %s    #%05d",
                         "****" + cut(nz(r.last4), 4), cardType(r.accountType), entry(r.entryMode), r.sequence));
                 if (notBlank(r.clerkId) || notBlank(r.invoiceNo)) {
-                    line(b, String.format(Locale.US, " CLRK %-8s INV %s", nz(r.clerkId), nz(r.invoiceNo)));
+                    String one = String.format(Locale.US, " CLRK %-8s INV %s", nz(r.clerkId), nz(r.invoiceNo));
+                    if (one.length() <= WIDTH) {
+                        line(b, one);
+                    } else {   // never clip a clerk/invoice — split onto two lines (review #6)
+                        line(b, " CLRK " + cut(nz(r.clerkId), WIDTH - 6));
+                        line(b, " INV " + cut(nz(r.invoiceNo), WIDTH - 5));
+                    }
                 }
                 line(b, String.format(Locale.US, " AUTH %-6s   REF %s", notBlank(r.authCode) ? cut(r.authCode, 6) : "--", nz(r.rrn)));
                 line(b, " AMT " + right(money(r.amountCents), 9) + "   FEE " + right(money(r.feeCents), 9));
@@ -103,8 +111,9 @@ public final class DetailReport {
             }
         }
         line(b, THIN);
-        line(b, String.format(Locale.US, "%-11s%5d    %-10s%d", "Declined", s.declined, "Cancelled", s.cancelled));
-        line(b, String.format(Locale.US, "%-13s%3d    %-9s%2d", "Bal Inquiries", s.balanceInquiries, "Reversed", s.reversed));
+        // counts right-aligned at col 16 and col 32; 3-digit counts print in full (review #7)
+        line(b, String.format(Locale.US, "%-11s%5d   %-9s%4d", "Declined", s.declined, "Cancelled", s.cancelled));
+        line(b, String.format(Locale.US, "%-13s%3d   %-9s%4d", "Bal Inquiries", s.balanceInquiries, "Reversed", s.reversed));
         line(b, RULE);
         line(b, "Terminal record - processor");
         line(b, "totals govern");

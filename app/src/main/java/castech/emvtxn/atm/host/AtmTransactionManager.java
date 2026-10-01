@@ -344,6 +344,7 @@ public class AtmTransactionManager {
                     );
                     request.setRoutingId(config.getRoutingId());
                     request.setSequenceNumber(getNextSequenceNumber());
+                    castech.emvtxn.GlobalPara.atmSequenceNumber = request.getSequenceNumber();   // journal (6.2.11)
 
                     // Add status monitoring (Field 12) - REQUIRED by processor
                     request.setStatusMonitoring(EmvTagEnhancer.buildStatusMonitoring());
@@ -422,7 +423,6 @@ public class AtmTransactionManager {
                             request.getStatusMonitoring(),
                             request.getEmvData());
                         castech.emvtxn.GlobalPara.atmCurrentReversalId = currentPreSendReversal.getTransactionId();
-                        castech.emvtxn.GlobalPara.atmSequenceNumber = request.getSequenceNumber();
                         Log.d(TAG, "Pre-persisted reversal record for seq "
                             + request.getSequenceNumber()
                             + " (id=" + currentPreSendReversal.getTransactionId()
@@ -561,6 +561,7 @@ public class AtmTransactionManager {
                     );
                     request.setRoutingId(config.getRoutingId());
                     request.setSequenceNumber(getNextSequenceNumber());
+                    castech.emvtxn.GlobalPara.atmSequenceNumber = request.getSequenceNumber();   // journal (6.2.11)
 
                     // Add status monitoring (Field 12) - REQUIRED by processor
                     request.setStatusMonitoring(EmvTagEnhancer.buildStatusMonitoring());
@@ -635,7 +636,6 @@ public class AtmTransactionManager {
                             request.getStatusMonitoring(),
                             request.getEmvData());
                         castech.emvtxn.GlobalPara.atmCurrentReversalId = currentPreSendReversal.getTransactionId();
-                        castech.emvtxn.GlobalPara.atmSequenceNumber = request.getSequenceNumber();
                         Log.d(TAG, "Pre-persisted reversal record for BI seq "
                             + request.getSequenceNumber()
                             + " (id=" + currentPreSendReversal.getTransactionId()

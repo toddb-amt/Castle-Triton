@@ -72,7 +72,10 @@ Spec: `docs/superpowers/specs/2026-10-01-detail-report-design.md`.
   sales that carry them; AUTH ("--" when the host sent none) and REF; AMT, FEE, TIP (always
   present, $0.00 until tips ship) and TOTAL.
 - **Summary** by card type: withdrawals count and amount, fees, tips, total; then counts of
-  declined, cancelled, balance inquiries and reversed. Footer: "Terminal record - processor
+  declined, cancelled, balance inquiries and reversed. A withdrawal the processor **reversed**
+  counts under Reversed whatever the terminal recorded for it (approved, or timed out before
+  the answer), and leaves the money totals. A cancel with no host contact at all (PIN pad
+  cancel, three bad swipes) counts under Cancelled. Footer: "Terminal record - processor
   totals govern".
 - **Close Batch** and **Host Totals** receipts show `Batch #: 00N`.
 - **Admin → Clear Transaction History** (Super) now does something: it deletes the rows of
@@ -82,12 +85,19 @@ Spec: `docs/superpowers/specs/2026-10-01-detail-report-design.md`.
 ### Fixes / changes
 
 **Reporting (`RPT-01`)**
-- `atm/report/DetailReport` + `ReportRow` (pure, 8 tests written first): layout, alignment up
-  to $99,999.99, empty batch, reversed exclusion, credit group.
+- `atm/report/DetailReport` + `ReportRow` (pure, 11 tests written first): layout, amounts up
+  to $99,999.99 within 32 columns (the TOTAL column shifts one character at $10,000+), empty
+  batch, reversed exclusion, credit group, long clerk/invoice wrapped onto two lines,
+  three-digit counts.
 - `atm/TransactionJournal` records at the single completion point of the transaction thread
   (`JournalOutcome` mapping tested first); `GlobalPara.atmSequenceNumber/atmClerkId/atmInvoiceNo`
-  carried from the request builder and the POS executor; an accepted reversal marks its
-  approved row reversed.
+  carried from the request builder and the POS executor and cleared once consumed; an accepted
+  reversal marks its row by the shared pre-send reversal id (never by the per-session sequence
+  number, which restarts at 1 on every app start).
+- Review pass (fresh reviewer, 2026-10-01): reversal identity keyed on the pre-send id; Clear
+  History button made reachable; no-host-answer cancels classified as Cancelled; fresh paper
+  check before printing the report; report refused while a transaction is running; clerk and
+  invoice never clipped; three-digit counts; chronological order across restarts.
 - `TransactionLogManager` schema v2 with a **data-preserving migration** (the old `onUpgrade`
   dropped the table), `batches` table, batch queries, retention of the last 20 batches at close
   (`BatchMath`, tested).
@@ -100,8 +110,8 @@ Spec: `docs/superpowers/specs/2026-10-01-detail-report-design.md`.
 
 ### Verification
 
-- `DetailReportTest` (8), `BatchMathTest` (3), `JournalOutcomeTest` (5) — all RED before the
-  code. Full suite 257 tests; the 3 pre-existing `TEST-01` failures only.
+- `DetailReportTest` (11), `BatchMathTest` (3), `JournalOutcomeTest` (7) — all RED before the
+  code. Full suite 262 tests; the 3 pre-existing `TEST-01` failures only.
 - Device: pending — walk-up withdrawal, POS sale with clerk/invoice, a decline, a balance
   inquiry, a cancel; Detail Report View then Print, every figure against the receipts; Close
   Batch → `Batch #: 001` on the receipt, report then shows batch 002 empty; Clear History

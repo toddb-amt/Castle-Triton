@@ -83,8 +83,8 @@ public class DetailReportTest {
         assertTrue(out, out.contains(" Fees                   $14.00\n"));
         assertTrue(out, out.contains(" Tips                    $0.00\n"));
         assertTrue(out, out.contains("Total          4        $54.00\n"));
-        assertTrue(out, out.contains("Declined       2    Cancelled 1\n"));
-        assertTrue(out, out.contains("Bal Inquiries  3    Reversed  0\n"));
+        assertTrue(out, out.contains("Declined       2   Cancelled   1\n"));
+        assertTrue(out, out.contains("Bal Inquiries  3   Reversed    0\n"));
         assertEquals(4, out.split("CWDR", -1).length - 1);
     }
 
@@ -98,7 +98,41 @@ public class DetailReportTest {
         assertEquals(1, s.reversed);
         String out = DetailReport.render(header(), rows);
         assertFalse(out, out.contains("****4444"));
-        assertTrue(out, out.contains("Reversed  1\n"));
+        assertTrue(out, out.contains("Reversed    1\n"));
+    }
+
+    /** Review #2: a withdrawal the processor reversed counts under Reversed whatever the terminal recorded. */
+    @Test
+    public void reversedDecline_countsUnderReversedNotDeclined() {
+        ReportRow rev = new ReportRow(4, "4444", 1, 20, 50_00, 3_50, 0L, "", "", null, null, "WITHDRAWAL", "DECLINED", true);
+        DetailReport.Summary s = DetailReport.summarize(Arrays.asList(rev));
+        assertEquals(0, s.declined);
+        assertEquals(1, s.reversed);
+        assertEquals(0, s.withdrawals);
+    }
+
+    /** Review #6: a long clerk / invoice must never be clipped — it moves to two lines. */
+    @Test
+    public void longClerkOrInvoice_wrapsInsteadOfTruncating() {
+        String out = DetailReport.render(header(), Arrays.asList(
+                wd(1, "2803", 2, 20, 20_00, 3_50, "A1", "673100000013", "12345678", "INV-1234567890")));
+        for (String l : lines(out)) assertTrue("[" + l + "]", l.length() <= 32);
+        assertTrue(out, out.contains("INV-1234567890"));
+        assertTrue(out, out.contains(" CLRK 12345678\n"));
+        assertTrue(out, out.contains(" INV INV-1234567890\n"));
+    }
+
+    /** Review #7: three-digit counts print in full. */
+    @Test
+    public void threeDigitCounts_printInFull() {
+        List<ReportRow> rows = new ArrayList<>();
+        for (int i = 1; i <= 150; i++) rows.add(other(i, "WITHDRAWAL", "CANCELLED"));
+        for (int i = 151; i <= 270; i++) rows.add(other(i, "WITHDRAWAL", "DECLINED"));
+        for (int i = 271; i <= 380; i++) rows.add(other(i, "BALANCE_INQUIRY", "APPROVED"));
+        String out = DetailReport.render(header(), rows);
+        for (String l : lines(out)) assertTrue("[" + l + "]", l.length() <= 32);
+        assertTrue(out, out.contains("Declined     120   Cancelled 150\n"));
+        assertTrue(out, out.contains("Bal Inquiries110   Reversed    0\n"));
     }
 
     @Test

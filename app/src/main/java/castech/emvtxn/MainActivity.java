@@ -1627,6 +1627,13 @@ public class MainActivity extends AppCompatActivity {
      */
     /** Ellipsis ▸ Detail Report (6.2.11). Same gate as Host Totals: a confirm dialog, no PIN. */
     public void printDetailReport() {
+        // The printer shares the single-threaded SDK with the EMV flow — never while a
+        // transaction is running (review #13).
+        if (GlobalPara.atmTransactionInProgress) {
+            android.widget.Toast.makeText(this, "Transaction in progress — try again in a moment",
+                    android.widget.Toast.LENGTH_SHORT).show();
+            return;
+        }
         new Thread(() -> {
             final int batch;
             final long opened;
@@ -1660,7 +1667,8 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void printOrShowReport(final String text) {
-        if (Printer == null || GlobalPara.atmPrinterOutOfPaper) {
+        // Fresh paper check: the flag alone can be stale since the last receipt (review #5).
+        if (Printer == null || refreshPaperStateSafely()) {
             showReportDialog(text);
             return;
         }
@@ -4993,7 +5001,7 @@ public class MainActivity extends AppCompatActivity {
                     Log.d(TAG, "Transaction cancelled — returning to main menu");
                     // 6.2.11 journal: cancelled before/without a host answer (never throws)
                     castech.emvtxn.atm.TransactionJournal.record(getApplicationContext(),
-                            castech.emvtxn.atm.JournalOutcome.CANCELLED);
+                            castech.emvtxn.atm.JournalOutcome.cancelled(GlobalPara.atmBalanceInquiryMode));
                     castech.emvtxn.pos.PosTransactionObserver.notifyDeclined(
                             "user_cancelled", "cancelled at terminal", false);
                     runOnUiThread(new Runnable() {

@@ -1150,13 +1150,19 @@ public class Fragment_page_admin_atm extends Fragment {
             .setTitle("Clear transaction history?")
             .setMessage("Deletes the journal rows of closed batches. The current (open) batch is kept so its Detail Report stays complete.")
             .setPositiveButton("Clear", (d, w) -> {
-                try {
-                    int n = castech.emvtxn.atm.TransactionLogManager
-                            .getInstance(getContext().getApplicationContext()).clearClosedBatches();
-                    Toast.makeText(getContext(), n + " row(s) cleared", Toast.LENGTH_SHORT).show();
-                } catch (Throwable t) {
-                    Toast.makeText(getContext(), "Clear failed: " + t.getMessage(), Toast.LENGTH_LONG).show();
-                }
+                final Context app = getContext().getApplicationContext();
+                new Thread(() -> {
+                    String msg;
+                    try {
+                        int n = castech.emvtxn.atm.TransactionLogManager.getInstance(app).clearClosedBatches();
+                        msg = n + " row(s) cleared";
+                    } catch (Throwable t) {
+                        msg = "Clear failed: " + t.getMessage();
+                    }
+                    final String m = msg;
+                    if (getActivity() != null) getActivity().runOnUiThread(() ->
+                            Toast.makeText(getContext(), m, Toast.LENGTH_SHORT).show());
+                }, "ClearHistory").start();
             })
             .setNegativeButton("Cancel", null)
             .show();

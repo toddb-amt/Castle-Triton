@@ -19,7 +19,10 @@ public final class TransactionJournal {
         try {
             TransactionLogManager m = TransactionLogManager.getInstance(ctx.getApplicationContext());
             TransactionLog log = new TransactionLog();
-            log.setTransactionId("TXN" + System.currentTimeMillis() + "-" + GlobalPara.atmSequenceNumber);
+            // Identity shared with the reversal machinery: the pre-send reversal record id, when
+            // one was armed; otherwise a local id. markReversed() keys on this (review #1).
+            String rid = nz(GlobalPara.atmCurrentReversalId).trim();
+            log.setTransactionId(!rid.isEmpty() ? rid : "TXN" + System.currentTimeMillis() + "-" + GlobalPara.atmSequenceNumber);
             log.setTransactionType(outcome.type);
             log.setTimestamp(System.currentTimeMillis());
             log.setCardLastFour(lastFour(GlobalPara.asciiPAN));
@@ -50,15 +53,21 @@ public final class TransactionJournal {
                     + " batch=" + log.getBatchId() + " row=" + id);
         } catch (Throwable t) {
             Log.w(TAG, "journal write skipped: " + t.getMessage());
+        } finally {
+            // Consumed: never let a register's clerk/invoice or this sequence leak into the next
+            // transaction (the receipt's "New Transaction" path skips the full reset) — review #8/#10.
+            GlobalPara.atmClerkId = "";
+            GlobalPara.atmInvoiceNo = "";
+            GlobalPara.atmSequenceNumber = 0;
         }
     }
 
-    public static void markReversed(Context ctx, int sequenceNumber) {
+    public static void markReversed(Context ctx, String transactionId) {
         try {
             TransactionLogManager m = TransactionLogManager.getInstance(ctx.getApplicationContext());
-            boolean hit = m.markReversed(sequenceNumber, m.currentBatchId());
-            Log.w(TAG, "reversal accepted for seq " + sequenceNumber + " → journal row "
-                    + (hit ? "marked reversed" : "not found (pre-send failure, nothing approved)"));
+            boolean hit = m.markReversed(transactionId);
+            Log.w(TAG, "reversal accepted for " + transactionId + " → journal row "
+                    + (hit ? "marked reversed" : "not found (nothing journaled under that id)"));
         } catch (Throwable t) {
             Log.w(TAG, "markReversed skipped: " + t.getMessage());
         }

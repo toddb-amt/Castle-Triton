@@ -665,7 +665,7 @@ public class TransactionLogManager extends SQLiteOpenHelper {
         Cursor c = null;
         try {
             c = getReadableDatabase().query(TABLE_TRANSACTIONS, null, COL_BATCH_ID + " = ?",
-                    new String[] { String.valueOf(batchId) }, null, null, COL_SEQUENCE + " ASC, " + COL_TIMESTAMP + " ASC");
+                    new String[] { String.valueOf(batchId) }, null, null, COL_TIMESTAMP + " ASC, " + COL_ID + " ASC");
             while (c.moveToNext()) out.add(cursorToTransactionLog(c));
         } catch (Exception e) {
             Log.e(TAG, "getTransactionsForBatch: " + e.getMessage());
@@ -675,13 +675,19 @@ public class TransactionLogManager extends SQLiteOpenHelper {
         return out;
     }
 
-    /** Marks the approved row for this sequence in this batch as reversed; false when there is none. */
-    public boolean markReversed(int sequenceNumber, int batchId) {
+    /**
+     * Marks the withdrawal row with this transaction id as reversed; false when there is none.
+     * Keyed on the pre-send reversal record id (shared by the journal row and the reversal),
+     * never on the per-session sequence number — that restarts at 1 on every app start and
+     * would match an unrelated earlier withdrawal in the same batch (review #1).
+     */
+    public boolean markReversed(String transactionId) {
+        if (transactionId == null || transactionId.isEmpty()) return false;
         ContentValues v = new ContentValues();
         v.put(COL_REVERSED, 1);
         int n = getWritableDatabase().update(TABLE_TRANSACTIONS, v,
-                COL_SEQUENCE + " = ? AND " + COL_BATCH_ID + " = ? AND " + COL_RESULT + " = 'APPROVED'",
-                new String[] { String.valueOf(sequenceNumber), String.valueOf(batchId) });
+                COL_TRANSACTION_ID + " = ? AND " + COL_TRANSACTION_TYPE + " = 'WITHDRAWAL'",
+                new String[] { transactionId });
         return n > 0;
     }
 
