@@ -4897,6 +4897,9 @@ public class MainActivity extends AppCompatActivity {
                     // POS-armed slot (exactly-once; no-op otherwise). An APPROVAL always
                     // takes the receipt path below, cancelled or not: money moved.
                     Log.d(TAG, "Transaction cancelled — returning to main menu");
+                    // 6.2.11 journal: cancelled before/without a host answer (never throws)
+                    castech.emvtxn.atm.TransactionJournal.record(getApplicationContext(),
+                            castech.emvtxn.atm.JournalOutcome.CANCELLED);
                     castech.emvtxn.pos.PosTransactionObserver.notifyDeclined(
                             "user_cancelled", "cancelled at terminal", false);
                     runOnUiThread(new Runnable() {
@@ -4911,6 +4914,10 @@ public class MainActivity extends AppCompatActivity {
                     // ATM Mode (withdrawal with amount > 0, or balance inquiry):
                     // mark transaction as complete and navigate to receipt
                     GlobalPara.atmTransactionComplete = true;
+                    // 6.2.11 journal: one row per finished transaction (approved / declined / BI),
+                    // walk-up and POS alike; never throws
+                    castech.emvtxn.atm.TransactionJournal.record(getApplicationContext(),
+                            castech.emvtxn.atm.JournalOutcome.fromGlobalPara());
 
                     // Small delay before navigating to receipt
                     MyUtility.sleep(1000);

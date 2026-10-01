@@ -422,6 +422,7 @@ public class AtmTransactionManager {
                             request.getStatusMonitoring(),
                             request.getEmvData());
                         castech.emvtxn.GlobalPara.atmCurrentReversalId = currentPreSendReversal.getTransactionId();
+                        castech.emvtxn.GlobalPara.atmSequenceNumber = request.getSequenceNumber();
                         Log.d(TAG, "Pre-persisted reversal record for seq "
                             + request.getSequenceNumber()
                             + " (id=" + currentPreSendReversal.getTransactionId()
@@ -634,6 +635,7 @@ public class AtmTransactionManager {
                             request.getStatusMonitoring(),
                             request.getEmvData());
                         castech.emvtxn.GlobalPara.atmCurrentReversalId = currentPreSendReversal.getTransactionId();
+                        castech.emvtxn.GlobalPara.atmSequenceNumber = request.getSequenceNumber();
                         Log.d(TAG, "Pre-persisted reversal record for BI seq "
                             + request.getSequenceNumber()
                             + " (id=" + currentPreSendReversal.getTransactionId()
