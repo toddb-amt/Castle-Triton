@@ -94,6 +94,7 @@ public class Fragment_page_admin_atm extends Fragment {
     private static final int REQ_WIFI_SCAN_PERMISSION = 4711;
     private Button btnTestCardReader;
     private Button btnSaveSettings;
+    private Button btnClearHistory;
     private Button btnExit;
 
     // UI Elements - Reversal Management
@@ -237,6 +238,7 @@ public class Fragment_page_admin_atm extends Fragment {
         btnTestPrinter = rootView.findViewById(R.id.btnTestPrinter);
         btnTestCardReader = rootView.findViewById(R.id.btnTestCardReader);
         btnSaveSettings = rootView.findViewById(R.id.btnSaveSettings);
+        btnClearHistory = rootView.findViewById(R.id.btnClearHistory);
         btnExit = rootView.findViewById(R.id.btnExit);
 
         // POS Mode controls
@@ -678,6 +680,8 @@ public class Fragment_page_admin_atm extends Fragment {
 
         // Save Settings button
         btnSaveSettings.setOnClickListener(v -> saveSettings());
+        // Clear Transaction History (6.2.11): closed batches only, Super
+        if (btnClearHistory != null) btnClearHistory.setOnClickListener(v -> clearClosedBatches());
 
         // Exit button
         btnExit.setOnClickListener(v -> exitAdmin());
@@ -1134,6 +1138,28 @@ public class Fragment_page_admin_atm extends Fragment {
                 getActivity().runOnUiThread(() -> { if (txvNetwork != null) txvNetwork.setText(text); });
             }
         }, "AdminNetworkCard").start();
+    }
+
+    /** Super only (greyed for Normal in applyAccessLevel). Clears journal rows of CLOSED batches; the open batch is never touched. */
+    private void clearClosedBatches() {
+        if (accessLevel != ACCESS_SUPER) {
+            Toast.makeText(getContext(), "Super Admin only", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        new AlertDialog.Builder(getContext())
+            .setTitle("Clear transaction history?")
+            .setMessage("Deletes the journal rows of closed batches. The current (open) batch is kept so its Detail Report stays complete.")
+            .setPositiveButton("Clear", (d, w) -> {
+                try {
+                    int n = castech.emvtxn.atm.TransactionLogManager
+                            .getInstance(getContext().getApplicationContext()).clearClosedBatches();
+                    Toast.makeText(getContext(), n + " row(s) cleared", Toast.LENGTH_SHORT).show();
+                } catch (Throwable t) {
+                    Toast.makeText(getContext(), "Clear failed: " + t.getMessage(), Toast.LENGTH_LONG).show();
+                }
+            })
+            .setNegativeButton("Cancel", null)
+            .show();
     }
 
     private void updateTerminalInfo() {
