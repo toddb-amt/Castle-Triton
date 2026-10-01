@@ -80,6 +80,11 @@ Spec: `docs/superpowers/specs/2026-10-01-detail-report-design.md`.
 - **Close Batch** and **Host Totals** receipts show `Batch #: 00N`.
 - **Admin → Clear Transaction History** (Super) now does something: it deletes the rows of
   closed batches and never touches the open batch.
+- **Customer disclaimer** (`DIS-01`): tapping Withdrawal or Balance Inquiry on the main menu
+  first shows "DISCLAIMER — This transaction may incur additional fees from your bank. Contact
+  your bank for further details." with an **OK** button and a plain **Cancel** link beneath it.
+  OK continues into the usual flow, Cancel returns to the menu. Walk-up only; register-driven
+  POS sales never pass through the menu. Wording lives in the string resources.
 - Nothing changes on the wire or in CasHUB.
 
 ### Fixes / changes

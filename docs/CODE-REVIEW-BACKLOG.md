@@ -177,6 +177,9 @@ transactions" while the proxy is connected. See POS-12 and decision D5.
 - [x] **RPT-01** · MED (operability) · `atm/report/*`, `atm/TransactionJournal`, `atm/TransactionLogManager` v2, `MainActivity.printDetailReport` — **shipped 6.2.11** (spec `docs/superpowers/specs/2026-10-01-detail-report-design.md`, plan `docs/superpowers/plans/2026-10-01-detail-report.md`)
   **Change:** Detail Report from the ellipsis (approved withdrawals only, 32-col, summary + counts, TIP column reserved); transaction journal finally WRITTEN (the SQLite log existed unused) at the single completion point, walk-up + POS; terminal-owned batches (001+, close on accepted Type 87 reset, Batch # on totals receipts, keep 20); reversal marks the approved row; Admin Clear History clears closed batches only. Data-preserving DB migration replaces the old drop-and-recreate.
 
+- [x] **DIS-01** · LOW (customer-facing copy) · `Fragment_page_main_menu.showDisclaimer`, `res/layout/dialog_disclaimer.xml` — **shipped 6.2.11** (user 2026-10-01, photo of the required text)
+  **Change:** disclaimer before a walk-up Withdrawal / Balance Inquiry; OK button + Cancel as clickable text under it (user's spec); not dismissable by tapping outside; POS flows untouched.
+
 - [ ] **REV-02** · MED · target **6.2.8** — MyView: terminal posts the reversal backlog (active/failed/out-of-service, last error) so a pending reversal raises an alert in MyView, and a remote **Resolve** (with reason, audited) exists for the case where nobody is on site. Until then the banner + Admin screen are the only signals.
 
 ---

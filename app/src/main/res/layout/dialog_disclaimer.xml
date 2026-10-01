@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Customer disclaimer shown before a walk-up Withdrawal or Balance Inquiry (6.2.11).
+     OK is the only button; Cancel is plain clickable text beneath it. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:background="@color/colorPrimary"
+    android:padding="28dp"
+    android:gravity="center_horizontal">
+
+    <TextView
+        android:id="@+id/txvDisclaimerTitle"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="@string/disclaimer_title"
+        android:textColor="#FFFFFF"
+        android:textSize="30sp"
+        android:textStyle="bold"
+        android:paddingBottom="16dp"/>
+
+    <TextView
+        android:id="@+id/txvDisclaimerBody"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/disclaimer_body"
+        android:textColor="#FFFFFF"
+        android:textSize="24sp"
+        android:gravity="center"
+        android:lineSpacingExtra="4dp"
+        android:paddingBottom="28dp"/>
+
+    <Button
+        android:id="@+id/btnDisclaimerOk"
+        android:layout_width="match_parent"
+        android:layout_height="64dp"
+        android:text="@string/disclaimer_ok"
+        android:textSize="22sp"
+        android:textStyle="bold"
+        android:textColor="@color/colorPrimary"
+        android:backgroundTint="#FFFFFF"/>
+
+    <TextView
+        android:id="@+id/txvDisclaimerCancel"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="@string/disclaimer_cancel"
+        android:textColor="#FFFFFF"
+        android:textSize="18sp"
+        android:padding="16dp"
+        android:layout_marginTop="8dp"
+        android:clickable="true"
+        android:focusable="true"/>
+</LinearLayout>
