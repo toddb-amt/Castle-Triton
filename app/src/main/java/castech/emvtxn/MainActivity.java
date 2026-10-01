@@ -574,6 +574,10 @@ public class MainActivity extends AppCompatActivity {
             int level = batteryIntent.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1);
             int scale = batteryIntent.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, -1);
             int pct = (level >= 0 && scale > 0) ? Math.round(level * 100f / scale) : -1;
+            // No battery reported by the OS (pack unseated / fuel gauge silent): say so
+            // instead of showing a scary 0% (seen 2026-09-30 after a SIM was fitted).
+            boolean present = batteryIntent.getBooleanExtra(android.os.BatteryManager.EXTRA_PRESENT, true);
+            if (!present) pct = -2;
             int status = batteryIntent.getIntExtra(android.os.BatteryManager.EXTRA_STATUS, -1);
             boolean charging = status == android.os.BatteryManager.BATTERY_STATUS_CHARGING
                     || status == android.os.BatteryManager.BATTERY_STATUS_FULL;
@@ -586,7 +590,7 @@ public class MainActivity extends AppCompatActivity {
             else lvlIdx = 0;
             img.setImageLevel(lvlIdx);
             if (bolt != null) bolt.setVisibility(charging ? View.VISIBLE : View.GONE);
-            if (pctText != null) pctText.setText(pct < 0 ? "--%" : pct + "%");
+            if (pctText != null) pctText.setText(pct == -2 ? "No batt" : pct < 0 ? "--%" : pct + "%");
         } catch (Throwable t) {
             Log.w(TAG, "battery update failed: " + t.getMessage());
         }

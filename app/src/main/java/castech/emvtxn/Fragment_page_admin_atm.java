@@ -71,6 +71,7 @@ public class Fragment_page_admin_atm extends Fragment {
     private TextView txvFeeConfig;
     private TextView txvLimits;
     private TextView txvHostConfig;
+    private TextView txvNetwork;
 
     // UI Elements - Terminal Info
     private TextView txvTerminalInfo;
@@ -87,6 +88,9 @@ public class Fragment_page_admin_atm extends Fragment {
     private Button btnWifiConnect;
     private Button btnWifiStatus;
     private Button btnWifiScan;
+    private android.widget.Switch swWifiPower;
+    /** Set while the code (not the operator) moves the WiFi switch. */
+    private boolean wifiSwitchProgrammatic = false;
     private static final int REQ_WIFI_SCAN_PERMISSION = 4711;
     private Button btnTestCardReader;
     private Button btnSaveSettings;
@@ -226,6 +230,7 @@ public class Fragment_page_admin_atm extends Fragment {
 
         // Terminal Info
         txvTerminalInfo = rootView.findViewById(R.id.txvTerminalInfo);
+        txvNetwork = rootView.findViewById(R.id.txvNetwork);
 
         // Buttons
         btnRequestNewKey = rootView.findViewById(R.id.btnRequestNewKey);
@@ -262,6 +267,7 @@ public class Fragment_page_admin_atm extends Fragment {
         btnWifiConnect = rootView.findViewById(R.id.btnWifiConnect);
         btnWifiStatus = rootView.findViewById(R.id.btnWifiStatus);
         btnWifiScan = rootView.findViewById(R.id.btnWifiScan);
+        swWifiPower = rootView.findViewById(R.id.swWifiPower);
         setupWifiSection();
     }
 
@@ -287,6 +293,13 @@ public class Fragment_page_admin_atm extends Fragment {
         }
         if (btnWifiStatus != null) {
             btnWifiStatus.setOnClickListener(v -> refreshWifiStatus());
+        }
+        if (swWifiPower != null) {
+            syncWifiSwitch();
+            swWifiPower.setOnCheckedChangeListener((btn, on) -> {
+                if (wifiSwitchProgrammatic) return;
+                onWifiSwitchToggled(on);
+            });
         }
         if (btnWifiScan != null) {
             btnWifiScan.setOnClickListener(v -> scanWifiNetworks());
@@ -508,6 +521,75 @@ public class Fragment_page_admin_atm extends Fragment {
             try { Thread.sleep(3000); } catch (InterruptedException ignored) {}
             refreshWifiStatus();
         }).start();
+    }
+
+    /** Reflects the real radio state on the switch without firing its listener. */
+    private void syncWifiSwitch() {
+        if (swWifiPower == null || getContext() == null) return;
+        boolean on = false;
+        try {
+            android.net.wifi.WifiManager wm = (android.net.wifi.WifiManager)
+                    getContext().getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+            on = wm != null && wm.isWifiEnabled();
+        } catch (Throwable ignore) {}
+        wifiSwitchProgrammatic = true;
+        swWifiPower.setChecked(on);
+        wifiSwitchProgrammatic = false;
+    }
+
+    /** True when the terminal has a cellular data connection it could fall back to. */
+    private boolean cellularDataConnected() {
+        try {
+            android.telephony.TelephonyManager tm = (android.telephony.TelephonyManager)
+                    getContext().getApplicationContext().getSystemService(Context.TELEPHONY_SERVICE);
+            return tm != null && tm.getDataState() == android.telephony.TelephonyManager.DATA_CONNECTED;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /** Operator moved the WiFi switch. Off while WiFi is the only connection asks first. */
+    private void onWifiSwitchToggled(final boolean on) {
+        if (!on && !cellularDataConnected()) {
+            new AlertDialog.Builder(getContext())
+                .setTitle("Turn WiFi off?")
+                .setMessage("WiFi is this terminal's only connection. Turning it off takes the "
+                        + "terminal offline — host, POS and CasHUB — until WiFi is turned back on.")
+                .setPositiveButton("Turn off", (d, w) -> setWifiPower(false))
+                .setNegativeButton("Cancel", (d, w) -> syncWifiSwitch())
+                .setOnCancelListener(d -> syncWifiSwitch())
+                .show();
+            return;
+        }
+        setWifiPower(on);
+    }
+
+    /** Radio on/off through Castle's settings service (same calls Connect uses). */
+    private void setWifiPower(final boolean on) {
+        if (swWifiPower != null) swWifiPower.setEnabled(false);
+        new Thread(() -> {
+            String msg;
+            try {
+                CTOS.CtSettings settings = new CTOS.CtSettings();
+                if (on) settings.openWifi(); else settings.closeWifi();
+                Log.w(TAG, "WiFi radio turned " + (on ? "ON" : "OFF") + " by admin tier="
+                        + (accessLevel == ACCESS_SUPER ? "SUPER" : "NORMAL"));
+                msg = "WiFi " + (on ? "on" : "off");
+            } catch (Throwable t) {
+                Log.e(TAG, "WiFi power change failed", t);
+                msg = "WiFi power change failed: " + t.getMessage();
+            }
+            try { Thread.sleep(1500); } catch (InterruptedException ignored) {}
+            final String m = msg;
+            if (getActivity() != null) {
+                getActivity().runOnUiThread(() -> {
+                    if (swWifiPower != null) swWifiPower.setEnabled(true);
+                    syncWifiSwitch();   // show what the radio actually did
+                    Toast.makeText(getContext(), m, Toast.LENGTH_SHORT).show();
+                });
+            }
+            refreshWifiStatus();
+        }, "WifiPower").start();
     }
 
     private void refreshWifiStatus() {
@@ -756,6 +838,7 @@ public class Fragment_page_admin_atm extends Fragment {
 
         setViewEnabledDimmed(rootView.findViewById(R.id.btnRequestNewKey), true);
         renderManagedConfig();
+        renderNetworkCard();
     }
 
     /**
@@ -975,6 +1058,82 @@ public class Fragment_page_admin_atm extends Fragment {
             Log.e(TAG, "Error saving settings: " + e.getMessage());
             Toast.makeText(getContext(), "Error saving settings", Toast.LENGTH_SHORT).show();
         }
+    }
+
+    /**
+     * Network card (6.2.10): what the terminal is actually using right now. System APIs
+     * that need no runtime permission, plus the APN the Castle settings service reports.
+     * The APN lookup is a binder call, so the card is assembled on a worker thread.
+     */
+    private void renderNetworkCard() {
+        if (txvNetwork == null || getContext() == null) return;
+        final Context ctx = getContext().getApplicationContext();
+        new Thread(() -> {
+            StringBuilder sb = new StringBuilder();
+            try {
+                // Transport in use
+                String transport = "none";
+                android.net.ConnectivityManager cm = (android.net.ConnectivityManager) ctx.getSystemService(Context.CONNECTIVITY_SERVICE);
+                if (cm != null) {
+                    android.net.Network n = cm.getActiveNetwork();
+                    android.net.NetworkCapabilities caps = n == null ? null : cm.getNetworkCapabilities(n);
+                    if (caps != null) {
+                        if (caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI)) transport = "WiFi";
+                        else if (caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR)) transport = "Cellular";
+                        else if (caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_ETHERNET)) transport = "Ethernet";
+                        if (!caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED)) transport += " (no internet)";
+                    }
+                }
+                sb.append("In use: ").append(transport).append("\n");
+
+                // Cellular
+                android.telephony.TelephonyManager tm = (android.telephony.TelephonyManager) ctx.getSystemService(Context.TELEPHONY_SERVICE);
+                if (tm == null) {
+                    sb.append("Cellular: not available\n");
+                } else {
+                    boolean sim = tm.getSimState() == android.telephony.TelephonyManager.SIM_STATE_READY;
+                    if (!sim) {
+                        sb.append("SIM: none / not ready\n");
+                    } else {
+                        String simCarrier = String.valueOf(tm.getSimOperatorName());
+                        String netCarrier = String.valueOf(tm.getNetworkOperatorName());
+                        String data;
+                        switch (tm.getDataState()) {
+                            case android.telephony.TelephonyManager.DATA_CONNECTED:  data = "connected"; break;
+                            case android.telephony.TelephonyManager.DATA_CONNECTING: data = "connecting"; break;
+                            case android.telephony.TelephonyManager.DATA_SUSPENDED:  data = "suspended"; break;
+                            default: data = "not connected"; break;
+                        }
+                        int bars = -1;
+                        try {
+                            if (android.os.Build.VERSION.SDK_INT >= 28 && tm.getSignalStrength() != null) bars = tm.getSignalStrength().getLevel();
+                        } catch (Throwable ignore) {}
+                        sb.append("SIM: ").append(simCarrier.isEmpty() ? "present" : simCarrier)
+                          .append("  ·  Network: ").append(netCarrier.isEmpty() ? "not registered" : netCarrier)
+                          .append("  ·  Data: ").append(data)
+                          .append(bars >= 0 ? "  ·  Signal " + bars + "/4" : "").append("\n");
+                        sb.append("APN in use: ").append(castech.emvtxn.net.ApnApplier.currentApnSummary()).append("\n");
+                        castech.emvtxn.net.ApnApplier.Status st = castech.emvtxn.net.ApnApplier.readStatus(ctx);
+                        if (st.attempted()) {
+                            sb.append("CasHUB APN: ").append(st.desiredApn).append(" — ").append(st.result)
+                              .append(" (").append(new java.text.SimpleDateFormat("MM/dd HH:mm", java.util.Locale.US).format(new java.util.Date(st.at))).append(")\n");
+                        }
+                    }
+                }
+
+                // Battery present? (the strip shows "No batt" when the OS reports none)
+                android.content.Intent bat = ctx.registerReceiver(null, new android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED));
+                if (bat != null && !bat.getBooleanExtra(android.os.BatteryManager.EXTRA_PRESENT, true)) {
+                    sb.append("Battery: NOT PRESENT (check the pack is seated)\n");
+                }
+            } catch (Throwable t) {
+                sb.append("Network state unavailable: ").append(t.getMessage()).append("\n");
+            }
+            final String text = sb.toString().trim();
+            if (getActivity() != null) {
+                getActivity().runOnUiThread(() -> { if (txvNetwork != null) txvNetwork.setText(text); });
+            }
+        }, "AdminNetworkCard").start();
     }
 
     private void updateTerminalInfo() {
