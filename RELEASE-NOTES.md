@@ -117,10 +117,13 @@ Spec: `docs/superpowers/specs/2026-10-01-detail-report-design.md`.
 
 - `DetailReportTest` (11), `BatchMathTest` (3), `JournalOutcomeTest` (7) — all RED before the
   code. Full suite 262 tests; the 3 pre-existing `TEST-01` failures only.
-- Device: pending — walk-up withdrawal, POS sale with clerk/invoice, a decline, a balance
-  inquiry, a cancel; Detail Report View then Print, every figure against the receipts; Close
-  Batch → `Batch #: 001` on the receipt, report then shows batch 002 empty; Clear History
-  removes batch 001 only; a reversal that clears moves its row to `Reversed`.
+- Device (terminal …680, debug build of a64dfb9, 2026-10-02, operator-run): balance inquiry →
+  journaled `BALANCE_INQUIRY/APPROVED seq=1 batch=1`; withdrawal $10 + $3.50 → journaled
+  `WITHDRAWAL/APPROVED seq=2 batch=1` under its pre-send reversal id; Detail Report printed;
+  Host Totals printed; Close Batch → "Batch 1 closed; batch 2 opened", close receipt printed.
+  Disclaimer verified from the view hierarchy (OK → amount screen, Cancel → menu). Not yet
+  exercised on hardware: POS sale clerk/invoice line, a decline and a cancel on the report,
+  Clear History, a reversal moving its row to Reversed, the out-of-paper fallback.
 
 ### Upgrade notes
 
