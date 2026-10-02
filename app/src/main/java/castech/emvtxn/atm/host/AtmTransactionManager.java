@@ -344,6 +344,7 @@ public class AtmTransactionManager {
                     );
                     request.setRoutingId(config.getRoutingId());
                     request.setSequenceNumber(getNextSequenceNumber());
+                    castech.emvtxn.GlobalPara.atmSequenceNumber = request.getSequenceNumber();   // journal (6.2.11)
 
                     // Add status monitoring (Field 12) - REQUIRED by processor
                     request.setStatusMonitoring(EmvTagEnhancer.buildStatusMonitoring());
@@ -560,6 +561,7 @@ public class AtmTransactionManager {
                     );
                     request.setRoutingId(config.getRoutingId());
                     request.setSequenceNumber(getNextSequenceNumber());
+                    castech.emvtxn.GlobalPara.atmSequenceNumber = request.getSequenceNumber();   // journal (6.2.11)
 
                     // Add status monitoring (Field 12) - REQUIRED by processor
                     request.setStatusMonitoring(EmvTagEnhancer.buildStatusMonitoring());

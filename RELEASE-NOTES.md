@@ -48,6 +48,88 @@ Template:
 
 ---
 
+## 6.2.11 — 2026-10-01 · PR #7 · base 6.2.10 · versionCode 73
+
+### Highlights
+
+**Detail Report.** Ellipsis ▸ **Detail Report** prints every approved withdrawal in the current
+batch, one block each, followed by a summary — modelled on the sample receipt, laid out for our
+32-column printer. Behind it the terminal now keeps a **transaction journal**: one row per
+finished transaction (approved, declined, cancelled, balance inquiry), walk-up and POS alike.
+The log table existed since the first builds but nothing ever wrote to it. Batches are
+**terminal-owned**: batch 001 opens on first use, a successful Close Batch closes it and opens
+the next, and the batch number now prints on the Close Batch and Host Totals receipts too.
+Spec: `docs/superpowers/specs/2026-10-01-detail-report-design.md`.
+
+### What operators and customers will notice
+
+- **Ellipsis menu** has a third entry, Detail Report. Same gate as Host Totals: a confirm
+  dialog that names the batch, the approved count and the total since the batch opened — no
+  PIN. **Print**, **View** (on-screen, also used automatically when the printer is out of
+  paper), or Cancel.
+- **Detail lines** are approved withdrawals only: card last four, CWDR, card type (DB/CR), entry
+  mode (C chip / T tap / S swipe), our sequence number; a clerk / invoice line for register
+  sales that carry them; AUTH ("--" when the host sent none) and REF; AMT, FEE, TIP (always
+  present, $0.00 until tips ship) and TOTAL.
+- **Summary** by card type: withdrawals count and amount, fees, tips, total; then counts of
+  declined, cancelled, balance inquiries and reversed. A withdrawal the processor **reversed**
+  counts under Reversed whatever the terminal recorded for it (approved, or timed out before
+  the answer), and leaves the money totals. A cancel with no host contact at all (PIN pad
+  cancel, three bad swipes) counts under Cancelled. Footer: "Terminal record - processor
+  totals govern".
+- **Close Batch** and **Host Totals** receipts show `Batch #: 00N`.
+- **Admin → Clear Transaction History** (Super) now does something: it deletes the rows of
+  closed batches and never touches the open batch.
+- **Customer disclaimer** (`DIS-01`): tapping Withdrawal or Balance Inquiry on the main menu
+  first shows "DISCLAIMER — This transaction may incur additional fees from your bank. Contact
+  your bank for further details." with an **OK** button and a plain **Cancel** link beneath it.
+  OK continues into the usual flow, Cancel returns to the menu. Walk-up only; register-driven
+  POS sales never pass through the menu. Wording lives in the string resources.
+- Nothing changes on the wire or in CasHUB.
+
+### Fixes / changes
+
+**Reporting (`RPT-01`)**
+- `atm/report/DetailReport` + `ReportRow` (pure, 11 tests written first): layout, amounts up
+  to $99,999.99 within 32 columns (the TOTAL column shifts one character at $10,000+), empty
+  batch, reversed exclusion, credit group, long clerk/invoice wrapped onto two lines,
+  three-digit counts.
+- `atm/TransactionJournal` records at the single completion point of the transaction thread
+  (`JournalOutcome` mapping tested first); `GlobalPara.atmSequenceNumber/atmClerkId/atmInvoiceNo`
+  carried from the request builder and the POS executor and cleared once consumed; an accepted
+  reversal marks its row by the shared pre-send reversal id (never by the per-session sequence
+  number, which restarts at 1 on every app start).
+- Review pass (fresh reviewer, 2026-10-01): reversal identity keyed on the pre-send id; Clear
+  History button made reachable; no-host-answer cancels classified as Cancelled; fresh paper
+  check before printing the report; report refused while a transaction is running; clerk and
+  invoice never clipped; three-digit counts; chronological order across restarts.
+- `TransactionLogManager` schema v2 with a **data-preserving migration** (the old `onUpgrade`
+  dropped the table), `batches` table, batch queries, retention of the last 20 batches at close
+  (`BatchMath`, tested).
+
+### Known issues and deferred
+
+- Reprint of a previous batch (the store keeps 20; no menu entry yet). Sending the report to
+  MyView. Tips (column reserved).
+- `REV-02`, `POS-12`, R2, `HOST-14`, `LOG-01`, `TEST-01` — unchanged.
+
+### Verification
+
+- `DetailReportTest` (11), `BatchMathTest` (3), `JournalOutcomeTest` (7) — all RED before the
+  code. Full suite 262 tests; the 3 pre-existing `TEST-01` failures only.
+- Device (terminal …680, debug build of a64dfb9, 2026-10-02, operator-run): balance inquiry →
+  journaled `BALANCE_INQUIRY/APPROVED seq=1 batch=1`; withdrawal $10 + $3.50 → journaled
+  `WITHDRAWAL/APPROVED seq=2 batch=1` under its pre-send reversal id; Detail Report printed;
+  Host Totals printed; Close Batch → "Batch 1 closed; batch 2 opened", close receipt printed.
+  Disclaimer verified from the view hierarchy (OK → amount screen, Cancel → menu). Not yet
+  exercised on hardware: POS sale clerk/invoice line, a decline and a cancel on the report,
+  Clear History, a reversal moving its row to Reversed, the out-of-paper fallback.
+
+### Upgrade notes
+
+- Installs in place over 6.2.10; the journal database migrates in place. Batch 001 opens the
+  first time the journal or the report is touched after the update.
+
 ## 6.2.10 — 2026-10-01 · PR #6 · base 6.2.9 · versionCode 72
 
 ### Highlights

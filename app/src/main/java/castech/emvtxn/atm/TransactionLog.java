@@ -48,6 +48,15 @@ public class TransactionLog {
     private long balanceAvailableCents; // Available balance (for balance inquiry)
     private String errorMessage;        // Error details if failed
 
+    // ---- 6.2.11 report columns ----
+    private int sequenceNumber;         // our STD1 sequence (REF# on the report)
+    private int accountType;            // GlobalPara.ATM_ACCOUNT_* (10 sav, 20 chk, 30 credit)
+    private String clerkId;             // register sale only
+    private String invoiceNo;           // register sale only
+    private long tipCents;              // reserved (0 until tips ship)
+    private int batchId;                // terminal-owned batch
+    private boolean reversed;           // approval later reversed → excluded from detail lines
+
     /**
      * Default constructor.
      */
@@ -212,6 +221,21 @@ public class TransactionLog {
 
     public String getErrorMessage() { return errorMessage; }
     public void setErrorMessage(String errorMessage) { this.errorMessage = errorMessage; }
+
+    public int getSequenceNumber() { return sequenceNumber; }
+    public void setSequenceNumber(int sequenceNumber) { this.sequenceNumber = sequenceNumber; }
+    public int getAccountType() { return accountType; }
+    public void setAccountType(int accountType) { this.accountType = accountType; }
+    public String getClerkId() { return clerkId; }
+    public void setClerkId(String clerkId) { this.clerkId = clerkId; }
+    public String getInvoiceNo() { return invoiceNo; }
+    public void setInvoiceNo(String invoiceNo) { this.invoiceNo = invoiceNo; }
+    public long getTipCents() { return tipCents; }
+    public void setTipCents(long tipCents) { this.tipCents = tipCents; }
+    public int getBatchId() { return batchId; }
+    public void setBatchId(int batchId) { this.batchId = batchId; }
+    public boolean isReversed() { return reversed; }
+    public void setReversed(boolean reversed) { this.reversed = reversed; }
 
     // Formatting helpers
 
