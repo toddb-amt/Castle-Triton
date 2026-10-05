@@ -2886,10 +2886,13 @@ public class MainActivity extends AppCompatActivity {
         // Show immediate feedback that button was clicked
         ui_ShowMsg("BTN CLICKED!\n");
 
-        // Prevent starting a new transaction while one is in progress
+        // Prevent starting a new transaction while one is in progress. Live since
+        // TXN-01 (6.2.12): before that the flag was cleared on the line after it was set,
+        // so this guard never fired and the thread-alive backstop below did its job. A
+        // second auto-click from the transaction page lands here now; it is ignored
+        // quietly — the running transaction owns the customer's screen.
         if (GlobalPara.atmTransactionInProgress) {
             Log.w(TAG, "Transaction already in progress, ignoring click");
-            ui_ShowMsg("ERROR: Txn already in progress\n");
             return 0;
         }
 
@@ -2959,11 +2962,13 @@ public class MainActivity extends AppCompatActivity {
         // Simple cleanup - just clear old thread reference (NO SDK calls)
         threadTxn = null;
 
-        // Reset flags and mark transaction as in progress
+        // Reset flags, then mark the transaction as in progress — in that order. The
+        // reset used to come second AND clear this flag (TXN-01), so it was false for
+        // the whole transaction. It is cleared on every exit of the transaction thread.
         resetAbortFlag();
         inCardDetectionLoop = false;  // Will be set true when we enter the loop
-        GlobalPara.atmTransactionInProgress = true;
         GlobalPara.resetATMHostResponse();
+        GlobalPara.atmTransactionInProgress = true;
 
         ui_ShowMsg("Creating thread...\n");
         Log.d(TAG, "About to create Thread object");
