@@ -1073,9 +1073,21 @@ public class MainActivity extends AppCompatActivity {
                             } else {
                                 Log.e(TAG, ">>> CALLBACK onTransactionDeclined: LATCH IS NULL - cannot signal!");
                             }
-                            // POS hook (no-op if no POS callback is armed)
-                            castech.emvtxn.pos.PosTransactionObserver.notifyDeclined(
-                                    responseCode, responseMessage, retainCard);
+                            // POS hook (no-op if no POS callback is armed). A "55 Incorrect
+                            // PIN" that the terminal will re-try with a fresh PIN is NOT the
+                            // outcome and is not reported: the register hears an approval on
+                            // the retry through onTransactionApproved, or a final 55 from the
+                            // transaction thread's exit (answerPosIfEndedLocally). Reporting it
+                            // here released the slot, and a retry approval was never told to
+                            // the register (POS-14).
+                            if (castech.emvtxn.atm.host.PinRetryPolicy.reportDeclineToRegisterNow(
+                                    PIN_RETRY_ON_INCORRECT, responseCode)) {
+                                castech.emvtxn.pos.PosTransactionObserver.notifyDeclined(
+                                        responseCode, responseMessage, retainCard);
+                            } else if (castech.emvtxn.pos.PosTransactionObserver.isArmed()) {
+                                Log.w(TAG, "POS hook: 55 Incorrect PIN not reported to the register — "
+                                        + "it hears the outcome (retry approval, final 55, or cancel)");
+                            }
                         }
 
                         @Override
@@ -5850,16 +5862,17 @@ public class MainActivity extends AppCompatActivity {
                 GlobalPara.atmHostCallInProgress = false;
             }
 
-            // Anything other than a retryable incorrect-PIN decline is final.
-            if (!PIN_RETRY_ON_INCORRECT
-                    || GlobalPara.atmHostCallSuccess
-                    || !castech.emvtxn.atm.host.HyosungProtocol.RESP_INCORRECT_PIN
-                            .equals(GlobalPara.atmResponseCode)) {
-                return;
-            }
-            if (attempt >= PIN_MAX_ATTEMPTS) {
-                Log.w(TAG, "ATM HOST (" + pathTag + "): Incorrect PIN — local attempt limit reached ("
-                        + PIN_MAX_ATTEMPTS + ")");
+            // Anything other than a retryable incorrect-PIN decline is final (PinRetryPolicy
+            // is also what keeps the POS decline hook from reporting a 55 that is about to
+            // be retried — POS-14). A final 55 reaches the register from the thread's exit
+            // (answerPosIfEndedLocally) with the host's code and reason.
+            if (!castech.emvtxn.atm.host.PinRetryPolicy.shouldRetry(PIN_RETRY_ON_INCORRECT,
+                    GlobalPara.atmHostCallSuccess, GlobalPara.atmResponseCode, attempt, PIN_MAX_ATTEMPTS)) {
+                if (castech.emvtxn.atm.host.PinRetryPolicy.isRetryableDecline(
+                        PIN_RETRY_ON_INCORRECT, GlobalPara.atmResponseCode)) {
+                    Log.w(TAG, "ATM HOST (" + pathTag + "): Incorrect PIN — local attempt limit reached ("
+                            + PIN_MAX_ATTEMPTS + ")");
+                }
                 return;
             }
 
