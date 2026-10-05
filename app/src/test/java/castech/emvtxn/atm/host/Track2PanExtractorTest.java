@@ -135,4 +135,67 @@ public class Track2PanExtractorTest {
     public void maskPan_nullSafe() {
         assertNull(Track2PanExtractor.maskPan(null));
     }
+
+    // ---- Track 2 for the host (TAP-01, 6.2.12) ---------------------------------
+    //
+    // Field 6 of the STD1 request is ";PAN=EXPIRY...?" for every entry mode. A tap
+    // delivers that text as ASCII bytes followed by an LRC byte (seen on the S1F4 PRO
+    // 2026-09-02: the buffer ended 0x3F 0x3D); a chip read delivers it BCD-packed.
+    // The contactless host block hex-dumped the ASCII buffer, which would have sent
+    // ";3B34313131...?" to the processor had that block ever run.
+
+    private static final String HOST_TRACK2 = ";4111111111111111=2903101254300000?";
+
+    @Test
+    public void toHostTrack2_asciiTap_isSentAsText_notHexDumped() {
+        byte[] t2 = HOST_TRACK2.getBytes(StandardCharsets.US_ASCII);
+        assertEquals(HOST_TRACK2, Track2PanExtractor.toHostTrack2(t2, t2.length));
+    }
+
+    @Test
+    public void toHostTrack2_asciiTap_dropsTheLrcByteAfterTheEndSentinel() {
+        byte[] t2 = (HOST_TRACK2 + "=").getBytes(StandardCharsets.US_ASCII); // '=' here is the LRC
+        assertEquals(HOST_TRACK2, Track2PanExtractor.toHostTrack2(t2, t2.length));
+    }
+
+    @Test
+    public void toHostTrack2_asciiWithoutSentinels_addsThem() {
+        byte[] t2 = "4111111111111111=2903101254300000".getBytes(StandardCharsets.US_ASCII);
+        assertEquals(HOST_TRACK2, Track2PanExtractor.toHostTrack2(t2, t2.length));
+    }
+
+    @Test
+    public void toHostTrack2_bcdPacked_turnsSeparatorIntoEqualsAndDropsPadding() {
+        byte[] t2 = bcdTrack2(PAN); // 4111111111111111 D 2903101254300000 F
+        assertEquals(HOST_TRACK2, Track2PanExtractor.toHostTrack2(t2, t2.length));
+    }
+
+    @Test
+    public void toHostTrack2_readsOnlyLenBytesOfTheSdkBuffer() {
+        byte[] sdkBuffer = new byte[256];                       // the SDK hands over a fixed-size array
+        byte[] t2 = HOST_TRACK2.getBytes(StandardCharsets.US_ASCII);
+        System.arraycopy(t2, 0, sdkBuffer, 0, t2.length);
+        assertEquals(HOST_TRACK2, Track2PanExtractor.toHostTrack2(sdkBuffer, t2.length));
+    }
+
+    @Test
+    public void toHostTrack2_maskedTrackKeepsItsMask_soTheCallerCanRefuseToSendIt() {
+        byte[] t2 = ";411111******1111=2903?".getBytes(StandardCharsets.US_ASCII);
+        assertEquals(";411111******1111=2903?", Track2PanExtractor.toHostTrack2(t2, t2.length));
+    }
+
+    @Test
+    public void toHostTrack2_withoutAFieldSeparator_isUnusable() {
+        byte[] ascii = ";4111111111111111?".getBytes(StandardCharsets.US_ASCII);
+        assertNull(Track2PanExtractor.toHostTrack2(ascii, ascii.length));
+        byte[] bcd = { 0x41, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11 };
+        assertNull(Track2PanExtractor.toHostTrack2(bcd, bcd.length));
+    }
+
+    @Test
+    public void toHostTrack2_nullOrEmpty_isUnusable() {
+        assertNull(Track2PanExtractor.toHostTrack2(null, 0));
+        assertNull(Track2PanExtractor.toHostTrack2(new byte[0], 0));
+        assertNull(Track2PanExtractor.toHostTrack2(new byte[8], 0));
+    }
 }

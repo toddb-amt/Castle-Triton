@@ -4536,7 +4536,19 @@ public class MainActivity extends AppCompatActivity {
                     }
 
                     if (GlobalPara.transactionResult == 0x0004) {
-                        if (GlobalPara.isQuickChipTransaction == true && entryMode == GlobalDef.d_ENTRY_MODE_CT) {
+                        // TAP-01 (6.2.12): which online path this card takes — see OnlineRoute.
+                        // The contactless host send below used to sit INSIDE the
+                        // "QuickChip && contact" branch. QuickChip is the sample app's checkbox
+                        // and is never ticked, so that send could not run: every tapped card
+                        // fell through to the last branch and was declined at the terminal as
+                        // "91 / Host service not available" without the processor ever being
+                        // contacted (S1F4 PRO 2026-09-02; POS site 2026-10-05). Only an
+                        // inserted chip reached the host.
+                        final OnlineRoute onlineRoute =
+                                OnlineRoute.of(entryMode, GlobalPara.isQuickChipTransaction);
+                        Log.d(TAG, "Online route: " + onlineRoute + " (entryMode=" + entryMode + ")");
+
+                        if (onlineRoute == OnlineRoute.QUICK_CHIP_CONTACT) {
                             Log.d(TAG, "txnCompletion for QuickChip ***********************************************");
                             //Unable go onlne
                             EMVOnlineResponseData onlineRspData = new EMVOnlineResponseData();
@@ -4568,7 +4580,10 @@ public class MainActivity extends AppCompatActivity {
                                 } while (strAmt.isEmpty() == true);
                             }
                             finalAmount = Converter.hexString2ByteArray(strAmt);
+                        }
 
+                        if (onlineRoute == OnlineRoute.CONTACTLESS_HOST
+                                || onlineRoute == OnlineRoute.QUICK_CHIP_CONTACT) {
                             ui_ShowMsg("Online Processing ... \n");
 
                             // ATM HOST - Send actual transaction to server
@@ -4579,14 +4594,31 @@ public class MainActivity extends AppCompatActivity {
                                 CastleCardData cardData = new CastleCardData();
                                 cardData.setEntryMode(CastleCardData.ENTRY_MODE_CONTACTLESS);
 
-                                // Get Track 2 from rcData if available and encrypt with DUKPT
+                                // Track 2 for Field 6 (TAP-01). On this terminal the contactless
+                                // kernel hands Track 2 over as ASCII text (";PAN=...?" plus an LRC
+                                // byte). This block used to hex-dump that buffer as if it were
+                                // BCD-packed, which would have sent ";3B3434...?" to the processor
+                                // had the block ever run. toHostTrack2 reads either encoding. When
+                                // the kernel gave no track, fall back to Tag 57 (Track 2 Equivalent,
+                                // BCD) from this tap's own chip data.
+                                String track2Ascii = null;
                                 if (rcData != null && rcData.track2Len > 0) {
-                                    String track2Hex = Converter.byteArray2HexString(rcData.track2Data, rcData.track2Len);
-                                    // Strip trailing 'F' padding from BCD-encoded track 2
-                                    track2Hex = track2Hex.toUpperCase().replaceAll("F+$", "");
-                                    String track2Ascii = ";" + track2Hex.replace("D", "=") + "?";
+                                    track2Ascii = Track2PanExtractor.toHostTrack2(rcData.track2Data, rcData.track2Len);
+                                    Log.d(TAG, "ATM HOST (CL): Track2 from rcData [" + rcData.track2Len + " bytes]"
+                                            + (track2Ascii == null ? " - not usable" : ""));
+                                }
+                                if (track2Ascii == null) {
+                                    TLVData.tag = 0x57;
+                                    TLVData.len = 256;
+                                    TLVData.value = new byte[256];
+                                    if (tlvUtility.TLVDataGet(TLVData) == 0 && TLVData.len > 0) {
+                                        track2Ascii = Track2PanExtractor.toHostTrack2(TLVData.value, TLVData.len);
+                                        Log.d(TAG, "ATM HOST (CL): Track2 from Tag 57 [" + TLVData.len + " bytes]"
+                                                + (track2Ascii == null ? " - not usable" : ""));
+                                    }
+                                }
 
-                                    Log.d(TAG, "ATM HOST (CL): Track2 raw hex: " + LogMask.len(track2Hex));
+                                if (track2Ascii != null) {
                                     Log.d(TAG, "ATM HOST (CL): Track2 ASCII: " + LogMask.track2(track2Ascii));
 
                                     // Try to encrypt track 2 with DUKPT
@@ -4600,7 +4632,7 @@ public class MainActivity extends AppCompatActivity {
                                         Log.d(TAG, "  KSN: " + encryptedTrack2.ksn);
 
                                         // Also set clear track 2 for processor (if not masked)
-                                        if (!track2Hex.contains("2A") && !track2Ascii.contains("*")) {
+                                        if (!track2Ascii.contains("*")) {
                                             cardData.setTrack2Data(track2Ascii);
                                             Log.d(TAG, "ATM HOST (CL): Track2 CLEAR also set");
                                         } else {
@@ -4608,7 +4640,7 @@ public class MainActivity extends AppCompatActivity {
                                         }
                                     } else {
                                         // Encryption failed - try to send clear track if not masked
-                                        if (!track2Hex.contains("2A") && !track2Ascii.contains("*")) {
+                                        if (!track2Ascii.contains("*")) {
                                             cardData.setTrack2Data(track2Ascii);
                                             Log.d(TAG, "ATM HOST (CL): Track2 set (clear, encryption failed)");
                                         } else {
@@ -4670,7 +4702,18 @@ public class MainActivity extends AppCompatActivity {
                                 // Send to host — loops PIN entry on "55 Incorrect PIN"
                                 // (see sendAtmHostRequestWithPinRetry / PIN_RETRY_ON_INCORRECT)
                                 String acctType = GlobalPara.getHyosungAccountType();
-                                sendAtmHostRequestWithPinRetry(cardData, amountCents, surchargeCents, acctType, "CL");
+                                if (track2Ascii != null) {
+                                    sendAtmHostRequestWithPinRetry(cardData, amountCents, surchargeCents, acctType, "CL");
+                                } else {
+                                    // Nothing the host could identify the card by — a request without
+                                    // Track 2 can only be rejected. End it here, with a reason that
+                                    // says what happened, instead of contacting the processor.
+                                    Log.e(TAG, "ATM HOST (CL): no Track 2 from this tap (rcData or Tag 57) - "
+                                            + "declining at the terminal, host NOT contacted");
+                                    GlobalPara.atmResponseCode = "NO_TRACK2";
+                                    GlobalPara.atmResponseMessage = "Card not readable - insert card";
+                                    GlobalPara.atmHostCallSuccess = false;
+                                }
 
                                 // Check if transaction was approved
                                 if (GlobalPara.atmHostCallSuccess) {
@@ -4688,7 +4731,7 @@ public class MainActivity extends AppCompatActivity {
                                 GlobalPara.atmResponseMessage = "Host service not available";
                                 GlobalPara.atmHostCallSuccess = false;
                             }
-                        } else if (entryMode == GlobalDef.d_ENTRY_MODE_CT) {
+                        } else if (onlineRoute == OnlineRoute.CONTACT_HOST) {
                             ui_ShowMsg("Online Processing ... \n");
 
                             // ATM HOST - Send actual transaction to server for contact chip
@@ -4925,11 +4968,19 @@ public class MainActivity extends AppCompatActivity {
                             ui_ShowMsg("Remove card !");
                             MyUtility.sleep(2500);
                         } else {
-                            // MSR or other entry mode - Host not available, DECLINE
-                            Log.e(TAG, "ATM HOST (MSR): Host service not available - DECLINING transaction");
+                            // OnlineRoute.NO_HOST_PATH — a swiped card. There is no host send
+                            // for swipe in this app, so it ends here, at the terminal.
+                            //
+                            // This used to report "91 / Host service not available" — a host
+                            // response code for a transaction the host never saw, which read
+                            // (on the receipt, in the journal and to support) as the processor
+                            // being down. It is the terminal's own decline: say so, with a
+                            // terminal code. (Until 6.2.12 tapped cards landed here too.)
+                            Log.e(TAG, "ATM HOST: entry mode " + entryMode + " has no host path (swipe) - "
+                                    + "declining at the terminal, host NOT contacted");
                             GlobalPara.transactionResult = 0x0003;  // Declined
-                            GlobalPara.atmResponseCode = "91";
-                            GlobalPara.atmResponseMessage = "Host service not available";
+                            GlobalPara.atmResponseCode = "MSR_NA";
+                            GlobalPara.atmResponseMessage = "Swipe not supported";
                             GlobalPara.atmHostCallSuccess = false;
                         }
 

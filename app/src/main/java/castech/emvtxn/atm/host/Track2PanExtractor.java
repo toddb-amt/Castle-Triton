@@ -72,6 +72,53 @@ public final class Track2PanExtractor {
     }
 
     /**
+     * Returns Track 2 in the form the host wants in Field 6 — {@code ";PAN=EXPIRY...?"} —
+     * from either encoding, or {@code null} when the buffer holds nothing usable (no
+     * field separator, or no PAN in front of it).
+     *
+     * <ul>
+     *   <li><b>ASCII</b> (a tap): the text is already there. The start sentinel is
+     *       optional, everything after the end sentinel is dropped (the reader appends
+     *       an LRC byte), and the sentinels are put back.</li>
+     *   <li><b>BCD-packed</b> (a chip read): nibble {@code D} becomes {@code '='} and the
+     *       {@code F} padding is dropped.</li>
+     * </ul>
+     *
+     * A masked track keeps its {@code '*'} characters, so the caller can still see that
+     * it must not be sent as clear Track 2.
+     *
+     * @param track2 raw Track 2 bytes (may be null)
+     * @param len    number of valid bytes; clamped to the array length
+     */
+    public static String toHostTrack2(byte[] track2, int len) {
+        if (track2 == null) return null;
+        if (len < 0 || len > track2.length) len = track2.length;
+        if (len == 0) return null;
+
+        String body;
+        if (isAscii(track2, len)) {
+            StringBuilder sb = new StringBuilder(len);
+            for (int i = 0; i < len; i++) {
+                char c = (char) (track2[i] & 0xFF);
+                if (i == 0 && c == ';') continue;   // start sentinel
+                if (c == '?') break;                // end sentinel — anything after it is the LRC
+                sb.append(c);
+            }
+            body = sb.toString();
+        } else {
+            StringBuilder hex = new StringBuilder(len * 2);
+            for (int i = 0; i < len; i++) {
+                hex.append(Character.forDigit((track2[i] >> 4) & 0xF, 16));
+                hex.append(Character.forDigit(track2[i] & 0xF, 16));
+            }
+            body = hex.toString().toUpperCase().replaceAll("F+$", "").replace('D', '=');
+        }
+
+        if (body.indexOf('=') < 1) return null;     // no separator, or nothing in front of it
+        return ";" + body + "?";
+    }
+
+    /**
      * Masks a PAN for receipt display / storage: keeps the first 6 and last 4
      * digits, masks the middle with {@code '*'} (PCI-safe). Non-digits are
      * stripped first. Short PANs keep only the last 4. Returns the input
