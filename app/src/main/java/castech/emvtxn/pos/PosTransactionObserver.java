@@ -147,6 +147,42 @@ public final class PosTransactionObserver {
         }
     }
 
+    // ---- A transaction that ends at the terminal (POS-13) --------------------------
+
+    /**
+     * Identifies the slot armed right now (null when none). The transaction thread
+     * takes this when it starts and hands it back to {@link #notifyDeclinedIf} when it
+     * ends, so it can only ever answer the POS transaction it was started for.
+     */
+    public static Object armedToken() {
+        return active.get();
+    }
+
+    /**
+     * Answers the register with a decline — but only if {@code token}'s slot is STILL
+     * the armed one. Returns true when the register was answered.
+     *
+     * <p>This is how a transaction that finished on the terminal without a host result
+     * (card not sendable, read error, PIN abandoned, thread failure) answers at once
+     * instead of leaving the register to the {@link #WATCHDOG_MILLIS} watchdog. Same
+     * compare-and-set as the watchdog, for the same reason: if the host already
+     * answered, or the register has armed the next transaction, this is a no-op — an
+     * approval is never followed by a decline, and one transaction never answers
+     * another. A null token (walk-up transaction: nothing was armed) never matches.
+     */
+    public static boolean notifyDeclinedIf(Object token, String responseCode, String responseMessage,
+                                           boolean retainCard) {
+        if (!(token instanceof Callback)) return false;
+        Callback cb = (Callback) token;
+        if (!active.compareAndSet(cb, null)) return false;
+        try {
+            cb.onDeclined(responseCode, responseMessage, retainCard);
+        } catch (Throwable t) {
+            Log.e(TAG, "callback onDeclined (local ending) threw: " + t.getMessage(), t);
+        }
+        return true;
+    }
+
     // ---- Callback contract ----------------------------------------------------
 
     public interface Callback {

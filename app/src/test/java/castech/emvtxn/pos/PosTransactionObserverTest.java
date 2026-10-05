@@ -236,6 +236,87 @@ public class PosTransactionObserverTest {
         assertEquals(0, secondErrors.get());
     }
 
+    // ---- a transaction that ends at the terminal answers ITS OWN slot (POS-13) ----
+    //
+    // The transaction thread remembers the slot that was armed when it started and,
+    // on its way out, answers that slot if nobody has. It must never answer a slot it
+    // did not start with: a host result may already have fired, or the register may
+    // have armed the next transaction in the instant this one finished.
+
+    @Test
+    public void localEnding_answersTheSlotTheTransactionStartedWith() {
+        Recorder rec = new Recorder();
+        PosTransactionObserver.arm(rec);
+        Object slot = PosTransactionObserver.armedToken();
+
+        boolean answered = PosTransactionObserver.notifyDeclinedIf(slot, "MSR_NA", "Swipe not supported", false);
+
+        assertTrue(answered);
+        assertEquals("declined:MSR_NA:Swipe not supported:false", rec.calls.toString());
+        assertFalse("slot must be free for the next POS command", PosTransactionObserver.isArmed());
+    }
+
+    @Test
+    public void localEnding_saysNothingOnceTheHostHasAnswered() {
+        Recorder rec = new Recorder();
+        PosTransactionObserver.arm(rec);
+        Object slot = PosTransactionObserver.armedToken();
+        PosTransactionObserver.notifyApproved("00", "RRN", "", "", 0, 0, "APPROVED");
+
+        boolean answered = PosTransactionObserver.notifyDeclinedIf(slot, "terminal_declined", "x", false);
+
+        assertFalse("an approval must never be followed by a decline", answered);
+        assertEquals("approved:00", rec.calls.toString());
+    }
+
+    @Test
+    public void localEnding_cannotAnswerTheNextTransaction() {
+        Recorder first = new Recorder();
+        PosTransactionObserver.arm(first);
+        Object firstSlot = PosTransactionObserver.armedToken();
+        PosTransactionObserver.notifyDeclined("51", "INSUFFICIENT FUNDS", false); // host answered the first
+        Recorder second = new Recorder();
+        PosTransactionObserver.arm(second);                                       // register starts the next
+
+        boolean answered = PosTransactionObserver.notifyDeclinedIf(firstSlot, "terminal_declined", "x", false);
+
+        assertFalse(answered);
+        assertEquals("the next transaction must not be answered by the previous one", "", second.calls.toString());
+        assertTrue(PosTransactionObserver.isArmed());
+    }
+
+    @Test
+    public void localEnding_ofAWalkUpTransaction_leavesAFreshlyArmedSlotAlone() {
+        Object slot = PosTransactionObserver.armedToken();   // walk-up: nothing armed at start
+        assertNull(slot);
+        Recorder next = new Recorder();
+        PosTransactionObserver.arm(next);                    // register arms as the walk-up finishes
+
+        boolean answered = PosTransactionObserver.notifyDeclinedIf(slot, "terminal_declined", "x", false);
+
+        assertFalse(answered);
+        assertEquals("", next.calls.toString());
+        assertTrue(PosTransactionObserver.isArmed());
+    }
+
+    @Test
+    public void localEnding_withNoSlotAndNothingArmed_isANoOp() {
+        assertFalse(PosTransactionObserver.notifyDeclinedIf(null, "terminal_declined", "x", false));
+        assertFalse(PosTransactionObserver.isArmed());
+    }
+
+    /** Records what the register would have been told, in order. */
+    private static final class Recorder implements PosTransactionObserver.Callback {
+        final StringBuilder calls = new StringBuilder();
+        @Override public void onApproved(String c, String r, String d, String t, long a, long v, String m) {
+            calls.append("approved:").append(c);
+        }
+        @Override public void onDeclined(String c, String m, boolean retain) {
+            calls.append("declined:").append(c).append(':').append(m).append(':').append(retain);
+        }
+        @Override public void onError(String e) { calls.append("error:").append(e); }
+    }
+
     private static PosTransactionObserver.Callback noopCallback() {
         return new PosTransactionObserver.Callback() {
             @Override public void onApproved(String c, String r, String d, String t, long a, long v, String m) {}

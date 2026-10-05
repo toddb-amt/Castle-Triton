@@ -2967,6 +2967,12 @@ public class MainActivity extends AppCompatActivity {
             public void run() {
                 Log.d(TAG, "Transaction thread started");
 
+                // POS-13 (6.2.12): the POS slot this transaction was started for (null for
+                // a walk-up). Whatever way this thread ends, the finally below answers that
+                // slot if nothing else has — see answerPosIfEndedLocally().
+                final Object posSlot = castech.emvtxn.pos.PosTransactionObserver.armedToken();
+                final String[] threadError = { null };
+
                 // DUKPT diagnostic tests REMOVED - they were slowing down transactions
                 // and incrementing the KSN counter unnecessarily
                 // To run diagnostics, use the admin screen or call manually
@@ -3021,6 +3027,7 @@ public class MainActivity extends AppCompatActivity {
                 if (!sdkInitialized) {
                     Log.e(TAG, "SDK not initialized! Cannot process transaction.");
                     ui_ShowMsg("Error: SDK not initialized. Please restart app.");
+                    threadError[0] = "SDK not initialized";   // POS-13: tell the register why
                     GlobalPara.atmTransactionInProgress = false;
                     ui_EnableAllButton();
                     return;
@@ -3031,6 +3038,7 @@ public class MainActivity extends AppCompatActivity {
                     Log.e(TAG, "Critical SDK objects are null! emv=" + (emv != null) +
                             ", emvcl=" + (emvcl != null) + ", msr=" + (msr != null) + ", sc=" + (sc != null));
                     ui_ShowMsg("Error: Card reader not ready. Please restart app.");
+                    threadError[0] = "card reader not ready";   // POS-13: tell the register why
                     GlobalPara.atmTransactionInProgress = false;
                     ui_EnableAllButton();
                     return;
@@ -5098,10 +5106,14 @@ public class MainActivity extends AppCompatActivity {
               } catch (Throwable t) {
                 // Catch any error inside the thread's run() method (including Errors)
                 Log.e(TAG, "Error in transaction thread: " + t.getMessage(), t);
+                threadError[0] = t.getClass().getSimpleName();
                 final String errorMsg = "Thread error: " + t.getClass().getSimpleName() + "\n" + t.getMessage();
                 ui_ShowMsg(errorMsg);
                 GlobalPara.atmTransactionInProgress = false;
                 ui_EnableAllButton();
+              } finally {
+                // Every exit from this thread — the end above, an early return, a throw.
+                answerPosIfEndedLocally(posSlot, threadError[0]);
               }
             }
 
@@ -5708,6 +5720,53 @@ public class MainActivity extends AppCompatActivity {
         if (p2.equals("34") || p2.equals("37")) return "AMEX";
         if (c0 == '6') return "DISC";
         return "CARD";
+    }
+
+    /**
+     * POS-13 (6.2.12): a POS-driven transaction that finished on the terminal answers the
+     * register NOW.
+     *
+     * <p>The register used to be answered only by the host callbacks (approved, declined,
+     * balance, error) and by Cancel. A transaction that ended locally — a card with no
+     * host path, a read error, an abandoned PIN pad, a failure in this thread — showed
+     * its result on the terminal and left the POS slot armed until the 300 s watchdog,
+     * which then reported host_unreachable; meanwhile the register had timed out and
+     * every POS command was refused as terminal_busy. Seen at a POS site 2026-10-05 as
+     * "the terminal took exactly 300 seconds to answer".
+     *
+     * <p>Called from the transaction thread's finally, so it covers every exit. It only
+     * ever answers the slot this transaction started with, and only if nothing else has
+     * (see PosTransactionObserver.notifyDeclinedIf): after a host result it is a no-op.
+     * It says nothing while a request is still with the host layer or after an approval
+     * (see PosLocalEnding). Never throws.
+     *
+     * @param posSlot the slot armed when the thread started (null for a walk-up)
+     * @param threadError what failed, when the terminal itself ended the transaction (a
+     *        Throwable's class name, "card reader not ready", ...); null otherwise
+     */
+    private void answerPosIfEndedLocally(Object posSlot, String threadError) {
+        if (posSlot == null) return;   // walk-up transaction: no register to answer
+        try {
+            boolean hostCallInFlight = atmHostService != null && atmHostService.isTransactionInProgress();
+            castech.emvtxn.pos.PosLocalEnding ending = castech.emvtxn.pos.PosLocalEnding.decide(
+                    hostCallInFlight, GlobalPara.atmHostCallSuccess,
+                    GlobalPara.atmResponseCode, GlobalPara.atmResponseMessage, threadError);
+            if (ending == null) {
+                if (castech.emvtxn.pos.PosTransactionObserver.armedToken() == posSlot) {
+                    Log.w(TAG, "POS: transaction thread ended with the register unanswered and "
+                            + (hostCallInFlight ? "a host call still in flight" : "the host approved")
+                            + " — leaving the answer to the host result / watchdog");
+                }
+                return;
+            }
+            if (castech.emvtxn.pos.PosTransactionObserver.notifyDeclinedIf(
+                    posSlot, ending.responseCode, ending.message, false)) {
+                Log.w(TAG, "POS: transaction ended at the terminal with no host result — register told: "
+                        + "declined rc=" + ending.responseCode + " (" + ending.message + ")");
+            }
+        } catch (Throwable t) {
+            Log.e(TAG, "answerPosIfEndedLocally failed: " + t.getMessage(), t);
+        }
     }
 
     // ── PIN retry on incorrect PIN (response code 55) ────────────────────────
