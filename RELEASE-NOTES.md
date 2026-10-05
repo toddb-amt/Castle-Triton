@@ -90,6 +90,10 @@ inquiry that "got a 91" and then took exactly 300 seconds to answer. It was a ta
   `Track2PanExtractor.toHostTrack2` reads either encoding, drops the LRC, and falls back to
   Tag 57 when the reader gives no track. A tap with no usable Track 2 at all is declined at the
   terminal (`NO_TRACK2`, "Card not readable - insert card") rather than sent. `TAP-01`
+- Track 2 from a tap is validated before it goes into the host message. Those bytes come from
+  the card, and Field 6 sits in a field-separated message: only digits and one `=` within
+  ISO 7813 lengths are accepted, so a crafted card cannot add fields to the request. (Raised by
+  the security review of the first cut of this change, which copied the bytes.) `TAP-01`
 - A swiped card reported a made-up host code. It now reports `MSR_NA` / "Swipe not supported".
   `TAP-01`
 
@@ -127,8 +131,8 @@ inquiry that "got a 91" and then took exactly 300 seconds to answer. It was a ta
 
 ### Verification
 
-- Unit suite: **291** tests (29 new: Track 2 for the host ×8, routing ×6, slot-safe local
-  answer ×5, register wording ×10). Each new test was watched failing first. The same three
+- Unit suite: **299** tests (37 new: Track 2 for the host ×16 including hostile input,
+  routing ×6, slot-safe local answer ×5, register wording ×10). Each new test was watched failing first. The same three
   pre-existing failures remain (`TEST-01`).
 - The defect itself is on record from the terminal: a tap on 2026-09-02 logged PIN accepted,
   kernel result "go online", and the terminal's own decline in the same millisecond, with no

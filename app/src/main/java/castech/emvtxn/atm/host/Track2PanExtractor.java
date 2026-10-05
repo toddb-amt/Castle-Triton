@@ -87,6 +87,15 @@ public final class Track2PanExtractor {
      * A masked track keeps its {@code '*'} characters, so the caller can still see that
      * it must not be sent as clear Track 2.
      *
+     * <p><b>The result is validated, not copied.</b> These bytes come from the card — or
+     * from a card emulator — and Field 6 sits in a message whose fields are split on FS
+     * (0x1C). Only a well-formed Track 2 is returned: digits and exactly one {@code '='}
+     * ({@code '*'} where masked), a PAN of 12-19 characters, at most 37 characters between
+     * the sentinels (ISO 7813). Anything else — a control byte, a letter, a second
+     * separator, an over-long track — returns {@code null}, and the caller does not send
+     * the transaction. For every buffer this accepts, the PAN in the result is the PAN
+     * {@link #extractPan} returns.
+     *
      * @param track2 raw Track 2 bytes (may be null)
      * @param len    number of valid bytes; clamped to the array length
      */
@@ -114,8 +123,29 @@ public final class Track2PanExtractor {
             body = hex.toString().toUpperCase().replaceAll("F+$", "").replace('D', '=');
         }
 
-        if (body.indexOf('=') < 1) return null;     // no separator, or nothing in front of it
-        return ";" + body + "?";
+        return isWellFormedTrack2Body(body) ? ";" + body + "?" : null;
+    }
+
+    private static final int MIN_PAN_LENGTH = 12;
+    private static final int MAX_PAN_LENGTH = 19;
+    /** ISO 7813 Track 2 holds 40 characters including both sentinels and the LRC. */
+    private static final int MAX_TRACK2_BODY_LENGTH = 37;
+
+    /**
+     * True for {@code PAN=REST} where the PAN is 12-19 characters, there is exactly one
+     * {@code '='}, every other character is a digit (or {@code '*'}, a masked digit), and
+     * the whole is no longer than a Track 2 can be.
+     */
+    private static boolean isWellFormedTrack2Body(String body) {
+        if (body.length() > MAX_TRACK2_BODY_LENGTH) return false;
+        int sep = body.indexOf('=');
+        if (sep < MIN_PAN_LENGTH || sep > MAX_PAN_LENGTH) return false;
+        for (int i = 0; i < body.length(); i++) {
+            if (i == sep) continue;
+            char c = body.charAt(i);
+            if (!((c >= '0' && c <= '9') || c == '*')) return false;   // also a second '='
+        }
+        return true;
     }
 
     /**

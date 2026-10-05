@@ -198,4 +198,74 @@ public class Track2PanExtractorTest {
         assertNull(Track2PanExtractor.toHostTrack2(new byte[0], 0));
         assertNull(Track2PanExtractor.toHostTrack2(new byte[8], 0));
     }
+
+    // ---- the card controls these bytes: only Track 2 may reach the host ----------
+    //
+    // Field 6 sits in a message whose fields are split on FS (0x1C). Track 2 from a
+    // tap is whatever the card — or a card emulator — sent, so it is validated, not
+    // copied: digits and exactly one '=' ('*' where the reader masked it), a PAN of
+    // 12-19 characters, at most 37 characters in all (ISO 7813). Anything else is
+    // unusable, and the transaction is not sent.
+
+    @Test
+    public void toHostTrack2_withAFieldSeparatorByte_isRejected_soACardCannotAddFields() {
+        byte[] t2 = (";4111111111111111=2903" + (char) 0x1C + "99999?").getBytes(StandardCharsets.ISO_8859_1);
+        assertNull(Track2PanExtractor.toHostTrack2(t2, t2.length));
+    }
+
+    @Test
+    public void toHostTrack2_withAnyControlOrHighByte_isRejected() {
+        for (int b : new int[] { 0x00, 0x02, 0x03, 0x0A, 0x0D, 0x1C, 0x7F, 0x80, 0xFF }) {
+            byte[] t2 = ";4111111111111111=29031012?".getBytes(StandardCharsets.US_ASCII);
+            t2[10] = (byte) b;
+            assertNull("byte 0x" + Integer.toHexString(b), Track2PanExtractor.toHostTrack2(t2, t2.length));
+        }
+    }
+
+    @Test
+    public void toHostTrack2_withLettersInTheTrack_isRejected() {
+        byte[] ascii = ";41111x1111111111=2903?".getBytes(StandardCharsets.US_ASCII);
+        assertNull(Track2PanExtractor.toHostTrack2(ascii, ascii.length));
+        // BCD with a stray 'A' nibble inside the PAN
+        byte[] bcd = { 0x41, 0x11, (byte) 0xA1, 0x11, 0x11, 0x11, 0x11, 0x11, (byte) 0xD2, (byte) 0x90, 0x31 };
+        assertNull(Track2PanExtractor.toHostTrack2(bcd, bcd.length));
+    }
+
+    @Test
+    public void toHostTrack2_withTwoSeparators_isRejected() {
+        byte[] t2 = ";4111111111111111=29=03?".getBytes(StandardCharsets.US_ASCII);
+        assertNull(Track2PanExtractor.toHostTrack2(t2, t2.length));
+    }
+
+    @Test
+    public void toHostTrack2_longerThanATrack2CanBe_isRejected() {
+        byte[] t2 = (";4111111111111111=" + "290310125430000012345" + "?")   // 16 + 1 + 21 = 38
+                .getBytes(StandardCharsets.US_ASCII);
+        assertNull(Track2PanExtractor.toHostTrack2(t2, t2.length));
+    }
+
+    @Test
+    public void toHostTrack2_atTheLongestLegalLength_isAccepted() {
+        String track = ";4111111111111111=" + "29031012543000001234" + "?";       // 16 + 1 + 20 = 37
+        byte[] t2 = track.getBytes(StandardCharsets.US_ASCII);
+        assertEquals(track, Track2PanExtractor.toHostTrack2(t2, t2.length));
+    }
+
+    @Test
+    public void toHostTrack2_withAPanShorterThanAnyCard_isRejected() {
+        byte[] t2 = ";41111111111=2903?".getBytes(StandardCharsets.US_ASCII);     // 11 digits
+        assertNull(Track2PanExtractor.toHostTrack2(t2, t2.length));
+    }
+
+    @Test
+    public void toHostTrack2_carriesTheSamePanTheTerminalReadsForItself() {
+        // No second opinion: the PAN inside Field 6 is the PAN extractPan returns.
+        byte[] ascii = (HOST_TRACK2 + "=").getBytes(StandardCharsets.US_ASCII);
+        byte[] bcd = bcdTrack2(PAN);
+        for (byte[] t2 : new byte[][] { ascii, bcd }) {
+            String host = Track2PanExtractor.toHostTrack2(t2, t2.length);
+            assertEquals("4111111111111111", host.substring(1, host.indexOf('=')));
+            assertEquals("4111111111111111", Track2PanExtractor.extractPan(t2, t2.length));
+        }
+    }
 }
