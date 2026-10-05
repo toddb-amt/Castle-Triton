@@ -48,6 +48,105 @@ Template:
 
 ---
 
+## 6.2.12 — 2026-10-05 · PR #8 · base 6.2.11 · versionCode 74
+
+### Highlights
+
+**Tapped cards now go to the processor.** Until this release a tap was never sent to the host.
+The terminal read the card, took the PIN, and then declined the transaction itself with
+"91 — Host service not available" — a host response code for a request the host never saw. Only
+an inserted chip card actually reached the processor. **A register is answered at once when a
+transaction ends on the terminal.** A POS-driven transaction that finished locally used to
+leave the register waiting for the 300-second slot watchdog, and every POS command in between
+was refused as busy. Both were found from one field report (2026-10-05): a POS balance
+inquiry that "got a 91" and then took exactly 300 seconds to answer. It was a tap.
+
+### What operators and customers will notice
+
+- **Tap works like insert.** PIN, "Online Processing", the processor's answer, receipt. Walk-up
+  and register-driven alike.
+- **Swipe is still declined at the terminal** — there is no host path for swiped cards in this
+  app — but it now says so: the screen and receipt read **SWIPE NOT SUPPORTED** (code `MSR_NA`)
+  instead of "HOST SERVICE NOT AVAILABLE" / 91.
+- **A 91 now means the processor said 91.** Before 6.2.12 a 91 on a receipt, in the journal or
+  on the Detail Report's declined count could be the terminal's own decline of a tap or swipe.
+  (One exception remains — see Known issues.)
+- **At a POS site**, a transaction that ends on the terminal — swipe, unreadable card, card
+  read error, PIN pad abandoned, a terminal fault — reaches the register within a few seconds
+  as `declined` with a terminal code, and the terminal accepts the next POS command straight
+  away. Nothing changes for approvals, host declines or Cancel.
+
+### Fixes
+
+**Transaction**
+
+- A tapped card was declined at the terminal as "91 / Host service not available" and never
+  sent to the processor. The contactless host send sat inside the branch for the sample app's
+  *QuickChip* checkbox, which nothing ever ticks, so it could not run; taps fell through to
+  the last branch of the chain. The routing is now an explicit, tested decision
+  (`OnlineRoute`): tap → host, inserted chip → host, swipe → terminal decline. `TAP-01`
+- The contactless send would have put a hex dump of the track in Field 6. The tap reader hands
+  Track 2 over as text (`;PAN=EXPIRY…?` plus an LRC byte); that block treated it as BCD.
+  `Track2PanExtractor.toHostTrack2` reads either encoding, drops the LRC, and falls back to
+  Tag 57 when the reader gives no track. A tap with no usable Track 2 at all is declined at the
+  terminal (`NO_TRACK2`, "Card not readable - insert card") rather than sent. `TAP-01`
+- A swiped card reported a made-up host code. It now reports `MSR_NA` / "Swipe not supported".
+  `TAP-01`
+
+**POS**
+
+- A POS transaction that ended on the terminal without a host result answered the register
+  only when the 300-second watchdog fired (as `host_unreachable`), and the terminal refused
+  POS commands as `terminal_busy` until then. Only the host callbacks and Cancel answered the
+  register. The transaction thread now remembers the POS slot it was started for and answers
+  it on every exit path if nothing else has: `declined`, with the terminal's own code and
+  reason (the ones the receipt shows), `user_cancelled` when nothing was recorded, or
+  `terminal_error` when the terminal itself failed. It stays silent while a request is still
+  with the host and after an approval, so a late approval can still land. `POS-13`
+
+### Known issues and deferred
+
+- **Tap has not yet run against the processor.** See Verification. The first taps on the bench
+  decide whether the contactless EMV data (Field 13) is accepted as built.
+- **Swipe has no host path** (`MSR-01`). It needs the reader's encrypted track and a PIN-block
+  decision with the MUX; not in this release.
+- **PIN retry on a register-driven transaction** (`POS-14`, found during this work, **not
+  fixed**): on a first "55 Incorrect PIN" the register is told `declined 55` immediately while
+  the terminal re-prompts the PIN; if the retry is then approved, the register is never told.
+  Money can move on a sale the register shows as declined. Walk-up is unaffected.
+- **`atmTransactionInProgress` is cleared at the start of every transaction** (`TXN-01`, found
+  during this work, not fixed): the flag is set and then reset on the next line, so the guards
+  that read it do not protect the card and PIN phase. Read from code; not yet observed on a
+  terminal. The live thread check still prevents two
+  transaction threads.
+- Two "91 / Host service not available" assignments remain for *host service not initialised*.
+  They sit behind the readiness gate and are not expected to be reachable.
+- The proxy team's two requests in `CASTLE-HOST-TIMEOUT-91-2026-10-05.md` (fail fast on connect
+  failure; cap the host leg at 60 s) are **not** taken: the host leg was never started in the
+  reported cases, and a 60 s cap would abandon live authorizations on the busy path.
+
+### Verification
+
+- Unit suite: **291** tests (29 new: Track 2 for the host ×8, routing ×6, slot-safe local
+  answer ×5, register wording ×10). Each new test was watched failing first. The same three
+  pre-existing failures remain (`TEST-01`).
+- The defect itself is on record from the terminal: a tap on 2026-09-02 logged PIN accepted,
+  kernel result "go online", and the terminal's own decline in the same millisecond, with no
+  host connection.
+- **Not yet run on a terminal.** Bench pass required before this ships:
+  1. Tap, walk-up balance inquiry and withdrawal → processor answers; receipt last-4 correct.
+  2. Tap from the register (balance inquiry and sale) → register receives the host result.
+  3. Swipe from the register → `declined MSR_NA` within seconds; next POS command accepted.
+  4. Abandon the PIN pad on a register transaction → `user_cancelled` within seconds.
+  5. Inserted chip, walk-up and register → unchanged.
+  6. A Mastercard tap as well as a Visa tap (the tag sets differ — `TAP-02`).
+
+### Upgrade notes
+
+Plain-install push from CasHUB. No parameter changes, no configuration migration.
+
+---
+
 ## 6.2.11 — 2026-10-01 · PR #7 · base 6.2.10 · versionCode 73
 
 ### Highlights

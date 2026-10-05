@@ -449,6 +449,31 @@ Sent in the `error.code` field. Stable identifiers — never localized; pair wit
 | `malformed_response`  | Server sent unparseable JSON                                     |
 | `invalid_response`    | Server sent valid JSON but with missing/invalid required fields  |
 
+## 7.1 Terminal-side declines (6.2.12+)
+
+A `sale` or `balance_inquiry` that ends **on the terminal**, before the processor has answered,
+is reported as `status: "declined"` with a `response_code` that is **not** a two-digit host
+code. No funds moved and the processor holds no record of it (unless noted). The terminal
+answers within a few seconds of the transaction ending and accepts the next command at once.
+
+| `response_code`     | Meaning                                                              |
+|---------------------|----------------------------------------------------------------------|
+| `user_cancelled`    | Cancel pressed at the terminal, or the PIN pad was abandoned         |
+| `MSR_NA`            | Card was swiped — swipe is not supported; insert or tap              |
+| `MSR_FAIL`          | Swipe could not be read after three attempts                         |
+| `NO_TRACK2`         | Tapped card gave no usable card data; insert the card                |
+| 8 hex digits        | Card reader error code (e.g. `A0000002`); `display_message` says which step |
+| `terminal_declined` | The terminal ended the transaction; reason in `display_message`      |
+| `terminal_error`    | The terminal itself failed (reader not ready, internal fault)        |
+
+`display_message` carries the same reason the terminal shows on its receipt.
+
+Before 6.2.12 these endings sent **nothing** until a 300-second watchdog released the
+transaction slot and emitted `error host_unreachable` with a message beginning `watchdog:`;
+commands in between were refused as `terminal_busy`. The watchdog still exists as a last
+resort (a request stuck in the host layer). A frame beginning `watchdog:` should be treated as
+an unknown outcome, exactly like a caller-side timeout — query before retrying.
+
 ## 8. Implementation references
 
 | Concern                       | File                                                            |
