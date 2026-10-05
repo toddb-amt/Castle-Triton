@@ -75,6 +75,12 @@ inquiry that "got a 91" and then took exactly 300 seconds to answer. It was a ta
   read error, PIN pad abandoned, a terminal fault — reaches the register within a few seconds
   as `declined` with a terminal code, and the terminal accepts the next POS command straight
   away. Nothing changes for approvals, host declines or Cancel.
+- **A wrong PIN on a register sale no longer ends the sale at the register.** The customer
+  gets up to two more tries, as before; the register now hears the outcome — approved if a
+  retry succeeds, `declined 55` only once the terminal has stopped re-prompting.
+- **While a walk-up customer is at the terminal, the register is told so.** POS commands are
+  refused as busy (`customer transaction in progress`) from the moment the card prompt
+  appears, not only once the request is with the host.
 
 ### Fixes
 
@@ -107,6 +113,23 @@ inquiry that "got a 91" and then took exactly 300 seconds to answer. It was a ta
   reason (the ones the receipt shows), `user_cancelled` when nothing was recorded, or
   `terminal_error` when the terminal itself failed. It stays silent while a request is still
   with the host and after an approval, so a late approval can still land. `POS-13`
+- On a register sale, a first "55 Incorrect PIN" was reported to the register at once and the
+  POS slot released, while the terminal re-prompted the PIN and resent; an approval on the
+  retry found no slot and was never reported — money moved on a sale the register showed as
+  declined. A retryable 55 is now not reported (`PinRetryPolicy`); the register hears the
+  outcome: the approval through the normal hook, or the final 55 — attempt limit reached or
+  the customer gave up — from the thread-exit answer, with the host's code and reason. `POS-14`
+
+**Transaction**
+
+- `atmTransactionInProgress` was cleared on the line after it was set, by the host-response
+  reset that runs at the start of every transaction, so it was false for the whole
+  transaction — since the baseline. Every guard that read it (duplicate start, the POS
+  gateway's "customer transaction in progress", the printer and Detail Report guards) was
+  asleep during the card and PIN phase; only the thread-alive backstop prevented a second
+  transaction thread. The reset no longer touches the lifecycle flag and the flag is set after
+  the reset. The now-live duplicate-start guard ignores a second auto-click quietly instead of
+  writing "ERROR" on the customer's screen. `TXN-01`
 
 ### Known issues and deferred
 
@@ -114,15 +137,13 @@ inquiry that "got a 91" and then took exactly 300 seconds to answer. It was a ta
   decide whether the contactless EMV data (Field 13) is accepted as built.
 - **Swipe has no host path** (`MSR-01`). It needs the reader's encrypted track and a PIN-block
   decision with the MUX; not in this release.
-- **PIN retry on a register-driven transaction** (`POS-14`, found during this work, **not
-  fixed**): on a first "55 Incorrect PIN" the register is told `declined 55` immediately while
-  the terminal re-prompts the PIN; if the retry is then approved, the register is never told.
-  Money can move on a sale the register shows as declined. Walk-up is unaffected.
-- **`atmTransactionInProgress` is cleared at the start of every transaction** (`TXN-01`, found
-  during this work, not fixed): the flag is set and then reset on the next line, so the guards
-  that read it do not protect the card and PIN phase. Read from code; not yet observed on a
-  terminal. The live thread check still prevents two
-  transaction threads.
+- **PIN retries and the POS watchdog.** With POS-14 the slot stays armed through PIN retries.
+  Three attempts against a very slow host (the 120–150 s busy-MUX path) could outlast the
+  300 s watchdog, which would then answer the register before the final result. Not expected
+  with the processor answering in seconds; noted for the watchdog's next review (`POS-06`).
+- **The in-progress flag is live for the first time** (`TXN-01`). Every exit of the
+  transaction thread clears it; the bench pass below checks that a walk-up leaves the terminal
+  ready for the register afterwards.
 - Two "91 / Host service not available" assignments remain for *host service not initialised*.
   They sit behind the readiness gate and are not expected to be reachable.
 - The proxy team's two requests in `CASTLE-HOST-TIMEOUT-91-2026-10-05.md` (fail fast on connect
@@ -131,8 +152,9 @@ inquiry that "got a 91" and then took exactly 300 seconds to answer. It was a ta
 
 ### Verification
 
-- Unit suite: **299** tests (37 new: Track 2 for the host ×16 including hostile input,
-  routing ×6, slot-safe local answer ×5, register wording ×10). Each new test was watched failing first. The same three
+- Unit suite: **309** tests (47 new: Track 2 for the host ×16 including hostile input,
+  routing ×6, slot-safe local answer ×5, register wording ×10, PIN retry policy ×8,
+  in-progress flag ×2). Each new test was watched failing first. The same three
   pre-existing failures remain (`TEST-01`).
 - The defect itself is on record from the terminal: a tap on 2026-09-02 logged PIN accepted,
   kernel result "go online", and the terminal's own decline in the same millisecond, with no
@@ -144,6 +166,12 @@ inquiry that "got a 91" and then took exactly 300 seconds to answer. It was a ta
   4. Abandon the PIN pad on a register transaction → `user_cancelled` within seconds.
   5. Inserted chip, walk-up and register → unchanged.
   6. A Mastercard tap as well as a Visa tap (the tag sets differ — `TAP-02`).
+  7. Register sale, wrong PIN then the right PIN → register receives **approved**, nothing
+     before it. Wrong PIN three times → `declined 55` once, after the third.
+  8. Start a walk-up, then send a POS command from the card prompt → `terminal_busy`
+     ("customer transaction in progress"); after the walk-up ends, the next command runs.
+  9. After each flow above the terminal accepts a new walk-up and a new POS command (the
+     in-progress flag was cleared).
 
 ### Upgrade notes
 

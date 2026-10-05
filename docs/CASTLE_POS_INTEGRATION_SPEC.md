@@ -468,6 +468,12 @@ answers within a few seconds of the transaction ending and accepts the next comm
 
 `display_message` carries the same reason the terminal shows on its receipt.
 
+**Incorrect PIN (`55`) is reported only as an outcome** (6.2.12+). The terminal re-prompts the
+PIN on a host `55`, up to three attempts in all. The register is not told about a `55` that
+is being retried; it receives `approved` if a retry succeeds, or `declined 55` once the
+terminal has stopped re-prompting (attempt limit reached, or the customer gave up). Before
+6.2.12 the first `55` was reported immediately and a later approval was not reported at all.
+
 Before 6.2.12 these endings sent **nothing** until a 300-second watchdog released the
 transaction slot and emitted `error host_unreachable` with a message beginning `watchdog:`;
 commands in between were refused as `terminal_busy`. The watchdog still exists as a last
