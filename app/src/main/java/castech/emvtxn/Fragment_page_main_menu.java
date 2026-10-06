@@ -45,12 +45,15 @@ public class Fragment_page_main_menu extends Fragment {
             btnWithdrawal.setOnClickListener(new View.OnClickListener() {
                 @Override
                 public void onClick(View v) {
-                    // Clear prior transaction state before starting a new flow.
-                    GlobalPara.resetATMTransactionState();
-                    GlobalPara.atmBalanceInquiryMode = false;
-                    if (mainActivity != null) {
-                        mainActivity.navigateToPage(GlobalDef.d_PAGE_AMOUNT_SELECTION);
-                    }
+                    // 6.2.11: customer disclaimer first; OK continues into the existing flow
+                    showDisclaimer(() -> {
+                        // Clear prior transaction state before starting a new flow.
+                        GlobalPara.resetATMTransactionState();
+                        GlobalPara.atmBalanceInquiryMode = false;
+                        if (mainActivity != null) {
+                            mainActivity.navigateToPage(GlobalDef.d_PAGE_AMOUNT_SELECTION);
+                        }
+                    });
                 }
             });
 
@@ -59,19 +62,22 @@ public class Fragment_page_main_menu extends Fragment {
             btnBalanceInquiry.setOnClickListener(new View.OnClickListener() {
                 @Override
                 public void onClick(View v) {
-                    // Clear prior transaction state — otherwise the adjacent
-                    // RECEIPT fragment (pre-created by ViewPager) auto-prints
-                    // the previous receipt on resume.
-                    GlobalPara.resetATMTransactionState();
-                    GlobalPara.atmBalanceInquiryMode = true;
-                    GlobalPara.atmSelectedAmount = "0.00";
-                    GlobalPara.atmFee = "0.00";
-                    GlobalPara.atmTotal = "0.00";
-                    GlobalPara.strAmount = "0"; // Amount in cents for EMV SDK
-                    GlobalPara.atmAccountType = GlobalPara.ATM_ACCOUNT_CHECKING;
-                    if (mainActivity != null) {
-                        mainActivity.navigateToPage(GlobalDef.d_PAGE_TRANSACTION);
-                    }
+                    // 6.2.11: customer disclaimer first; OK continues into the existing flow
+                    showDisclaimer(() -> {
+                        // Clear prior transaction state — otherwise the adjacent
+                        // RECEIPT fragment (pre-created by ViewPager) auto-prints
+                        // the previous receipt on resume.
+                        GlobalPara.resetATMTransactionState();
+                        GlobalPara.atmBalanceInquiryMode = true;
+                        GlobalPara.atmSelectedAmount = "0.00";
+                        GlobalPara.atmFee = "0.00";
+                        GlobalPara.atmTotal = "0.00";
+                        GlobalPara.strAmount = "0"; // Amount in cents for EMV SDK
+                        GlobalPara.atmAccountType = GlobalPara.ATM_ACCOUNT_CHECKING;
+                        if (mainActivity != null) {
+                            mainActivity.navigateToPage(GlobalDef.d_PAGE_TRANSACTION);
+                        }
+                    });
                 }
             });
 
@@ -147,6 +153,30 @@ public class Fragment_page_main_menu extends Fragment {
                     }
                 }
             }).start();
+        }
+    }
+
+    /**
+     * Customer disclaimer (6.2.11, walk-up only): "This transaction may incur additional
+     * fees from your bank…". OK is the only button and runs {@code onOk}; Cancel is plain
+     * clickable text beneath it and just closes the dialog. Not dismissable by tapping
+     * outside or by Back, so a customer must choose.
+     */
+    private void showDisclaimer(final Runnable onOk) {
+        if (getContext() == null) { onOk.run(); return; }
+        View content = LayoutInflater.from(getContext()).inflate(R.layout.dialog_disclaimer, null, false);
+        final android.app.AlertDialog dialog = new android.app.AlertDialog.Builder(getContext())
+                .setView(content)
+                .setCancelable(false)
+                .create();
+        content.findViewById(R.id.btnDisclaimerOk).setOnClickListener(v -> {
+            dialog.dismiss();
+            onOk.run();
+        });
+        content.findViewById(R.id.txvDisclaimerCancel).setOnClickListener(v -> dialog.dismiss());
+        dialog.show();
+        if (dialog.getWindow() != null) {
+            dialog.getWindow().setBackgroundDrawableResource(android.R.color.transparent);
         }
     }
 }

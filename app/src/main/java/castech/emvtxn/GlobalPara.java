@@ -237,6 +237,11 @@ public class GlobalPara
 	/** Id of the reversal record belonging to the CURRENT transaction (pre-send record); "" when none.
 	 *  Only progress messages tagged with this id may touch the receipt's reversal block. */
 	public static volatile String atmCurrentReversalId = "";
+	/** 6.2.11 journal: our STD1 sequence for the current transaction (set when the request is built). */
+	public static volatile int atmSequenceNumber = 0;
+	/** 6.2.11 journal: register-supplied clerk / invoice for a POS sale; "" for walk-up. */
+	public static volatile String atmClerkId = "";
+	public static volatile String atmInvoiceNo = "";
 
 	// Balance inquiry mode
 	public static volatile boolean atmBalanceInquiryMode = false;
@@ -295,6 +300,9 @@ public class GlobalPara
 		atmReversalInProgress = false;
 		atmReversalSent = false;
 		atmCurrentReversalId = "";
+		atmSequenceNumber = 0;
+		atmClerkId = "";
+		atmInvoiceNo = "";
 		atmIssuerAuthData = null;
 		atmIssuerScript71 = null;
 		atmIssuerScript72 = null;

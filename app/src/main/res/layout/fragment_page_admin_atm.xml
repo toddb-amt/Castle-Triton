@@ -314,7 +314,6 @@
                 android:text="Clear Transaction History"
                 android:textSize="12sp"
                 android:backgroundTint="#FF9800"
-                android:visibility="gone"
                 android:layout_marginBottom="16dp"/>
 
             <View

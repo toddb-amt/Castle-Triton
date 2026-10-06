@@ -69,6 +69,9 @@ public final class PosTransactionExecutor implements PosCommandDispatcher.Transa
         }
 
         Log.d(TAG, "POS sale flow=" + flowId + " amt=" + amount + " surcharge(advisory)=" + surcharge + " acct=" + accountType);
+        // 6.2.11 journal / Detail Report: carry the register's clerk and invoice through
+        castech.emvtxn.GlobalPara.atmClerkId = resource.optString(PosWire.TXN_CLERK_ID, "");
+        castech.emvtxn.GlobalPara.atmInvoiceNo = resource.optString(PosWire.TXN_INVOICE_NO, "");
         gateway.startSale(amount, surcharge, accountType, new TxnBridge(flowId, amount, surcharge));
     }
 

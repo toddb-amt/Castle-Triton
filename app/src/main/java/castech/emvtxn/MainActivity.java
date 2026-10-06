@@ -1625,8 +1625,101 @@ public class MainActivity extends AppCompatActivity {
      * @param response    the host totals
      * @param batchClosed true for the Close-Batch (reset) receipt, false for a query
      */
+    /** Ellipsis ▸ Detail Report (6.2.11). Same gate as Host Totals: a confirm dialog, no PIN. */
+    public void printDetailReport() {
+        // The printer shares the single-threaded SDK with the EMV flow — never while a
+        // transaction is running (review #13).
+        if (GlobalPara.atmTransactionInProgress) {
+            android.widget.Toast.makeText(this, "Transaction in progress — try again in a moment",
+                    android.widget.Toast.LENGTH_SHORT).show();
+            return;
+        }
+        new Thread(() -> {
+            final int batch;
+            final long opened;
+            final java.util.List<castech.emvtxn.atm.report.ReportRow> rows;
+            try {
+                castech.emvtxn.atm.TransactionLogManager m =
+                        castech.emvtxn.atm.TransactionLogManager.getInstance(getApplicationContext());
+                batch = m.currentBatchId();
+                opened = m.currentBatchOpenedAt();
+                rows = castech.emvtxn.atm.report.ReportRows.fromLogs(m.getTransactionsForBatch(batch));
+            } catch (Throwable t) {
+                runOnUiThread(() -> new AlertDialog.Builder(MainActivity.this).setTitle("Detail Report")
+                        .setMessage("Transaction journal unavailable: " + t.getMessage())
+                        .setPositiveButton("OK", null).show());
+                return;
+            }
+            final castech.emvtxn.atm.report.DetailReport.Summary s = castech.emvtxn.atm.report.DetailReport.summarize(rows);
+            final String text = castech.emvtxn.atm.report.DetailReport.render(
+                    new castech.emvtxn.atm.report.DetailReport.Header(batch, opened, System.currentTimeMillis(),
+                            GlobalPara.atmTerminalId), rows);
+            runOnUiThread(() -> new AlertDialog.Builder(MainActivity.this)
+                .setTitle("Print Detail Report?")
+                .setMessage("Batch " + String.format(java.util.Locale.US, "%03d", batch) + " — " + s.withdrawals
+                        + " approved withdrawal(s), $" + castech.emvtxn.Money.dollars(s.amountCents + s.feeCents + s.tipCents)
+                        + " since " + new java.text.SimpleDateFormat("MM/dd HH:mm", java.util.Locale.US).format(new java.util.Date(opened)))
+                .setPositiveButton("Print", (d, w) -> printOrShowReport(text))
+                .setNeutralButton("View", (d, w) -> showReportDialog(text))
+                .setNegativeButton("Cancel", null)
+                .show());
+        }, "DetailReport").start();
+    }
+
+    private void printOrShowReport(final String text) {
+        // Fresh paper check: the flag alone can be stale since the last receipt (review #5).
+        if (Printer == null || refreshPaperStateSafely()) {
+            showReportDialog(text);
+            return;
+        }
+        new Thread(() -> {
+            try {
+                Printer.printf(text);
+                Log.d(TAG, "Detail report printed");
+            } catch (Exception e) {
+                Log.e(TAG, "Detail report print failed: " + e.getMessage());
+                runOnUiThread(() -> showReportDialog(text));
+            }
+        }, "DetailReportPrint").start();
+    }
+
+    private void showReportDialog(String text) {
+        android.widget.TextView tv = new android.widget.TextView(this);
+        tv.setTypeface(android.graphics.Typeface.MONOSPACE);
+        tv.setTextSize(12);
+        tv.setPadding(24, 16, 24, 16);
+        tv.setText(text);
+        android.widget.ScrollView sv = new android.widget.ScrollView(this);
+        sv.addView(tv);
+        new AlertDialog.Builder(this).setTitle("Detail Report").setView(sv).setPositiveButton("Close", null).show();
+    }
+
+    /** Terminal-owned batch boundary (spec decision 2): called only after the processor accepted the reset. */
+    private int closeLocalBatchAfterHostReset() {
+        try {
+            castech.emvtxn.atm.TransactionLogManager m =
+                    castech.emvtxn.atm.TransactionLogManager.getInstance(getApplicationContext());
+            int closing = m.currentBatchId();
+            castech.emvtxn.atm.report.DetailReport.Summary s = castech.emvtxn.atm.report.DetailReport.summarize(
+                    castech.emvtxn.atm.report.ReportRows.fromLogs(m.getTransactionsForBatch(closing)));
+            m.closeCurrentBatch(s);
+            return closing;
+        } catch (Throwable t) {
+            Log.w(TAG, "local batch close skipped: " + t.getMessage());
+            return 0;
+        }
+    }
+
+    private int currentBatchIdSafe() {
+        try {
+            return castech.emvtxn.atm.TransactionLogManager.getInstance(getApplicationContext()).currentBatchId();
+        } catch (Throwable t) {
+            return 0;
+        }
+    }
+
     private void printHostTotalsReceipt(final castech.emvtxn.atm.host.HostTotalsResponse response,
-            final boolean batchClosed) {
+            final boolean batchClosed, final int batchId) {
         if (Printer == null) {
             Log.e(TAG, "Printer not available for host totals receipt");
             return;
@@ -1645,6 +1738,8 @@ public class MainActivity extends AppCompatActivity {
         java.text.SimpleDateFormat sdf =
                 new java.text.SimpleDateFormat("MM/dd/yyyy HH:mm:ss", java.util.Locale.US);
         r.append("Date: ").append(sdf.format(new java.util.Date())).append("\n");
+        // 6.2.11: terminal-owned batch number, so this paper matches the Detail Report
+        if (batchId > 0) r.append("Batch #: ").append(String.format(java.util.Locale.US, "%03d", batchId)).append("\n");
         String terminalId = response.getTerminalId();
         if (terminalId != null && !terminalId.isEmpty()) {
             r.append("Terminal: ").append(terminalId).append("\n");
@@ -1963,6 +2058,10 @@ public class MainActivity extends AppCompatActivity {
         } else if (id == R.id.action_host_totals) {
             // Request Host Totals from processor
             requestHostTotals();
+            return true;
+        } else if (id == R.id.action_detail_report) {
+            // 6.2.11: print the current batch's Detail Report (same gate as Host Totals)
+            printDetailReport();
             return true;
         }
 
@@ -2324,13 +2423,13 @@ public class MainActivity extends AppCompatActivity {
 
                     if (response.isSuccess()) {
                         // Print the totals, then show them in a dialog.
-                        printHostTotalsReceipt(response, false);
+                        printHostTotalsReceipt(response, false, currentBatchIdSafe());
                         new AlertDialog.Builder(MainActivity.this)
                             .setTitle("Host Totals")
                             .setMessage(response.getSummary())
                             .setPositiveButton("OK", null)
                             .setNeutralButton("Reprint", (dialog, which) -> {
-                                printHostTotalsReceipt(response, false);
+                                printHostTotalsReceipt(response, false, currentBatchIdSafe());
                             })
                             .setNegativeButton("Close Batch", (dialog, which) -> {
                                 // Request totals with reset flag (closes batch on processor)
@@ -2384,7 +2483,10 @@ public class MainActivity extends AppCompatActivity {
                             if (response.isSuccess()) {
                                 // Print batch close receipt on background thread to avoid ANR
                                 new Thread(() -> {
-                                    printHostTotalsReceipt(response, true);
+                                    // 6.2.11: the processor accepted the reset → close the local batch,
+                                    // print its number on the Close Batch receipt
+                                    final int closedBatch = closeLocalBatchAfterHostReset();
+                                    printHostTotalsReceipt(response, true, closedBatch);
                                     runOnUiThread(() -> {
                                         new AlertDialog.Builder(MainActivity.this)
                                             .setTitle("Batch Closed")
@@ -4897,6 +4999,9 @@ public class MainActivity extends AppCompatActivity {
                     // POS-armed slot (exactly-once; no-op otherwise). An APPROVAL always
                     // takes the receipt path below, cancelled or not: money moved.
                     Log.d(TAG, "Transaction cancelled — returning to main menu");
+                    // 6.2.11 journal: cancelled before/without a host answer (never throws)
+                    castech.emvtxn.atm.TransactionJournal.record(getApplicationContext(),
+                            castech.emvtxn.atm.JournalOutcome.cancelled(GlobalPara.atmBalanceInquiryMode));
                     castech.emvtxn.pos.PosTransactionObserver.notifyDeclined(
                             "user_cancelled", "cancelled at terminal", false);
                     runOnUiThread(new Runnable() {
@@ -4911,6 +5016,10 @@ public class MainActivity extends AppCompatActivity {
                     // ATM Mode (withdrawal with amount > 0, or balance inquiry):
                     // mark transaction as complete and navigate to receipt
                     GlobalPara.atmTransactionComplete = true;
+                    // 6.2.11 journal: one row per finished transaction (approved / declined / BI),
+                    // walk-up and POS alike; never throws
+                    castech.emvtxn.atm.TransactionJournal.record(getApplicationContext(),
+                            castech.emvtxn.atm.JournalOutcome.fromGlobalPara());
 
                     // Small delay before navigating to receipt
                     MyUtility.sleep(1000);
