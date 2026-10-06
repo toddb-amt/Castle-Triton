@@ -157,22 +157,36 @@ public final class AtmHostServiceGateway implements PosTerminalGateway {
         // fragment's writes.
         GlobalPara.atmBalanceInquiryMode = balanceInquiry;
         GlobalPara.atmAccountType = acctTypeCode;
+        final long appliedSurchargeCents;
+        final long appliedTotalCents;
         if (balanceInquiry) {
+            appliedSurchargeCents = 0L;
+            appliedTotalCents = 0L;
             GlobalPara.atmSelectedAmount = "0.00";
             GlobalPara.atmFee = "0.00";
             GlobalPara.atmTotal = "0.00";
             GlobalPara.strAmount = "0";
         } else {
-            double dollars = amountCents / 100.0;
-            double surchargeDollars = surchargeCents / 100.0;
-            GlobalPara.atmSelectedAmount = String.format(java.util.Locale.US, "%.2f", dollars);
-            GlobalPara.atmFee = String.format(java.util.Locale.US, "%.2f", surchargeDollars);
-            GlobalPara.atmTotal = String.format(java.util.Locale.US, "%.2f", dollars + surchargeDollars);
-            GlobalPara.strAmount = Long.toString(amountCents);
+            // D7: the surcharge is the terminal's (fee configuration), exactly as for a
+            // walk-up. The register's "surcharge" is advisory only. Chip amount = total,
+            // like a walk-up (closes EMV-01).
+            PosSaleFee fee = PosSaleFee.resolve(amountCents, surchargeCents,
+                    GlobalPara.atmUseFlatFee, GlobalPara.atmFlatFeeAmount, GlobalPara.atmPercentageFee);
+            if (fee.posSurchargeDiffers()) {
+                Log.w(TAG, "POS sent surcharge=" + surchargeCents + " cents; terminal fee config governs: "
+                        + fee.feeCents + " cents (reply carries the applied value)");
+            }
+            appliedSurchargeCents = fee.feeCents;
+            appliedTotalCents = fee.totalCents;
+            GlobalPara.atmSelectedAmount = castech.emvtxn.Money.dollars(fee.amountCents);
+            GlobalPara.atmFee = castech.emvtxn.Money.dollars(fee.feeCents);
+            GlobalPara.atmTotal = castech.emvtxn.Money.dollars(fee.totalCents);
+            GlobalPara.strAmount = fee.chipAmountCents();
         }
 
         Log.d(TAG, "POS txn arming: balanceInquiry=" + balanceInquiry
-                + " amt=" + amountCents + " surcharge=" + surchargeCents + " acct=" + acctTypeCode);
+                + " amt=" + amountCents + " surcharge(applied)=" + appliedSurchargeCents
+                + " total=" + appliedTotalCents + " acct=" + acctTypeCode);
 
         // Arm the observer. The bridge below fires the executor's TransactionCallback
         // when the existing listener path completes.
@@ -183,7 +197,8 @@ public final class AtmHostServiceGateway implements PosTerminalGateway {
                                     long acctBal, long availBal, String displayMessage) {
                 callback.onApproved(new PosTerminalGateway.TransactionResult(
                         responseCode, referenceNumber, /* authCode */ "",
-                        authDate, authTime, acctBal, availBal, displayMessage));
+                        authDate, authTime, acctBal, availBal, displayMessage,
+                        appliedSurchargeCents, appliedTotalCents));
             }
             @Override
             public void onDeclined(String responseCode, String responseMessage, boolean retainCard) {

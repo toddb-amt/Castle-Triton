@@ -146,12 +146,13 @@ public class Fragment_page_transaction extends Fragment
 				if (edtAmount != null) {
 					// Convert dollars to cents for SDK
 					try {
-						double amount = Double.parseDouble(GlobalPara.atmTotal);
-						int cents = (int) (amount * 100);
+						long cents = Money.toCents(Double.parseDouble(GlobalPara.atmTotal));
 						edtAmount.setText(String.valueOf(cents));
 						GlobalPara.strAmount = String.valueOf(cents);
 					} catch (Exception e) {
-						edtAmount.setText("1000");
+						// Never a phantom amount: "1000" here used to become the chip amount of
+						// a balance inquiry when this view was pre-created by the ViewPager (BI-01).
+						edtAmount.setText("0");
 					}
 				}
 			}

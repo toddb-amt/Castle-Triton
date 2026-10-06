@@ -29,14 +29,19 @@ public class PosTransactionExecutorTest {
 
     // ---- sale: happy paths ----------------------------------------------------
 
+    /**
+     * D7: the reply reports the surcharge the TERMINAL applied (from its fee configuration,
+     * carried in the gateway's result) and the total — never the register's advisory value.
+     */
     @Test
     public void approvedSaleBuildsApprovedResponseEnvelope() throws Exception {
         gateway.nextSaleResult = (cb) -> cb.onApproved(new PosTerminalGateway.TransactionResult(
                 "00", "RRN12345", "AUTH99",
                 "2026/05/20", "14:30:00",
-                12345L, 12000L, "APPROVED"));
+                12345L, 12000L, "APPROVED",
+                /* applied by the terminal */ 350L, 5350L));
 
-        PosEnvelope req = saleRequest(5000, 100, "checking");
+        PosEnvelope req = saleRequest(5000, 100, "checking");   // register says 100 — advisory
         exec.onSale(req.getFlowId(), req.getResource());
 
         assertEquals(1, sender.sent.size());
@@ -53,7 +58,8 @@ public class PosTransactionExecutorTest {
         assertEquals(12345L, r.getLong(PosWire.RSP_ACCOUNT_BALANCE_CENTS));
         assertEquals(12000L, r.getLong(PosWire.RSP_AVAILABLE_BALANCE_CENTS));
         assertEquals(5000L,  r.getLong(PosWire.TXN_AMOUNT));
-        assertEquals(100L,   r.getLong(PosWire.TXN_SURCHARGE));
+        assertEquals(350L,   r.getLong(PosWire.TXN_SURCHARGE));   // terminal's fee, not 100
+        assertEquals(5350L,  r.getLong(PosWire.RSP_TOTAL_CENTS));
     }
 
     @Test
