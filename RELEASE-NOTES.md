@@ -159,19 +159,23 @@ inquiry that "got a 91" and then took exactly 300 seconds to answer. It was a ta
 - The defect itself is on record from the terminal: a tap on 2026-09-02 logged PIN accepted,
   kernel result "go online", and the terminal's own decline in the same millisecond, with no
   host connection.
-- **Not yet run on a terminal.** Bench pass required before this ships:
-  1. Tap, walk-up balance inquiry and withdrawal → processor answers; receipt last-4 correct.
-  2. Tap from the register (balance inquiry and sale) → register receives the host result.
-  3. Swipe from the register → `declined MSR_NA` within seconds; next POS command accepted.
-  4. Abandon the PIN pad on a register transaction → `user_cancelled` within seconds.
-  5. Inserted chip, walk-up and register → unchanged.
-  6. A Mastercard tap as well as a Visa tap (the tag sets differ — `TAP-02`).
-  7. Register sale, wrong PIN then the right PIN → register receives **approved**, nothing
-     before it. Wrong PIN three times → `declined 55` once, after the third.
-  8. Start a walk-up, then send a POS command from the card prompt → `terminal_busy`
-     ("customer transaction in progress"); after the walk-up ends, the next command runs.
-  9. After each flow above the terminal accepts a new walk-up and a new POS command (the
-     in-progress flag was cleared).
+- **Device pass 2026-10-05, terminal 000195250201680, debug build of this branch, EFX live:**
+  - Register-driven **tap balance inquiry**: route `CONTACTLESS_HOST`, Track 2 40 bytes in /
+    39 characters out (LRC dropped), Field 13 with 9F39 = 07, EFX approved 00 with the balance
+    1.4 s after connect, register answered 8 s after its request, journal row written, receipt
+    last-4 matches the card. The first tap this app has ever sent to a processor.
+  - Register-driven **tap sale** $10.00: terminal fee $3.50 applied, chip amount $13.50, EFX
+    approved with a reference number, register reply carries the applied fee, journal row
+    written, receipt printed with matching amounts.
+  - Both transactions shared the one register slot correctly: no late answer, no watchdog.
+  - No errors or warnings in the log between or after the tests; the six-minute health checks
+    ran as before.
+- **Not exercised on a terminal before shipping** (shipped on the user's call with the above):
+  a walk-up tap from the terminal menu (same card and host path as the register flows; only
+  the amount entry differs); swipe from the register (`MSR_NA`); abandoning the PIN pad
+  (`user_cancelled`); an inserted chip as a regression check; wrong PIN then right PIN on a
+  register sale (`POS-14`); a POS command during a walk-up (`terminal_busy`, `TXN-01`); a
+  Mastercard tap (`TAP-02`). Run these on the next bench session; an inserted chip first.
 
 ### Upgrade notes
 
