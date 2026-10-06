@@ -120,7 +120,9 @@ public final class CasHubParams {
      * entry. Recognized JSON keys mirror KmsConfigStore: host_address, host_port,
      * terminal_id, processor_type, protocol_type, use_flat_fee, flat_fee,
      * percentage_fee, min_amount, max_amount — plus the POS-mode keys pos_enabled,
-     * pos_proxy_url, pos_terminal_access_key (see {@link #applyToConfigDetailed}).
+     * pos_proxy_url, pos_terminal_access_key (see {@link #applyToConfigDetailed}) and,
+     * since 6.2.10, the cellular APN keys apn, apn_name, apn_user, apn_password,
+     * apn_auth_type, apn_protocol (see {@link castech.emvtxn.net.ApnParams}).
      *
      * @return true if at least one parameter row was found and applied
      */
@@ -176,10 +178,22 @@ public final class CasHubParams {
                         + " credentials=" + posDiff.credentialsChanged + ")" : " (unchanged)"));
         }
 
+        // APN keys (6.2.10) → Castle settings service, apply-and-report on a worker thread
+        castech.emvtxn.net.ApnParams apn = castech.emvtxn.net.ApnParams.parse(merged);
+        if (!apn.isEmpty()) {
+            for (String problem : apn.problems) {
+                Log.w(TAG, "CasHUB APN param ignored — " + problem);
+            }
+            if (apn.isActionable()) {
+                Log.w(TAG, "CasHUB APN param: " + apn.describe());
+                castech.emvtxn.net.ApnApplier.applyIfChangedAsync(ctx, apn);
+            }
+        }
         // Everything else → the host-config mapping
         StringBuilder payload = new StringBuilder();
         for (java.util.Map.Entry<String, String> e : merged.entrySet()) {
             if (castech.emvtxn.pos.PosParams.KEYS.contains(e.getKey())) continue;
+            if (castech.emvtxn.net.ApnParams.KEYS.contains(e.getKey())) continue;
             payload.append(e.getKey()).append('=').append(e.getValue()).append('\n');
         }
         KmsConfigStore.applyPayload(payload.toString());
@@ -272,6 +286,7 @@ public final class CasHubParams {
                             v = "<non-string type>";
                         }
                         if (v != null) v = castech.emvtxn.pos.PosParams.maskForLog(v);   // never log the access key
+                        if (v != null) v = castech.emvtxn.net.ApnParams.maskForLog(v);   // nor the APN password
                         if (v != null && v.length() > 300) v = v.substring(0, 300) + "...(" + v.length() + ")";
                         sb.append(c.getColumnName(i)).append('=').append(v).append(" | ");
                     }

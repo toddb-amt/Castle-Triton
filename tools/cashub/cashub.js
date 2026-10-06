@@ -41,6 +41,9 @@ const RECOGNIZED_KEYS = new Set([
   // key is a bearer credential — the app never logs it; keep manifests off
   // shared drives.
   'pos_enabled', 'pos_proxy_url', 'pos_terminal_access_key',
+  // Cellular APN (6.2.10+): applied through Castle's settings service. The
+  // password is a credential — the app never logs it; keep manifests private.
+  'apn', 'apn_name', 'apn_user', 'apn_password', 'apn_auth_type', 'apn_protocol',
 ]);
 
 // CasHubParams merges terminal rows first, merchant rows second, LAST WINS —

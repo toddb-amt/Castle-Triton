@@ -48,6 +48,72 @@ Template:
 
 ---
 
+## 6.2.10 — 2026-10-01 · PR #6 · base 6.2.9 · versionCode 72
+
+### Highlights
+
+**Cellular support, managed from CasHUB.** A terminal with a SIM already transacts over LTE
+with no app change (verified 2026-10-01 on an AT&T SIM: key download, POS and host traffic
+over cellular). What 6.2.10 adds is the operability around it: the **APN can be pushed as a
+CasHUB parameter** through Castle's settings service, the Admin screen gets a **Network card**
+showing what the terminal is actually using, and the status strip stops showing a frightening
+0% when the OS reports no battery.
+
+### What operators and customers will notice
+
+- **CasHUB keys** `apn` (required), `apn_name`, `apn_user`, `apn_password`, `apn_auth_type`,
+  `apn_protocol`. Same rules as every other key: absent means untouched, a bad value is logged
+  and ignored, applied at boot and live on a push. Apply-and-report, no automatic rollback
+  (decision D9): units are provisioned on WiFi and a SIM unit keeps WiFi alongside, so a wrong
+  APN is always correctable from CasHUB.
+- **Admin → Network** (read-only): transport in use (WiFi / Cellular / none, with "no
+  internet" when unvalidated), SIM carrier, registered network, data state, signal bars, APN
+  in use, the last CasHUB APN push and its outcome with time, and "Battery: NOT PRESENT"
+  when the OS says so.
+- **Status strip** shows "No batt" instead of 0% when the OS reports no battery present.
+- **Admin → WiFi Configuration:** Connect WiFi and Refresh Status are stacked and the same
+  size; a **WiFi on/off toggle** sits beside Connect. The toggle shows the radio's real state,
+  switches it through Castle's settings service, and asks first when WiFi is the terminal's
+  only connection (no cellular data), since turning it off takes the unit offline.
+
+### Fixes / changes
+
+**Admin (`ADM-08`)**
+- WiFi section rearranged as above; the toggle snaps back and toasts if the settings service
+  refuses; both tiers.
+
+**Network (`NET-01`, `NET-02`, `NET-03`)**
+- `net/ApnParams` (pure, tested first) parses and validates the keys; the password is masked
+  in every diagnostic dump and never logged.
+- `net/ApnApplier` reads the current APN from `CTOS.CtSettings`, skips when nothing material
+  differs, otherwise writes the entry for the SIM's MCC/MNC (`setApn3`, falling back to
+  `setApn`), selects it and enables mobile data; outcome persisted and logged as
+  `APN apply applied|unchanged|failed: …`.
+- `CasHubParams` routes the keys to the applier and keeps them out of the host-config
+  payload and the KMS-II backup.
+
+### Known issues and deferred
+
+- The first APN on a cellular-only unit must still be set at staging (CasHUB cannot deliver
+  the parameter to a terminal with no connectivity). Deployment note.
+- Registration reject cause is not shown on the card (needs `READ_PHONE_STATE`, a runtime
+  grant); the Data state line is the practical signal.
+
+### Verification
+
+- `ApnParamsTest` (9) — written before the class: defaults, full set, auth/protocol fallbacks,
+  blank/illegal APN, other keys without `apn`, change detection, masking.
+- Full suite 241 tests; the 3 pre-existing `TEST-01` failures only.
+- Device: pending — on the AT&T unit: push `apn=BROADBAND` → log `APN apply unchanged`;
+  push `apn_protocol=IPV4V6` → `setApn3 rc=…`, `APN apply applied`, LTE data still connected;
+  Network card shows Cellular / AT&T / connected / APN in use; strip shows "No batt" while the
+  pack is out; WiFi toggle off (confirm shown with the SIM out, no confirm with LTE up) and on
+  again, Connect and Refresh the same width.
+
+### Upgrade notes
+
+- Installs in place over 6.2.9. WiFi-only terminals are unaffected.
+
 ## 6.2.9 — 2026-09-30 · PR #5 · base 6.2.8 · versionCode 71
 
 ### Highlights

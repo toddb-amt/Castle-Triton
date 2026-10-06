@@ -140,6 +140,40 @@
                 android:background="#CCCCCC"
                 android:layout_marginBottom="16dp"/>
 
+            <!-- Network Section (6.2.10): transport in use, SIM/carrier, APN, registration — read-only -->
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:id="@+id/hdrNetwork"
+                android:text="Network"
+                android:textSize="18sp"
+                android:textStyle="bold"
+                android:textColor="@color/colorPrimary"
+                android:paddingBottom="8dp"/>
+
+            <TextView
+                android:id="@+id/txvNetwork"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Reading network state…"
+                android:textSize="14sp"
+                android:textColor="#333333"
+                android:paddingBottom="4dp"/>
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="APN managed centrally via CasHUB (apn, apn_name, apn_user, apn_password, apn_auth_type, apn_protocol)"
+                android:textSize="12sp"
+                android:textColor="#888888"
+                android:paddingBottom="16dp"/>
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:background="#CCCCCC"
+                android:layout_marginBottom="16dp"/>
+
             <!-- Host Settings Section (CasHUB-managed, read-only since 6.2.9).
                  Shows the processor CODE (never its name) and the port — never the host
                  address. The only action left is Request New Working Key. -->
@@ -383,11 +417,14 @@
                     android:spinnerMode="dropdown"/>
             </LinearLayout>
 
+            <!-- Row 1: Connect WiFi + WiFi power toggle (6.2.10). Row 2: Refresh Status with a
+                 spacer the width of the toggle, so both buttons are exactly the same size. -->
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="horizontal"
-                android:layout_marginBottom="16dp">
+                android:gravity="center_vertical"
+                android:paddingBottom="4dp">
 
                 <Button
                     android:id="@+id/btnWifiConnect"
@@ -395,8 +432,24 @@
                     android:layout_weight="1"
                     android:layout_height="wrap_content"
                     android:text="Connect WiFi"
-                    android:textSize="16sp"
+                    android:textSize="14sp"
                     android:layout_marginEnd="8dp"/>
+
+                <Switch
+                    android:id="@+id/swWifiPower"
+                    android:layout_width="120dp"
+                    android:layout_height="wrap_content"
+                    android:text="WiFi"
+                    android:textSize="14sp"
+                    android:gravity="center_vertical"/>
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:paddingBottom="8dp">
 
                 <Button
                     android:id="@+id/btnWifiStatus"
@@ -404,7 +457,12 @@
                     android:layout_weight="1"
                     android:layout_height="wrap_content"
                     android:text="Refresh Status"
-                    android:textSize="16sp"/>
+                    android:textSize="14sp"
+                    android:layout_marginEnd="8dp"/>
+
+                <View
+                    android:layout_width="120dp"
+                    android:layout_height="1dp"/>
             </LinearLayout>
 
             <View
