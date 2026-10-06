@@ -9,14 +9,10 @@ import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.LinearLayout;
-import android.widget.RadioButton;
-import android.widget.RadioGroup;
-import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -66,33 +62,20 @@ public class Fragment_page_admin_atm extends Fragment {
     private boolean isUserVisible = false;  // Track actual user visibility from setMenuVisibility
 
     // UI Elements - Fee Configuration
-    private RadioGroup rgFeeType;
-    private RadioButton rbFlatFee;
-    private RadioButton rbPercentageFee;
-    private LinearLayout layoutFlatFee;
-    private LinearLayout layoutPercentageFee;
-    private EditText edtFlatFee;
-    private EditText edtPercentageFee;
 
     // UI Elements - Withdrawal Limits
-    private EditText edtMinAmount;
-    private EditText edtMaxAmount;
 
     // UI Elements - Host Settings
-    private Spinner spinnerProcessorType;
-    private Spinner spinnerProtocolType;
-    private EditText edtHostAddress;
-    private EditText edtHostPort;
-    private EditText edtTerminalId;
-    private android.widget.CheckBox chkUseTls;
     private TextView txvHostStatus;
+    // Fee / limits / host are CasHUB-managed since 6.2.9: read-only text, no inputs.
+    private TextView txvFeeConfig;
+    private TextView txvLimits;
+    private TextView txvHostConfig;
 
     // UI Elements - Terminal Info
     private TextView txvTerminalInfo;
 
     // UI Elements - Buttons
-    private Button btnTestConnection;
-    private Button btnDownloadKeys;
     private Button btnRequestNewKey;
     private Button btnTestPrinter;
 
@@ -122,7 +105,6 @@ public class Fragment_page_admin_atm extends Fragment {
     private castech.emvtxn.pos.PosConfig posConfig;
 
     // Processor list
-    private List<String> processorList = new ArrayList<>();
 
     // UI Elements - Kiosk Mode
     private android.widget.Switch switchKioskMode;
@@ -236,34 +218,16 @@ public class Fragment_page_admin_atm extends Fragment {
     }
 
     private void initializeViews() {
-        // Fee Configuration
-        rgFeeType = rootView.findViewById(R.id.rgFeeType);
-        rbFlatFee = rootView.findViewById(R.id.rbFlatFee);
-        rbPercentageFee = rootView.findViewById(R.id.rbPercentageFee);
-        layoutFlatFee = rootView.findViewById(R.id.layoutFlatFee);
-        layoutPercentageFee = rootView.findViewById(R.id.layoutPercentageFee);
-        edtFlatFee = rootView.findViewById(R.id.edtFlatFee);
-        edtPercentageFee = rootView.findViewById(R.id.edtPercentageFee);
-
-        // Withdrawal Limits
-        edtMinAmount = rootView.findViewById(R.id.edtMinAmount);
-        edtMaxAmount = rootView.findViewById(R.id.edtMaxAmount);
-
-        // Host Settings
-        spinnerProcessorType = rootView.findViewById(R.id.spinnerProcessorType);
-        spinnerProtocolType = rootView.findViewById(R.id.spinnerProtocolType);
-        edtHostAddress = rootView.findViewById(R.id.edtHostAddress);
-        edtHostPort = rootView.findViewById(R.id.edtHostPort);
-        edtTerminalId = rootView.findViewById(R.id.edtTerminalId);
-        chkUseTls = rootView.findViewById(R.id.chkUseTls);
+        // Fee / limits / host: CasHUB-managed, read-only (6.2.9)
+        txvFeeConfig = rootView.findViewById(R.id.txvFeeConfig);
+        txvLimits = rootView.findViewById(R.id.txvLimits);
+        txvHostConfig = rootView.findViewById(R.id.txvHostConfig);
         txvHostStatus = rootView.findViewById(R.id.txvHostStatus);
 
         // Terminal Info
         txvTerminalInfo = rootView.findViewById(R.id.txvTerminalInfo);
 
         // Buttons
-        btnTestConnection = rootView.findViewById(R.id.btnTestConnection);
-        btnDownloadKeys = rootView.findViewById(R.id.btnDownloadKeys);
         btnRequestNewKey = rootView.findViewById(R.id.btnRequestNewKey);
         btnTestPrinter = rootView.findViewById(R.id.btnTestPrinter);
         btnTestCardReader = rootView.findViewById(R.id.btnTestCardReader);
@@ -299,10 +263,6 @@ public class Fragment_page_admin_atm extends Fragment {
         btnWifiStatus = rootView.findViewById(R.id.btnWifiStatus);
         btnWifiScan = rootView.findViewById(R.id.btnWifiScan);
         setupWifiSection();
-
-        // Setup processor and protocol spinners
-        setupProcessorSpinner();
-        setupProtocolSpinner();
     }
 
     // ==================== WiFi Configuration ====================
@@ -624,65 +584,8 @@ public class Fragment_page_admin_atm extends Fragment {
         }
     }
 
-    private void setupProcessorSpinner() {
-        // Default processor list - will be replaced by remote config
-        processorList.clear();
-        processorList.add("Select Processor...");
-        processorList.add("EFX Financial");
-        processorList.add("DNS Payment Network");
-        processorList.add("Switch Commerce");
-        processorList.add("FIS");
-        processorList.add("Cardtronics");
-
-        ArrayAdapter<String> adapter = new ArrayAdapter<>(
-            getContext(),
-            android.R.layout.simple_spinner_item,
-            processorList
-        );
-        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        spinnerProcessorType.setAdapter(adapter);
-    }
-
-    private void setupProtocolSpinner() {
-        List<String> protocolList = new ArrayList<>();
-        protocolList.add("Hyosung STD1");
-        protocolList.add("Triton Standard");
-
-        ArrayAdapter<String> adapter = new ArrayAdapter<>(
-            getContext(),
-            android.R.layout.simple_spinner_item,
-            protocolList
-        );
-        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        spinnerProtocolType.setAdapter(adapter);
-
-        // Set current selection based on GlobalPara
-        if ("TRITON".equals(GlobalPara.atmProtocolType)) {
-            spinnerProtocolType.setSelection(1);
-        } else {
-            spinnerProtocolType.setSelection(0);
-        }
-    }
-
     private void setupListeners() {
-        // Fee type radio group
-        rgFeeType.setOnCheckedChangeListener((group, checkedId) -> {
-            if (checkedId == R.id.rbFlatFee) {
-                layoutFlatFee.setVisibility(View.VISIBLE);
-                layoutPercentageFee.setVisibility(View.GONE);
-            } else {
-                layoutFlatFee.setVisibility(View.GONE);
-                layoutPercentageFee.setVisibility(View.VISIBLE);
-            }
-        });
-
-        // Test Connection button
-        btnTestConnection.setOnClickListener(v -> testConnection());
-
-        // Download Keys button
-        btnDownloadKeys.setOnClickListener(v -> downloadKeys());
-
-        // Request New Key button
+        // Request New Key button (the only host action left on the terminal, 6.2.9)
         btnRequestNewKey.setOnClickListener(v -> requestNewWorkingKey());
 
         // Test Printer button
@@ -830,11 +733,13 @@ public class Fragment_page_admin_atm extends Fragment {
         if (rootView == null) return;
         boolean sup = (tier == ACCESS_SUPER);
 
-        // Super-only sections — greyed out + disabled for Normal Admin (still visible)
-        setSectionEnabled(R.id.hdrFeeConfig,    R.id.hdrWithdrawal,   sup);
-        setSectionEnabled(R.id.hdrWithdrawal,   R.id.hdrTerminalInfo, sup);
-        setSectionEnabled(R.id.hdrTerminalInfo, R.id.hdrHostSettings, sup);
-        setSectionEnabled(R.id.hdrHostSettings, R.id.hdrReversal,     sup);
+        // Fee / limits / terminal info / host are CasHUB-managed read-only text since
+        // 6.2.9 — readable by both tiers; the only control there (Request New Working
+        // Key) is for both tiers.
+        setSectionEnabled(R.id.hdrFeeConfig,    R.id.hdrWithdrawal,   true);
+        setSectionEnabled(R.id.hdrWithdrawal,   R.id.hdrTerminalInfo, true);
+        setSectionEnabled(R.id.hdrTerminalInfo, R.id.hdrHostSettings, true);
+        setSectionEnabled(R.id.hdrHostSettings, R.id.hdrReversal,     true);
         // Normal-admin sections — always active once authenticated
         setSectionEnabled(R.id.hdrReversal,     R.id.hdrHistory,      true);
         setSectionEnabled(R.id.hdrHistory,      R.id.hdrWifi,         true);
@@ -849,10 +754,8 @@ public class Fragment_page_admin_atm extends Fragment {
         setViewEnabledDimmed(rootView.findViewById(R.id.btnClearHistory), sup);
         updateReversalStatus();
 
-        // "Request New Working Key" is available to BOTH tiers even though it
-        // sits in the (otherwise Super-only) Host Settings section — a field tech
-        // may need to re-request a key. Re-enable it after the section pass.
         setViewEnabledDimmed(rootView.findViewById(R.id.btnRequestNewKey), true);
+        renderManagedConfig();
     }
 
     /**
@@ -978,71 +881,12 @@ public class Fragment_page_admin_atm extends Fragment {
             prefs = getContext().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
         }
 
-        // Fee settings - prefer GlobalPara if already loaded by MainActivity
-        boolean isFlatFee = GlobalPara.atmUseFlatFee; // Use GlobalPara (loaded on startup)
-        if (isFlatFee) {
-            rbFlatFee.setChecked(true);
-            layoutFlatFee.setVisibility(View.VISIBLE);
-            layoutPercentageFee.setVisibility(View.GONE);
-        } else {
-            rbPercentageFee.setChecked(true);
-            layoutFlatFee.setVisibility(View.GONE);
-            layoutPercentageFee.setVisibility(View.VISIBLE);
-        }
+        // 6.2.9: fee, limit and host values are CasHUB-managed — shown read-only, never
+        // written from this screen.
+        renderManagedConfig();
 
-        // Prefer GlobalPara values if they've been set (non-default)
-        if (GlobalPara.atmFlatFeeAmount > 0) {
-            edtFlatFee.setText(String.format("%.2f", GlobalPara.atmFlatFeeAmount));
-            edtPercentageFee.setText(String.format("%.1f", GlobalPara.atmPercentageFee));
-        } else {
-            edtFlatFee.setText(prefs.getString("fee_flat_amount", "3.00"));
-            edtPercentageFee.setText(prefs.getString("fee_percentage", "0.0"));
-        }
-
-        // Withdrawal limits - prefer GlobalPara if already loaded by MainActivity
-        if (GlobalPara.atmMinAmount > 0) {
-            edtMinAmount.setText(String.format("%.2f", GlobalPara.atmMinAmount));
-            edtMaxAmount.setText(String.format("%.2f", GlobalPara.atmMaxAmount));
-        } else {
-            edtMinAmount.setText(prefs.getString("limit_min", "20.00"));
-            edtMaxAmount.setText(prefs.getString("limit_max", "500.00"));
-        }
-
-        // Host settings - prefer GlobalPara if already loaded by MainActivity
-        if (GlobalPara.atmHostAddress != null && !GlobalPara.atmHostAddress.isEmpty()) {
-            Log.d(TAG, "Using GlobalPara values (loaded on startup)");
-            // Set processor spinner based on GlobalPara.atmProcessorType
-            int processorIndex = getSpinnerIndexFromProcessorType(GlobalPara.atmProcessorType);
-            if (processorIndex >= 0 && processorIndex < spinnerProcessorType.getCount()) {
-                spinnerProcessorType.setSelection(processorIndex);
-            }
-            edtHostAddress.setText(GlobalPara.atmHostAddress);
-            edtHostPort.setText(String.valueOf(GlobalPara.atmHostPort));
-            edtTerminalId.setText(GlobalPara.atmTerminalId);
-        } else {
-            Log.d(TAG, "Using SharedPreferences values (first run or no settings)");
-            int processorIndex = prefs.getInt("processor_index", 0);
-            if (processorIndex < spinnerProcessorType.getCount()) {
-                spinnerProcessorType.setSelection(processorIndex);
-            }
-            // Load protocol selection
-            int protocolIndex = prefs.getInt("protocol_index", 0);
-            if (protocolIndex < spinnerProtocolType.getCount()) {
-                spinnerProtocolType.setSelection(protocolIndex);
-            }
-            // Apply protocol type to GlobalPara immediately
-            GlobalPara.atmProtocolType = protocolIndex == 1 ? "TRITON" : "HYOSUNG";
-
-            edtHostAddress.setText(prefs.getString("host_address", ""));
-            edtHostPort.setText(prefs.getString("host_port", "9057"));
-            edtTerminalId.setText(prefs.getString("terminal_id", ""));
-        }
-
-        if (chkUseTls != null) {
-            chkUseTls.setChecked(prefs.getBoolean("use_tls", true));
-        }
-
-        // PIN encryption settings — key location depends on protocol
+        // PIN encryption settings — key location depends on protocol (the protocol itself
+        // comes from CasHUB's protocol_type; default HYOSUNG)
         GlobalPara.atmPinBlockFormat = prefs.getString("pin_block_format", "FORMAT0");
 
         // Build flavor determines DUKPT vs MKSK; key location depends on protocol
@@ -1059,9 +903,37 @@ public class Fragment_page_admin_atm extends Fragment {
         Log.d(TAG, "Loaded PIN settings (" + GlobalPara.atmProtocolType + "/" +
                    BuildConfig.KEY_MODE + "): key=" +
                    String.format("0x%04X/0x%04X", GlobalPara.atmDukptKeySet, GlobalPara.atmDukptKeyIndex));
+    }
 
-        // Also update GlobalPara
-        updateGlobalPara();
+    /**
+     * Renders the CasHUB-managed values read-only (6.2.9): processor as a CODE (never its
+     * name), the port but never the host address, the terminal ID in full (field techs
+     * quote it to the processor).
+     */
+    private void renderManagedConfig() {
+        if (txvFeeConfig != null) {
+            String fee = GlobalPara.atmUseFlatFee
+                    ? "Flat fee: $" + Money.dollars(Money.toCents(GlobalPara.atmFlatFeeAmount))
+                    : "Percentage fee: " + String.format(java.util.Locale.US, "%.2f", GlobalPara.atmPercentageFee) + " %";
+            txvFeeConfig.setText(fee);
+        }
+        if (txvLimits != null) {
+            txvLimits.setText("Minimum: $" + Money.dollars(Money.toCents(GlobalPara.atmMinAmount))
+                    + "  ·  Maximum: $" + Money.dollars(Money.toCents(GlobalPara.atmMaxAmount)));
+        }
+        if (txvHostConfig != null) {
+            boolean configured = GlobalPara.atmHostAddress != null && !GlobalPara.atmHostAddress.trim().isEmpty()
+                    && GlobalPara.atmTerminalId != null && !GlobalPara.atmTerminalId.trim().isEmpty();
+            if (!configured) {
+                txvHostConfig.setText("Awaiting configuration from CasHUB\n(no host parameters have been pushed to this terminal)");
+                txvHostConfig.setTextColor(0xFFD32F2F);
+            } else {
+                txvHostConfig.setText("Processor: " + ProcessorLabel.codeFor(GlobalPara.atmProcessorType)
+                        + "  ·  Port " + GlobalPara.atmHostPort + (GlobalPara.atmUseTls ? "  ·  TLS" : "")
+                        + "\nTerminal ID: " + GlobalPara.atmTerminalId);
+                txvHostConfig.setTextColor(0xFF333333);
+            }
+        }
     }
 
     /** The Save button: persists everything on the page, POS-mode settings included. */
@@ -1079,158 +951,29 @@ public class Fragment_page_admin_atm extends Fragment {
      */
     private void saveSettings(boolean includePosSettings) {
         try {
-            SharedPreferences.Editor editor = getContext()
-                .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit();
-
-            // Fee settings
-            editor.putBoolean("fee_is_flat", rbFlatFee.isChecked());
-            editor.putString("fee_flat_amount", edtFlatFee.getText().toString());
-            editor.putString("fee_percentage", edtPercentageFee.getText().toString());
-
-            // Withdrawal limits
-            editor.putString("limit_min", edtMinAmount.getText().toString());
-            editor.putString("limit_max", edtMaxAmount.getText().toString());
-
-            // Host settings
-            editor.putInt("processor_index", spinnerProcessorType.getSelectedItemPosition());
-            editor.putInt("protocol_index", spinnerProtocolType.getSelectedItemPosition());
-            editor.putString("host_address", edtHostAddress.getText().toString().trim());
-            editor.putString("host_port", edtHostPort.getText().toString().trim());
-            editor.putString("terminal_id", edtTerminalId.getText().toString().trim());
-            if (chkUseTls != null) {
-                editor.putBoolean("use_tls", chkUseTls.isChecked());
+            // 6.2.9: host, fee and limit values are CasHUB-managed and never written from
+            // this screen. The only editable section left is POS mode.
+            if (!includePosSettings) {
+                Log.d(TAG, "saveSettings(false): nothing to persist — host/fee/limits are CasHUB-managed");
+                return;
             }
-
-            // DUKPT settings - auto-enable for processors that require Format 0
-            String processorType = getProcessorTypeFromSpinner(spinnerProcessorType.getSelectedItemPosition());
-            boolean dukptNeeded = "EFX".equals(processorType) ||
-                                  "SWITCH_COMMERCE".equals(processorType) ||
-                                  "CARDTRONICS".equals(processorType);
-
-            editor.putBoolean("dukpt_enabled", GlobalPara.atmDukptEnabled);
-            editor.putString("pin_block_format", GlobalPara.atmPinBlockFormat);
-            editor.putInt("dukpt_key_set", GlobalPara.atmDukptKeySet);
-            editor.putInt("dukpt_key_index", GlobalPara.atmDukptKeyIndex);
-
-            Log.d(TAG, "Saved DUKPT settings: enabled=" + GlobalPara.atmDukptEnabled +
-                       ", format=" + GlobalPara.atmPinBlockFormat +
-                       ", processor=" + processorType + " (DUKPT needed: " + dukptNeeded + ")");
-
-            editor.apply();
-
-            // Persist POS Mode settings (own SharedPreferences file via PosConfig) —
-            // only for the explicit Save button, never for an implicit save.
-            if (includePosSettings) {
-                savePosSettings();
-            }
-
-            // Update GlobalPara
-            updateGlobalPara();
-
-            // Also persist via AtmSettingsManager for app restart
+            savePosSettings();
+            // Same re-init the explicit Save always did, so a POS-mode change takes effect
+            // without a reboot (idempotent when nothing changed).
             if (mainActivity != null) {
-                AtmSettingsManager settingsManager = mainActivity.getAtmSettingsManager();
-                if (settingsManager != null) {
-                    settingsManager.saveSettings();
-                    Log.d(TAG, "Settings also persisted via AtmSettingsManager");
-                }
-            }
-
-            // Re-initialize the host service so the new settings (processor, host
-            // URL/port, TLS, terminal ID, DUKPT mode, etc.) take effect immediately.
-            // Without this, the live AtmHostService keeps the old config (or remains
-            // null if no service was ever initialized) and the next transaction
-            // either hits the wrong host or fails with "AtmHostService not available".
-            // Matches what the existing Test Connection button already does.
-            if (mainActivity != null) {
-                Log.d(TAG, "Settings saved — re-initializing host service so new config takes effect");
                 new Thread(() -> {
                     try {
                         mainActivity.initializeAtmHostService();
                     } catch (Exception ex) {
-                        Log.e(TAG, "Host re-init failed after settings save: " + ex.getMessage());
+                        Log.e(TAG, "Re-init failed after settings save: " + ex.getMessage());
                     }
-                }, "SaveSettings-HostReinit").start();
+                }, "SaveSettings-Reinit").start();
             }
-
-            Toast.makeText(getContext(), "Settings saved — reloading host…", Toast.LENGTH_SHORT).show();
-            Log.d(TAG, "Settings saved successfully");
+            Toast.makeText(getContext(), "POS settings saved", Toast.LENGTH_SHORT).show();
+            Log.d(TAG, "Settings saved (POS section; host/fee/limits are CasHUB-managed)");
         } catch (Exception e) {
             Log.e(TAG, "Error saving settings: " + e.getMessage());
             Toast.makeText(getContext(), "Error saving settings", Toast.LENGTH_SHORT).show();
-        }
-    }
-
-    private void updateGlobalPara() {
-        try {
-            // Update fee settings
-            if (rbFlatFee.isChecked()) {
-                GlobalPara.atmUseFlatFee = true;
-                GlobalPara.atmFlatFeeAmount = Double.parseDouble(edtFlatFee.getText().toString());
-            } else {
-                GlobalPara.atmUseFlatFee = false;
-                GlobalPara.atmPercentageFee = Double.parseDouble(edtPercentageFee.getText().toString());
-            }
-
-            // Update limits
-            GlobalPara.atmMinAmount = Double.parseDouble(edtMinAmount.getText().toString());
-            GlobalPara.atmMaxAmount = Double.parseDouble(edtMaxAmount.getText().toString());
-
-            // Update host settings
-            GlobalPara.atmHostAddress = edtHostAddress.getText().toString().trim();
-            GlobalPara.atmHostPort = Integer.parseInt(edtHostPort.getText().toString().trim());
-            GlobalPara.atmTerminalId = edtTerminalId.getText().toString().trim();
-            if (chkUseTls != null) {
-                GlobalPara.atmUseTls = chkUseTls.isChecked();
-            }
-
-            // Update processor type based on spinner selection
-            GlobalPara.atmProcessorType = getProcessorTypeFromSpinner(spinnerProcessorType.getSelectedItemPosition());
-
-            // Update protocol type based on spinner selection
-            GlobalPara.atmProtocolType = spinnerProtocolType.getSelectedItemPosition() == 1 ? "TRITON" : "HYOSUNG";
-
-            Log.d(TAG, "GlobalPara updated - Processor: " + GlobalPara.atmProcessorType +
-                      ", Protocol: " + GlobalPara.atmProtocolType +
-                      ", Host: " + GlobalPara.atmHostAddress + ":" + GlobalPara.atmHostPort +
-                      ", TLS: " + GlobalPara.atmUseTls);
-        } catch (Exception e) {
-            Log.e(TAG, "Error updating GlobalPara: " + e.getMessage());
-        }
-    }
-
-    /**
-     * Convert spinner index to processor type code.
-     * Index 0 = "Select Processor..." (invalid)
-     * Index 1 = "EFX Financial" -> "EFX"
-     * Index 2 = "DNS Payment Network" -> "DNS"
-     * Index 3 = "Switch Commerce" -> "SWITCH_COMMERCE"
-     * Index 4 = "FIS" -> "FIS"
-     * Index 5 = "Cardtronics" -> "CARDTRONICS"
-     */
-    private String getProcessorTypeFromSpinner(int index) {
-        switch (index) {
-            case 1: return "EFX";
-            case 2: return "DNS";
-            case 3: return "SWITCH_COMMERCE";
-            case 4: return "FIS";
-            case 5: return "CARDTRONICS";
-            default: return "EFX"; // Default to EFX
-        }
-    }
-
-    /**
-     * Convert processor type code to spinner index.
-     */
-    private int getSpinnerIndexFromProcessorType(String processorType) {
-        if (processorType == null) return 1; // Default to EFX
-        switch (processorType.toUpperCase()) {
-            case "EFX": return 1;
-            case "DNS": return 2;
-            case "SWITCH_COMMERCE": return 3;
-            case "FIS": return 4;
-            case "CARDTRONICS": return 5;
-            default: return 1; // Default to EFX
         }
     }
 
@@ -1253,307 +996,6 @@ public class Fragment_page_admin_atm extends Fragment {
 
     // ==================== Host Operations ====================
 
-    private void testConnection() {
-        Log.d(TAG, "testConnection() called");
-        Toast.makeText(getContext(), "Testing connection...", Toast.LENGTH_SHORT).show();
-
-        String host = edtHostAddress.getText().toString().trim();
-        String port = edtHostPort.getText().toString().trim();
-
-        Log.d(TAG, "testConnection: host=" + host + ", port=" + port);
-
-        if (host.isEmpty() || port.isEmpty()) {
-            Toast.makeText(getContext(), "Please enter host address and port", Toast.LENGTH_SHORT).show();
-            return;
-        }
-
-        // Validate port number
-        int portNum;
-        try {
-            portNum = Integer.parseInt(port);
-            if (portNum < 1 || portNum > 65535) {
-                Toast.makeText(getContext(), "Port must be 1-65535", Toast.LENGTH_SHORT).show();
-                return;
-            }
-        } catch (NumberFormatException e) {
-            Toast.makeText(getContext(), "Invalid port number", Toast.LENGTH_SHORT).show();
-            return;
-        }
-
-        // Save host settings first so they're available to host service (implicit
-        // save: leaves the POS-mode settings alone)
-        saveSettings(false);
-
-        txvHostStatus.setText("Status: Initializing host service...");
-        txvHostStatus.setTextColor(0xFF666666);
-
-        Log.d(TAG, "testConnection: mainActivity=" + (mainActivity != null ? "OK" : "NULL"));
-
-        if (mainActivity == null) {
-            Log.e(TAG, "testConnection: mainActivity is NULL!");
-            txvHostStatus.setText("Status: Internal error - activity null");
-            txvHostStatus.setTextColor(0xFFFF0000);
-            Toast.makeText(getContext(), "Internal error", Toast.LENGTH_SHORT).show();
-            return;
-        }
-
-        // Initialize/reinitialize host service with current settings
-        // Force update GlobalPara from current UI values right before init
-        updateGlobalPara();
-        Log.d(TAG, "testConnection: GlobalPara host=" + GlobalPara.atmHostAddress +
-                   ", port=" + GlobalPara.atmHostPort + ", terminalId=" + GlobalPara.atmTerminalId);
-        Log.d(TAG, "testConnection: calling initializeAtmHostService()");
-        mainActivity.initializeAtmHostService();
-        final AtmHostService hostService = mainActivity.getAtmHostService();
-
-        // Refresh reversal status — host service now (re)initialized
-        updateReversalStatus();
-
-        Log.d(TAG, "testConnection: hostService=" + (hostService != null ? "OK" : "NULL"));
-
-        if (hostService == null) {
-            Log.e(TAG, "testConnection: hostService is NULL after init");
-            txvHostStatus.setText("Status: Failed to initialize host service");
-            txvHostStatus.setTextColor(0xFFFF0000);
-            Toast.makeText(getContext(), "Failed to initialize host service", Toast.LENGTH_SHORT).show();
-            return;
-        }
-
-        Log.d(TAG, "testConnection: setting status to Connecting...");
-        txvHostStatus.setText("Status: Connecting to " + host + ":" + portNum + "...");
-
-        // Track connection state
-        final boolean[] connectionComplete = {false};
-        connectionHandler = new android.os.Handler();
-
-        // Set up listener for connection result (track for cleanup)
-        currentEventListener = new AtmHostService.AtmEventListener() {
-            @Override
-            public void onProgress(String message) {
-                Log.d(TAG, "onProgress: " + message);
-                if (getActivity() != null) {
-                    getActivity().runOnUiThread(() -> {
-                        txvHostStatus.setText("Status: " + message);
-                        txvHostStatus.setTextColor(0xFF666666);
-                    });
-                }
-            }
-
-            @Override
-            public void onError(String error) {
-                Log.e(TAG, "onError: " + error);
-                connectionComplete[0] = true;
-                if (getActivity() != null) {
-                    getActivity().runOnUiThread(() -> {
-                        txvHostStatus.setText("Status: Error - " + error);
-                        txvHostStatus.setTextColor(0xFFFF0000);
-                        Toast.makeText(getContext(), "Error: " + error, Toast.LENGTH_LONG).show();
-                    });
-                }
-            }
-
-            @Override
-            public void onTransactionApproved(String responseCode, String referenceNumber, String authDate, String authTime,
-                    long accountBalanceCents, long availableBalanceCents, String displayMessage) {}
-
-            @Override
-            public void onTransactionDeclined(String responseCode, String responseMessage, boolean retainCard) {}
-
-            @Override
-            public void onBalanceReceived(String responseCode, long accountBalanceCents, long availableBalanceCents) {}
-
-            @Override
-            public void onKeysLoaded(String keyCheckValue) {}
-
-            @Override
-            public void onReversalComplete(boolean success) {}
-
-            @Override
-            public void onHealthCheckResult(boolean success) {
-                Log.d(TAG, "onHealthCheckResult: " + success);
-                connectionComplete[0] = true;
-                if (getActivity() != null) {
-                    getActivity().runOnUiThread(() -> {
-                        if (success) {
-                            txvHostStatus.setText("Status: Connected - Host OK");
-                            txvHostStatus.setTextColor(0xFF00AA00);
-                            Toast.makeText(getContext(), "Connection successful!", Toast.LENGTH_SHORT).show();
-                        } else {
-                            txvHostStatus.setText("Status: Connected but health check failed");
-                            txvHostStatus.setTextColor(0xFFFF6600);
-                            Toast.makeText(getContext(), "Health check failed", Toast.LENGTH_SHORT).show();
-                        }
-                    });
-                }
-            }
-
-            @Override
-            public void onHostTotalsReceived(castech.emvtxn.atm.host.HostTotalsResponse response) {
-                // Not used in connection test
-            }
-        };
-        hostService.setEventListener(currentEventListener);
-
-        // Start connection
-        Log.d(TAG, "testConnection: calling hostService.connect()");
-        hostService.connect();
-
-        // Poll for connection status and send health check when ready
-        // Retry every 2 seconds for up to 15 seconds
-        final int[] attempts = {0};
-        final int maxAttempts = 8; // 8 * 2 = 16 seconds max
-
-        connectionCheckRunnable = new Runnable() {
-            @Override
-            public void run() {
-                attempts[0]++;
-                Log.d(TAG, "checkConnection: attempt " + attempts[0] + ", connected=" + hostService.isConnected());
-
-                if (connectionComplete[0]) {
-                    // Already got result through callback
-                    Log.d(TAG, "checkConnection: connection complete via callback");
-                    return;
-                }
-
-                if (hostService.isConnected()) {
-                    Log.d(TAG, "checkConnection: connected, sending status monitoring (H0)");
-                    if (getActivity() != null) {
-                        getActivity().runOnUiThread(() -> {
-                            txvHostStatus.setText("Status: Connected, verifying...");
-                        });
-                    }
-                    // Use status monitoring (H0) for EFX/Switch Commerce style processors
-                    hostService.sendStatusMonitoring();
-                } else if (attempts[0] < maxAttempts) {
-                    // Not connected yet, update UI and try again
-                    if (getActivity() != null) {
-                        getActivity().runOnUiThread(() -> {
-                            txvHostStatus.setText("Status: Connecting... (" + (attempts[0] * 2) + "s)");
-                        });
-                    }
-                    connectionHandler.postDelayed(this, 2000);
-                } else {
-                    // Timeout
-                    Log.e(TAG, "checkConnection: timeout after " + (maxAttempts * 2) + " seconds");
-                    connectionComplete[0] = true;
-                    if (getActivity() != null) {
-                        getActivity().runOnUiThread(() -> {
-                            txvHostStatus.setText("Status: Connection timeout");
-                            txvHostStatus.setTextColor(0xFFFF0000);
-                            Toast.makeText(getContext(), "Connection timeout - check host/port", Toast.LENGTH_LONG).show();
-                        });
-                    }
-                }
-            }
-        };
-
-        // Start checking after initial delay
-        connectionHandler.postDelayed(connectionCheckRunnable, 2000);
-    }
-
-    private void downloadKeys() {
-        String terminalId = edtTerminalId.getText().toString();
-        if (terminalId.isEmpty()) {
-            Toast.makeText(getContext(), "Please enter Terminal ID first", Toast.LENGTH_SHORT).show();
-            return;
-        }
-
-        // Ensure host settings are saved (this is fast, OK on main thread). Implicit
-        // save: the POS-mode settings are not touched.
-        saveSettings(false);
-
-        txvHostStatus.setText("Status: Initializing...");
-        txvHostStatus.setTextColor(0xFF666666);
-
-        // Run initialization and download on background thread to avoid ANR
-        // KMS2 SDK calls can block, so must not be on main thread
-        new Thread(new Runnable() {
-            @Override
-            public void run() {
-                try {
-                    if (mainActivity == null) {
-                        showError("Main activity not available");
-                        return;
-                    }
-
-                    AtmHostService hostService = mainActivity.getAtmHostService();
-
-                    if (hostService == null) {
-                        // Initialize on background thread (KMS2 calls can block)
-                        updateStatus("Initializing host service...");
-                        mainActivity.initializeAtmHostService();
-                        hostService = mainActivity.getAtmHostService();
-                        // Refresh reversal status now that host is initialized
-                        if (getActivity() != null) {
-                            getActivity().runOnUiThread(() -> updateReversalStatus());
-                        }
-                    }
-
-                    if (hostService == null) {
-                        showError("Host service not configured");
-                        return;
-                    }
-
-                    updateStatus("Downloading keys (Type 88)...");
-
-                    final AtmHostService service = hostService;
-
-                    // Set up listener for key download result
-                    service.setEventListener(new AtmHostService.AtmEventListener() {
-                        @Override
-                        public void onProgress(String message) {
-                            updateStatus(message);
-                        }
-
-                        @Override
-                        public void onError(String error) {
-                            showError(error);
-                        }
-
-                        @Override
-                        public void onTransactionApproved(String responseCode, String referenceNumber, String authDate, String authTime,
-                                long accountBalanceCents, long availableBalanceCents, String displayMessage) {}
-
-                        @Override
-                        public void onTransactionDeclined(String responseCode, String responseMessage, boolean retainCard) {}
-
-                        @Override
-                        public void onBalanceReceived(String responseCode, long accountBalanceCents, long availableBalanceCents) {}
-
-                        @Override
-                        public void onKeysLoaded(String keyCheckValue) {
-                            if (getActivity() != null) {
-                                getActivity().runOnUiThread(() -> {
-                                    String kcvDisplay = keyCheckValue != null ? keyCheckValue : "N/A";
-                                    txvHostStatus.setText("Status: Keys loaded (KCV: " + kcvDisplay + ")");
-                                    txvHostStatus.setTextColor(0xFF00AA00);
-                                    Toast.makeText(getContext(), "Working key loaded successfully", Toast.LENGTH_SHORT).show();
-                                });
-                            }
-                        }
-
-                        @Override
-                        public void onReversalComplete(boolean success) {}
-
-                        @Override
-                        public void onHealthCheckResult(boolean success) {}
-
-                        @Override
-                        public void onHostTotalsReceived(castech.emvtxn.atm.host.HostTotalsResponse response) {}
-                    });
-
-                    // Download keys (this is already async internally)
-                    service.downloadKeys();
-
-                } catch (Exception e) {
-                    Log.e(TAG, "downloadKeys error: " + e.getMessage(), e);
-                    showError("Error: " + e.getMessage());
-                }
-            }
-        }).start();
-    }
-
-    // Helper to update status on UI thread
     private void updateStatus(String message) {
         if (getActivity() != null) {
             getActivity().runOnUiThread(() -> {
@@ -1562,7 +1004,6 @@ public class Fragment_page_admin_atm extends Fragment {
         }
     }
 
-    // Helper to show error on UI thread
     private void showError(String error) {
         if (getActivity() != null) {
             getActivity().runOnUiThread(() -> {
@@ -1574,16 +1015,12 @@ public class Fragment_page_admin_atm extends Fragment {
     }
 
     private void requestNewWorkingKey() {
-        String terminalId = edtTerminalId.getText().toString();
-        if (terminalId.isEmpty()) {
-            Toast.makeText(getContext(), "Please enter Terminal ID first", Toast.LENGTH_SHORT).show();
+        String terminalId = GlobalPara.atmTerminalId == null ? "" : GlobalPara.atmTerminalId.trim();
+        if (terminalId.isEmpty() || GlobalPara.atmHostAddress == null || GlobalPara.atmHostAddress.trim().isEmpty()) {
+            Toast.makeText(getContext(), "Terminal not configured — push host parameters from CasHUB first",
+                    Toast.LENGTH_LONG).show();
             return;
         }
-
-        // Ensure host settings are saved (this is fast, OK on main thread). Implicit
-        // save: the POS-mode settings are not touched.
-        saveSettings(false);
-
         txvHostStatus.setText("Status: Initializing...");
         txvHostStatus.setTextColor(0xFF666666);
 
@@ -1691,7 +1128,7 @@ public class Fragment_page_admin_atm extends Fragment {
                         "ATM Version: " + MainActivity.APP_VERSION + "\n" +
                         "Date: " + new java.text.SimpleDateFormat("MM/dd/yyyy HH:mm:ss")
                                 .format(new java.util.Date()) + "\n" +
-                        "Terminal ID: " + edtTerminalId.getText().toString() + "\n" +
+                        "Terminal ID: " + GlobalPara.atmTerminalId + "\n" +
                         "--------------------------------\n" +
                         "Withdrawal Amount: $100.00\n" +
                         "Service Fee:       $3.00\n" +
