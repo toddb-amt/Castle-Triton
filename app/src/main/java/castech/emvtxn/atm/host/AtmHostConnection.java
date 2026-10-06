@@ -1,5 +1,7 @@
 package castech.emvtxn.atm.host;
 
+import android.util.Log;
+
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -20,20 +22,28 @@ import javax.net.ssl.X509TrustManager;
  * ATM Host Connection
  *
  * Manages TCP/TLS socket connections to ATM processors.
- * Handles the Hyosung STD1 protocol handshake (request → response → ACK → EOT).
+ * Supports both Triton Standard (ENQ/ACK → Request → Response → ACK → EOT)
+ * and Hyosung STD1 (Request → Response → ACK → EOT) handshake protocols.
+ *
+ * Protocol selection is determined by ProcessorConfig.getProtocolType().
  */
 public class AtmHostConnection {
 
     private static final String TAG = "AtmHostConnection";
 
     private final ProcessorConfig config;
+    private final AtmProtocol protocol;
     private final HyosungMessageBuilder builder;
     private final HyosungMessageParser parser;
 
     private Socket socket;
-    private InputStream inputStream;
-    private OutputStream outputStream;
-    private boolean connected;
+    private volatile InputStream inputStream;
+    private volatile OutputStream outputStream;
+    private volatile boolean connected;
+
+    // Single-thread executor for socket close operations (W7 fix)
+    private final java.util.concurrent.ExecutorService socketCloseExecutor =
+            java.util.concurrent.Executors.newSingleThreadExecutor();
 
     // Connection listener for status updates
     private ConnectionListener listener;
@@ -45,6 +55,7 @@ public class AtmHostConnection {
      */
     public AtmHostConnection(ProcessorConfig config) {
         this.config = config;
+        this.protocol = config.createProtocol();
         this.builder = config.createMessageBuilder();
         this.parser = config.createMessageParser();
         this.connected = false;
@@ -119,23 +130,29 @@ public class AtmHostConnection {
 
     /**
      * Establishes a TLS connection.
+     * Uses system default trust manager (validates server certificates) in production.
+     * Set config.setDevMode(true) for development with self-signed certs.
      */
     private void connectTls() throws IOException, NoSuchAlgorithmException, KeyManagementException {
-        // Create SSL context
-        SSLContext sslContext = SSLContext.getInstance(config.getTlsVersion());
+        SSLSocketFactory factory;
 
-        // For production, use proper certificate validation
-        // This trust-all manager is for development/testing only
-        TrustManager[] trustAllCerts = new TrustManager[] {
-            new X509TrustManager() {
-                public X509Certificate[] getAcceptedIssuers() { return new X509Certificate[0]; }
-                public void checkClientTrusted(X509Certificate[] certs, String authType) { }
-                public void checkServerTrusted(X509Certificate[] certs, String authType) { }
-            }
-        };
-
-        sslContext.init(null, trustAllCerts, new SecureRandom());
-        SSLSocketFactory factory = sslContext.getSocketFactory();
+        if (config.isDevMode()) {
+            // Development only — trust all certs for testing with self-signed servers
+            log("TLS: DEV MODE — certificate validation DISABLED");
+            SSLContext sslContext = SSLContext.getInstance(config.getTlsVersion());
+            TrustManager[] trustAllCerts = new TrustManager[] {
+                new X509TrustManager() {
+                    public X509Certificate[] getAcceptedIssuers() { return new X509Certificate[0]; }
+                    public void checkClientTrusted(X509Certificate[] certs, String authType) { }
+                    public void checkServerTrusted(X509Certificate[] certs, String authType) { }
+                }
+            };
+            sslContext.init(null, trustAllCerts, new SecureRandom());
+            factory = sslContext.getSocketFactory();
+        } else {
+            // Production — use system default trust manager (validates certificates)
+            factory = (SSLSocketFactory) SSLSocketFactory.getDefault();
+        }
 
         // Create and connect socket
         socket = new Socket();
@@ -152,8 +169,17 @@ public class AtmHostConnection {
             true
         );
 
-        // Enable TLS protocols
-        sslSocket.setEnabledProtocols(new String[] { config.getTlsVersion() });
+        // Enforce TLS 1.2 minimum
+        sslSocket.setEnabledProtocols(new String[] { "TLSv1.2", "TLSv1.3" });
+
+        // Bound the TLS handshake. socket.connect() above only bounds the TCP
+        // connect; without this the socket has SO_TIMEOUT=0 while
+        // startHandshake() waits for the ServerHello, so a peer (or MUX) that
+        // ACKs the connect and the ClientHello but never answers blocks the
+        // transaction thread forever — there is no unacked data, so the kernel
+        // never times it out either. The response timeout is applied after the
+        // handshake, below.
+        sslSocket.setSoTimeout(config.getConnectionTimeout());
         sslSocket.startHandshake();
 
         socket = sslSocket;
@@ -173,16 +199,16 @@ public class AtmHostConnection {
         outputStream = null;
         connected = false;
 
-        // Close socket on background thread to avoid NetworkOnMainThreadException
-        // (TLS socket close involves network I/O for shutdown handshake)
+        // Close socket via executor to avoid NetworkOnMainThreadException
+        // Uses single-thread executor instead of spawning new threads (W7 fix)
         if (socketToClose != null) {
-            new Thread(() -> {
+            socketCloseExecutor.submit(() -> {
                 try {
                     socketToClose.close();
                 } catch (IOException e) {
                     // Ignore close errors
                 }
-            }, "SocketClose").start();
+            });
         }
 
         notifyDisconnected();
@@ -194,6 +220,20 @@ public class AtmHostConnection {
      */
     public boolean isConnected() {
         return connected && socket != null && socket.isConnected() && !socket.isClosed();
+    }
+
+    /**
+     * Returns the protocol implementation for this connection.
+     */
+    public AtmProtocol getProtocol() {
+        return protocol;
+    }
+
+    /**
+     * Returns the processor configuration.
+     */
+    public ProcessorConfig getConfig() {
+        return config;
     }
 
     // =========================================================================
@@ -239,7 +279,21 @@ public class AtmHostConnection {
         ensureConnected();
 
         byte[] requestMessage = builder.buildReversalRequest(request);
+        // Log the request bytes so we (and the mux team) can see exactly what
+        // we put on the wire when a reversal gets rejected.
+        // Field-wise rendering with Track 2 / EMV 5A-57 / PIN block masked: a Type 86
+        // echoes the original 85's EMV TLV, so a raw hex dump put the full PAN and
+        // Track 2 in logcat. Everything the MUX team needs to see stays readable.
+        Log.d(TAG, "[" + config.getName() + "] Reversal REQ: "
+                + castech.emvtxn.LogMask.std1(requestMessage));
+
         byte[] responseMessage = sendAndReceive(requestMessage);
+
+        // Log the raw response bytes too — needed to diagnose "Reversal not accepted"
+        // failures (the parsed responseCode alone doesn't show framing or field layout
+        // differences).
+        Log.d(TAG, "[" + config.getName() + "] Reversal RSP: "
+                + castech.emvtxn.LogMask.std1(responseMessage));
 
         ReversalResponse response = parser.parseReversalResponse(responseMessage);
 
@@ -247,6 +301,14 @@ public class AtmHostConnection {
         completeHandshake();
 
         return response;
+    }
+
+    /** Hex-dump a byte array for diagnostic logging. */
+    private static String toHex(byte[] bytes) {
+        if (bytes == null) return "(null)";
+        StringBuilder sb = new StringBuilder(bytes.length * 2);
+        for (byte b : bytes) sb.append(String.format("%02X", b));
+        return sb.toString();
     }
 
     /**
@@ -368,16 +430,75 @@ public class AtmHostConnection {
     // =========================================================================
 
     /**
+     * Performs the Triton ENQ/ACK handshake before sending a request.
+     * Triton Standard requires: Terminal sends ENQ → Host responds ACK → Then send message.
+     *
+     * @throws ConnectionException if handshake fails
+     */
+    private void performEnqHandshake() throws ConnectionException {
+        if (protocol == null || !protocol.requiresEnqHandshake()) {
+            return; // Hyosung doesn't need ENQ
+        }
+
+        try {
+            // Capture local references (W6 fix — prevent race with disconnect)
+            OutputStream out = outputStream;
+            InputStream in = inputStream;
+            if (out == null || in == null) {
+                throw new ConnectionException("Connection not established - streams are null");
+            }
+
+            log("ENQ handshake: sending ENQ...");
+            out.write(protocol.buildEnq());
+            out.flush();
+
+            // Wait for ACK with timeout
+            int savedTimeout = socket.getSoTimeout();
+            socket.setSoTimeout(config.getAckTimeout());
+            try {
+                int response = in.read();
+                if (response == 0x06) { // ACK
+                    log("ENQ handshake: received ACK");
+                } else if (response == 0x15) { // NAK
+                    throw new ConnectionException("ENQ handshake: host sent NAK — busy or error");
+                } else if (response == -1) {
+                    throw new ConnectionException("ENQ handshake: connection closed by host");
+                } else {
+                    throw new ConnectionException("ENQ handshake: unexpected response 0x" +
+                            String.format("%02X", response));
+                }
+            } finally {
+                socket.setSoTimeout(savedTimeout);
+            }
+        } catch (IOException e) {
+            throw new ConnectionException("ENQ handshake failed: " + e.getMessage(), e);
+        }
+    }
+
+    /**
      * Sends a message and waits for response.
+     * For Triton protocol, performs ENQ/ACK handshake before sending.
      *
      * @param message The message to send
      * @return The response message
      * @throws ConnectionException if communication fails
      */
+    /**
+     * Sends raw bytes and receives response. Public for protocol-agnostic usage.
+     */
+    public byte[] sendAndReceiveRaw(byte[] message) throws ConnectionException {
+        return sendAndReceive(message);
+    }
+
     private byte[] sendAndReceive(byte[] message) throws ConnectionException {
         try {
-            // Verify streams are available
-            if (outputStream == null || inputStream == null) {
+            // Triton: ENQ/ACK handshake before sending request
+            performEnqHandshake();
+
+            // Capture local references to prevent race condition (W6 fix)
+            OutputStream out = outputStream;
+            InputStream in = inputStream;
+            if (out == null || in == null) {
                 throw new ConnectionException("Connection not established - streams are null");
             }
 
@@ -385,8 +506,8 @@ public class AtmHostConnection {
             logMessage("TX", message);
 
             // Send the message
-            outputStream.write(message);
-            outputStream.flush();
+            out.write(message);
+            out.flush();
 
             // Read response
             byte[] response = readResponse();
@@ -400,7 +521,18 @@ public class AtmHostConnection {
             disconnect();
             throw new ConnectionException("Connection lost - streams became null", e);
         } catch (SocketTimeoutException e) {
+            // The host went silent mid-exchange; the socket's state is unknown and
+            // any late bytes would corrupt the next exchange. Drop it so the next
+            // operation opens a fresh connection instead of reusing this one.
+            disconnect();
             throw new ConnectionException("Response timeout", e);
+        } catch (ConnectionException e) {
+            // readResponse() signals "connection closed by host" (read() == -1) and
+            // bad framing as ConnectionException, which is NOT an IOException and
+            // used to bypass the disconnect below — leaving a half-closed socket
+            // that isConnected() still reported as live.
+            disconnect();
+            throw e;
         } catch (IOException e) {
             disconnect();
             throw new ConnectionException("Communication error: " + e.getMessage(), e);
@@ -429,6 +561,11 @@ public class AtmHostConnection {
         if (first == HyosungProtocol.ACK || first == HyosungProtocol.NAK ||
             first == HyosungProtocol.EOT || first == HyosungProtocol.ENQ) {
             return new byte[] { first };
+        }
+
+        // Triton always uses STX/ETX framing regardless of processor's Hyosung setting
+        if (config.isTritonProtocol()) {
+            return readStandardFramedMessage(first);
         }
 
         switch (config.getFramingType()) {
@@ -575,33 +712,128 @@ public class AtmHostConnection {
     }
 
     /**
-     * Completes the handshake by sending ACK and waiting for EOT.
+     * Test seam: injects the socket streams so handshake behaviour can be
+     * unit-tested without a live socket. Package-private on purpose.
      */
-    private void completeHandshake() throws ConnectionException {
+    void injectStreamsForTest(OutputStream out, InputStream in) {
+        this.outputStream = out;
+        this.inputStream = in;
+    }
+
+    /**
+     * Test seam: injects the socket so the EOT-wait path (which sets SO_TIMEOUT
+     * on it) can be exercised. An unconnected {@code new Socket()} is enough —
+     * setSoTimeout() needs no peer. Package-private on purpose.
+     */
+    void injectSocketForTest(java.net.Socket s) {
+        this.socket = s;
+    }
+
+    /**
+     * Completes the handshake by sending ACK and waiting for EOT.
+     *
+     * <p>Package-private so {@code AtmHostConnectionHandshakeTest} can verify it
+     * never invalidates an already-received response.</p>
+     */
+    void completeHandshake() throws ConnectionException {
+        // CRITICAL: this runs AFTER the host's transaction/reversal response has
+        // already been received and parsed — that response is the authoritative
+        // outcome. The ACK/EOT below is courtesy cleanup. A failure here (e.g. the
+        // host closed the socket immediately after responding — the normal
+        // "connection per transaction" behaviour) must NEVER invalidate a response
+        // we already hold. Throwing used to unwind into the transaction manager's
+        // catch block, which promoted the pre-send reversal and REVERSED APPROVED
+        // WITHDRAWALS. So every handshake error here is logged and swallowed —
+        // matching completeTritonHandshake(). The caller still declares
+        // ConnectionException for API symmetry; this method no longer throws it.
         try {
-            // Send ACK
-            outputStream.write(builder.buildAck());
-            outputStream.flush();
+            // Capture local references (W6 fix)
+            OutputStream out = outputStream;
+            if (out == null) {
+                // Host already gone — nothing to ACK. The response still stands.
+                log("Handshake: output stream null (host already closed) — skipping ACK");
+                return;
+            }
+
+            // Send ACK — use protocol if available, fallback to builder
+            byte[] ack = (protocol != null) ? protocol.buildAck() : builder.buildAck();
+            out.write(ack);
+            out.flush();
             log("Sent ACK");
 
-            // Wait for EOT
-            socket.setSoTimeout(config.getEotTimeout());
+            // Wait for EOT. Capture the socket locally too: a concurrent
+            // disconnect() nulls the field, and an NPE here is not an IOException.
+            java.net.Socket s = socket;
+            if (s == null) {
+                log("Handshake: socket already closed — skipping EOT wait");
+                return;
+            }
+            s.setSoTimeout(config.getEotTimeout());
             byte[] eotResponse = readResponse();
 
             if (!parser.isEot(eotResponse)) {
-                log("Warning: Expected EOT, got: " + HyosungMessageBuilder.toHexString(eotResponse));
+                log("Warning: Expected EOT, got other response");
             } else {
                 log("Received EOT - handshake complete");
             }
 
             // Restore normal timeout
-            socket.setSoTimeout(config.getResponseTimeout());
+            s.setSoTimeout(config.getResponseTimeout());
 
         } catch (SocketTimeoutException e) {
             // EOT timeout is not critical
             log("EOT timeout (non-critical)");
+        } catch (Exception e) {
+            // Was: catch (IOException) only. That still let two failures escape
+            // and reverse approved withdrawals: readResponse() throws
+            // ConnectionException (not an IOException) when the host closes the
+            // socket without sending EOT — read() returns -1 — and setSoTimeout()
+            // NPEs if disconnect() raced us. The response is authoritative;
+            // NOTHING thrown from this cleanup may propagate.
+            log("Handshake completion error (non-critical, response already received): "
+                    + e.getClass().getSimpleName() + " - " + e.getMessage());
+        }
+    }
+
+    /**
+     * Completes Triton handshake after receiving response: send ACK, wait for EOT.
+     * Call this after sendAndReceiveRaw() for Triton protocol messages.
+     */
+    public void completeTritonHandshake() throws ConnectionException {
+        try {
+            OutputStream out = outputStream;
+            if (out == null) {
+                log("Triton handshake: output stream null, skipping");
+                return;
+            }
+
+            // Send ACK
+            out.write(new byte[] { 0x06 }); // ACK
+            out.flush();
+            log("Triton handshake: Sent ACK");
+
+            // Wait for EOT (with short timeout)
+            int savedTimeout = socket.getSoTimeout();
+            socket.setSoTimeout(config.getEotTimeout());
+            try {
+                InputStream in = inputStream;
+                if (in != null) {
+                    int eot = in.read();
+                    if (eot == 0x04) {
+                        log("Triton handshake: Received EOT - complete");
+                    } else if (eot == -1) {
+                        log("Triton handshake: Connection closed (no EOT)");
+                    } else {
+                        log("Triton handshake: Expected EOT, got 0x" + String.format("%02X", eot));
+                    }
+                }
+            } catch (SocketTimeoutException e) {
+                log("Triton handshake: EOT timeout (non-critical)");
+            } finally {
+                socket.setSoTimeout(savedTimeout);
+            }
         } catch (IOException e) {
-            log("Handshake completion error: " + e.getMessage());
+            log("Triton handshake error: " + e.getMessage());
         }
     }
 
@@ -621,10 +853,32 @@ public class AtmHostConnection {
     /**
      * Ensures the connection is active.
      */
-    private void ensureConnected() throws ConnectionException {
+    public void ensureConnected() throws ConnectionException {
         if (!isConnected()) {
             connect();
         }
+    }
+
+    /**
+     * Drops any existing socket and opens a new one.
+     *
+     * <p>Use this at the start of a customer transaction instead of
+     * {@link #ensureConnected()}. The host closes its side after every exchange
+     * (see {@link #completeHandshake()}), but {@link java.net.Socket#isConnected()}
+     * stays true after the peer's FIN and {@link java.net.Socket#isClosed()} only
+     * reflects a local close — so a socket left open by an earlier operation
+     * (a health check, a status probe) passes {@link #isConnected()} and the 85
+     * is written into a dead pipe. That surfaced as a ConnectionException with
+     * requestSentToHost already true, i.e. a reversal for a request the host
+     * never saw. One TCP/TLS setup per transaction is the price of never reusing
+     * a socket whose far end we cannot observe.</p>
+     */
+    public synchronized void connectFresh() throws ConnectionException {
+        if (connected || socket != null) {
+            log("connectFresh: dropping existing socket before reconnecting");
+            disconnect();
+        }
+        connect();
     }
 
     // =========================================================================
@@ -638,11 +892,9 @@ public class AtmHostConnection {
     private void logMessage(String direction, byte[] message) {
         if (message == null) return;
 
-        String hex = HyosungMessageBuilder.toHexString(message);
-        String readable = HyosungMessageBuilder.toReadableString(message);
-
-        log(direction + " [" + message.length + " bytes]: " + readable);
-        log(direction + " (hex): " + hex);
+        // Only log message length and type — NEVER log full message content
+        // Full messages contain Track 2 (Field 6) and PIN blocks (Field 8)
+        log(direction + " [" + message.length + " bytes]");
     }
 
     // =========================================================================

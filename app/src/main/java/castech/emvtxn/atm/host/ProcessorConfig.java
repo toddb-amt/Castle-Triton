@@ -15,7 +15,14 @@ public class ProcessorConfig {
     private boolean useTls;
     private String tlsVersion;
 
+    // Protocol type
+    public enum ProtocolType {
+        TRITON_STANDARD,
+        HYOSUNG_STD1
+    }
+
     // Protocol settings
+    private ProtocolType protocolType;
     private HyosungProtocol.FramingType framingType;
     private String routingId;
     private String communicationHeader;  // Processor-specific header (if required)
@@ -41,19 +48,38 @@ public class ProcessorConfig {
     private int maxRetries;
     private int retryDelayMs;
 
+    // Development mode — disables TLS certificate validation
+    private boolean devMode = false;
+
+    /**
+     * Connection keep-alive flag (task #13). When true, the host TCP connection
+     * is retained between transactions and the Open flow short-circuits if the
+     * connection is still alive. When false, the connection is torn down after
+     * every transaction (the legacy/conservative behavior — preserves
+     * compatibility with processors that close after each transaction).
+     *
+     * <p>Default: false. Opt-in per processor once keep-alive has been
+     * validated against that processor's actual behavior.</p>
+     *
+     * <p>Mirrors BlueVerse {@code fnAPL_CheckHostOpen} behavior: skip Open
+     * when host is already open.</p>
+     */
+    private boolean keepAlive = false;
+
     /**
      * Creates a new ProcessorConfig with default values.
      */
     public ProcessorConfig() {
         this.useTls = true;
         this.tlsVersion = "TLSv1.2";
+        this.protocolType = ProtocolType.TRITON_STANDARD;  // Default to Triton
         this.framingType = HyosungProtocol.FramingType.STANDARD;
         this.routingId = HyosungProtocol.DEFAULT_ROUTING_ID;
         this.connectionTimeout = 30000;     // 30 seconds
         this.responseTimeout = 60000;       // 60 seconds
         this.ackTimeout = 10000;            // 10 seconds
         this.eotTimeout = 5000;             // 5 seconds
-        this.healthCheckEnabled = false;
+        this.healthCheckEnabled = true;
         this.healthCheckIntervalMs = 360000; // 6 minutes
         this.reversalOnHostError = true;
         this.maxReversalRetries = 3;
@@ -76,7 +102,7 @@ public class ProcessorConfig {
         config.setFramingType(HyosungProtocol.FramingType.STANDARD);
         config.setRoutingId("000000");
         config.setTerminalId(terminalId);
-        config.setHealthCheckEnabled(false);
+        config.setHealthCheckEnabled(true);
         return config;
     }
 
@@ -109,7 +135,7 @@ public class ProcessorConfig {
         config.setRoutingId("SC101");
         config.setCommunicationHeader("123SC101");
         config.setTerminalId(terminalId);
-        config.setHealthCheckEnabled(false);
+        config.setHealthCheckEnabled(true);
         return config;
     }
 
@@ -125,7 +151,14 @@ public class ProcessorConfig {
         config.setFramingType(HyosungProtocol.FramingType.VISA_NO_STX_ETX);
         config.setRoutingId("000000");
         config.setTerminalId(terminalId);
-        config.setHealthCheckEnabled(false);
+        config.setHealthCheckEnabled(true);
+        // EFX answers a Type 88 key request in ~50-57s (measured 2026-08-27), which
+        // sits right on the 60s default — a normal-but-slow reply was being treated
+        // as a failure, burning a retry and leaving the terminal keyless for minutes.
+        // Network congestion pushes it higher still, so allow 120s here. This is
+        // EFX-specific on purpose: other processors answer in well under a second
+        // and should keep failing fast.
+        config.setResponseTimeout(120000);   // 2 minutes
         return config;
     }
 
@@ -141,7 +174,7 @@ public class ProcessorConfig {
         config.setRoutingId("CTSTRA");
         config.setCommunicationHeader("CTSTRI");
         config.setTerminalId(terminalId);
-        config.setHealthCheckEnabled(false);
+        config.setHealthCheckEnabled(true);
         return config;
     }
 
@@ -174,7 +207,7 @@ public class ProcessorConfig {
         config.setRoutingId("LNKATM");
         config.setCommunicationHeader("LNKATM");
         config.setTerminalId(terminalId);
-        config.setHealthCheckEnabled(false);
+        config.setHealthCheckEnabled(true);
         return config;
     }
 
@@ -189,7 +222,7 @@ public class ProcessorConfig {
         config.setFramingType(HyosungProtocol.FramingType.VISA_LENGTH_PREFIX);
         config.setRoutingId("000000");
         config.setTerminalId(terminalId);
-        config.setHealthCheckEnabled(false);
+        config.setHealthCheckEnabled(true);
         return config;
     }
 
@@ -198,14 +231,29 @@ public class ProcessorConfig {
     // =========================================================================
 
     /**
-     * Creates a message builder configured for this processor.
+     * Creates a protocol implementation for this processor configuration.
+     * Returns either Triton or Hyosung based on protocolType.
+     */
+    public AtmProtocol createProtocol() {
+        if (protocolType == ProtocolType.TRITON_STANDARD) {
+            // Triton: disable optional header group — send minimal messages
+            // (Terminal ID + Transaction Code only)
+            return new castech.emvtxn.atm.host.triton.TritonProtocolImpl();
+        } else {
+            // Legacy Hyosung protocol — return wrapper (to be implemented)
+            return null; // TODO: HyosungProtocolImpl
+        }
+    }
+
+    /**
+     * Creates a message builder configured for this processor (legacy Hyosung).
      */
     public HyosungMessageBuilder createMessageBuilder() {
         return new HyosungMessageBuilder(framingType);
     }
 
     /**
-     * Creates a message parser configured for this processor.
+     * Creates a message parser configured for this processor (legacy Hyosung).
      */
     public HyosungMessageParser createMessageParser() {
         return new HyosungMessageParser(framingType);
@@ -376,6 +424,34 @@ public class ProcessorConfig {
 
     public void setRetryDelayMs(int retryDelayMs) {
         this.retryDelayMs = retryDelayMs;
+    }
+
+    public ProtocolType getProtocolType() {
+        return protocolType;
+    }
+
+    public void setProtocolType(ProtocolType protocolType) {
+        this.protocolType = protocolType;
+    }
+
+    public boolean isTritonProtocol() {
+        return protocolType == ProtocolType.TRITON_STANDARD;
+    }
+
+    public boolean isDevMode() {
+        return devMode;
+    }
+
+    public boolean isKeepAlive() {
+        return keepAlive;
+    }
+
+    public void setKeepAlive(boolean keepAlive) {
+        this.keepAlive = keepAlive;
+    }
+
+    public void setDevMode(boolean devMode) {
+        this.devMode = devMode;
     }
 
     @Override

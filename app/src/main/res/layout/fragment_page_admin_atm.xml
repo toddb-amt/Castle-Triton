@@ -50,6 +50,7 @@
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
+                android:id="@+id/hdrFeeConfig"
                 android:text="Fee Configuration"
                 android:textSize="18sp"
                 android:textStyle="bold"
@@ -146,6 +147,7 @@
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
+                android:id="@+id/hdrWithdrawal"
                 android:text="Withdrawal Limits"
                 android:textSize="18sp"
                 android:textStyle="bold"
@@ -208,6 +210,7 @@
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
+                android:id="@+id/hdrTerminalInfo"
                 android:text="Terminal Information"
                 android:textSize="18sp"
                 android:textStyle="bold"
@@ -233,6 +236,7 @@
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
+                android:id="@+id/hdrHostSettings"
                 android:text="Host Settings"
                 android:textSize="18sp"
                 android:textStyle="bold"
@@ -255,6 +259,30 @@
 
                 <Spinner
                     android:id="@+id/spinnerProcessorType"
+                    android:layout_width="0dp"
+                    android:layout_weight="1"
+                    android:layout_height="48dp"
+                    android:background="@android:drawable/btn_dropdown"
+                    android:spinnerMode="dropdown"/>
+            </LinearLayout>
+
+            <!-- Protocol Type -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:layout_marginBottom="8dp">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Protocol:"
+                    android:textSize="14sp"
+                    android:layout_marginEnd="8dp"/>
+
+                <Spinner
+                    android:id="@+id/spinnerProtocolType"
                     android:layout_width="0dp"
                     android:layout_weight="1"
                     android:layout_height="48dp"
@@ -397,6 +425,7 @@
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
+                android:id="@+id/hdrReversal"
                 android:text="Reversal Management"
                 android:textSize="18sp"
                 android:textStyle="bold"
@@ -423,15 +452,13 @@
                 android:enabled="false"
                 android:layout_marginBottom="8dp"/>
 
-            <!-- Clear Reversals Button (use with caution) -->
-            <Button
-                android:id="@+id/btnClearReversals"
+            <!-- Per-record diagnostics with Retry / Resolve (6.2.7). Populated by
+                 Fragment_page_admin_atm.updateReversalStatus(); replaces "Clear All". -->
+            <LinearLayout
+                android:id="@+id/layReversalRecords"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="Clear All Pending (Caution!)"
-                android:textSize="12sp"
-                android:backgroundTint="#F44336"
-                android:visibility="gone"
+                android:orientation="vertical"
                 android:layout_marginBottom="16dp"/>
 
             <View
@@ -444,6 +471,7 @@
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
+                android:id="@+id/hdrHistory"
                 android:text="Transaction History"
                 android:textSize="18sp"
                 android:textStyle="bold"
@@ -486,10 +514,135 @@
                 android:background="#CCCCCC"
                 android:layout_marginBottom="16dp"/>
 
+            <!-- WiFi Configuration Section -->
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:id="@+id/hdrWifi"
+                android:text="WiFi Configuration"
+                android:textSize="18sp"
+                android:textStyle="bold"
+                android:textColor="@color/colorPrimary"
+                android:paddingBottom="8dp"/>
+
+            <TextView
+                android:id="@+id/txvWifiStatus"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="WiFi status: unknown"
+                android:textSize="14sp"
+                android:fontFamily="monospace"
+                android:paddingBottom="8dp"/>
+
+            <Button
+                android:id="@+id/btnWifiScan"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Scan for Networks"
+                android:textSize="16sp"
+                android:layout_marginBottom="8dp"/>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:paddingBottom="8dp">
+
+                <TextView
+                    android:layout_width="120dp"
+                    android:layout_height="wrap_content"
+                    android:text="SSID:"
+                    android:textSize="16sp"
+                    android:layout_gravity="center_vertical"/>
+
+                <EditText
+                    android:id="@+id/edtWifiSsid"
+                    android:layout_width="0dp"
+                    android:layout_weight="1"
+                    android:layout_height="wrap_content"
+                    android:inputType="text"
+                    android:hint="Network name"/>
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:paddingBottom="8dp">
+
+                <TextView
+                    android:layout_width="120dp"
+                    android:layout_height="wrap_content"
+                    android:text="Password:"
+                    android:textSize="16sp"
+                    android:layout_gravity="center_vertical"/>
+
+                <EditText
+                    android:id="@+id/edtWifiPassword"
+                    android:layout_width="0dp"
+                    android:layout_weight="1"
+                    android:layout_height="wrap_content"
+                    android:inputType="textPassword"
+                    android:hint="Password"/>
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:paddingBottom="8dp">
+
+                <TextView
+                    android:layout_width="120dp"
+                    android:layout_height="wrap_content"
+                    android:text="Security:"
+                    android:textSize="16sp"
+                    android:layout_gravity="center_vertical"/>
+
+                <Spinner
+                    android:id="@+id/spinnerWifiSecurity"
+                    android:layout_width="0dp"
+                    android:layout_weight="1"
+                    android:layout_height="48dp"
+                    android:background="@android:drawable/btn_dropdown"
+                    android:spinnerMode="dropdown"/>
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginBottom="16dp">
+
+                <Button
+                    android:id="@+id/btnWifiConnect"
+                    android:layout_width="0dp"
+                    android:layout_weight="1"
+                    android:layout_height="wrap_content"
+                    android:text="Connect WiFi"
+                    android:textSize="16sp"
+                    android:layout_marginEnd="8dp"/>
+
+                <Button
+                    android:id="@+id/btnWifiStatus"
+                    android:layout_width="0dp"
+                    android:layout_weight="1"
+                    android:layout_height="wrap_content"
+                    android:text="Refresh Status"
+                    android:textSize="16sp"/>
+            </LinearLayout>
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:background="#CCCCCC"
+                android:layout_marginBottom="16dp"/>
+
             <!-- Diagnostics Section -->
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
+                android:id="@+id/hdrDiagnostics"
                 android:text="Diagnostics"
                 android:textSize="18sp"
                 android:textStyle="bold"
@@ -522,6 +675,7 @@
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
+                android:id="@+id/hdrKiosk"
                 android:text="Kiosk Mode"
                 android:textSize="18sp"
                 android:textStyle="bold"
@@ -614,6 +768,79 @@
                 android:layout_height="wrap_content"
                 android:text="Apply Kiosk Settings"
                 android:textSize="16sp"
+                android:layout_marginBottom="16dp"/>
+
+            <!-- ============ POS Mode (semi-integrated proxy) ============ -->
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:background="#CCCCCC"
+                android:layout_marginTop="24dp"
+                android:layout_marginBottom="16dp"/>
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="POS MODE (semi-integrated)"
+                android:textSize="16sp"
+                android:textStyle="bold"
+                android:textColor="@android:color/black"
+                android:layout_marginBottom="4dp"/>
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="When enabled, this terminal also accepts transactions from the TFI proxy. Restart the app after changing these settings."
+                android:textSize="12sp"
+                android:textColor="#666666"
+                android:layout_marginBottom="12dp"/>
+
+            <CheckBox
+                android:id="@+id/cbEnablePosMode"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Enable POS Mode"
+                android:textSize="14sp"
+                android:layout_marginBottom="8dp"/>
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Proxy URL"
+                android:textSize="13sp"
+                android:layout_marginTop="4dp"/>
+            <EditText
+                android:id="@+id/edtPosProxyUrl"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="wss://proxy.myviewonline.com"
+                android:inputType="textUri"
+                android:textSize="14sp"
+                android:layout_marginBottom="8dp"/>
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Terminal Access Key"
+                android:textSize="13sp"
+                android:layout_marginTop="4dp"/>
+            <EditText
+                android:id="@+id/edtPosAccessKey"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="from proxy admin portal"
+                android:inputType="textPassword"
+                android:textSize="14sp"
+                android:layout_marginBottom="8dp"/>
+
+            <TextView
+                android:id="@+id/txvPosStatus"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="POS state: (not running)"
+                android:textSize="12sp"
+                android:textColor="#666666"
+                android:layout_marginTop="4dp"
                 android:layout_marginBottom="16dp"/>
 
             <!-- Save Settings Button -->

@@ -1,0 +1,6 @@
+{
+  "base_url": "https://api.us.cashub.cloud",
+  "appid": "REPLACE — CasHUB portal -> My Enterprise -> API Service (App ID)",
+  "secret": "REPLACE — the credential's Secret, shown once at creation",
+  "tenant_id": ""
+}

@@ -40,13 +40,35 @@ public class AtmTransactionManager {
     private final AtomicInteger sequenceNumber;
     private TransactionRequest currentRequest;
     private TransactionResponse currentResponse;
-    private boolean transactionInProgress;
+    private final java.util.concurrent.atomic.AtomicBoolean transactionInProgress = new java.util.concurrent.atomic.AtomicBoolean(false);
 
     // Reversal tracking state
     private volatile boolean requestSentToHost;      // True after request sent, before response
     private volatile boolean approvalReceived;       // True if host approved the transaction
+    private volatile boolean currentIsBalanceInquiry; // True while a balance inquiry is in flight
+
+    /**
+     * Whether balance inquiries may generate reversals.
+     *
+     * FALSE (current): only cash withdrawals reverse. A balance inquiry moves no
+     * money, so there is nothing to unwind; emitting a Type 86 for one produced a
+     * reversal storm on 2026-08-09 (5 failed drain attempts) that then blocked
+     * subsequent customer transactions.
+     *
+     * Set TRUE to restore the previous "reversals are generic across all
+     * transaction types" behaviour (BlueVerse IsReversalCondition() parity).
+     */
+    private static final boolean REVERSALS_FOR_BALANCE_INQUIRY = false;
     private long currentAmountCents;                 // Amount for current transaction
     private long currentSurchargeCents;              // Surcharge for current transaction
+
+    /**
+     * Pre-send reversal record created BEFORE the transaction is sent to the host.
+     * Cleared on clean approval (no reversal needed), promoted to PENDING on send
+     * failure or timeout. Survives terminal crash/power loss between socket write
+     * and response handler. See {@link ReversalPersistenceManager#createPreSendReversal}.
+     */
+    private volatile ReversalPersistenceManager.PendingReversal currentPreSendReversal;
 
     // Threading
     private final ExecutorService executor;
@@ -76,7 +98,7 @@ public class AtmTransactionManager {
         this.sequenceNumber = new AtomicInteger(1);
         this.executor = Executors.newSingleThreadExecutor();
         this.mainHandler = new Handler(Looper.getMainLooper());
-        this.transactionInProgress = false;
+        this.transactionInProgress.set(false);
 
         // Set up connection listener
         connection.setConnectionListener(new AtmHostConnection.ConnectionListener() {
@@ -119,6 +141,94 @@ public class AtmTransactionManager {
         approvalReceived = false;
         currentAmountCents = 0;
         currentSurchargeCents = 0;
+        currentPreSendReversal = null;
+        currentIsBalanceInquiry = false;
+    }
+
+    /**
+     * True when the in-flight transaction must never produce a reversal.
+     * Balance inquiries move no money, so there is nothing to unwind.
+     */
+    private boolean reversalsSuppressedForCurrentTxn() {
+        return currentIsBalanceInquiry && !REVERSALS_FOR_BALANCE_INQUIRY;
+    }
+
+    /**
+     * Removes the pre-send reversal record. Called when the transaction
+     * completes cleanly (host approval received, no reversal needed).
+     */
+    private void clearPreSendReversal() {
+        ReversalPersistenceManager.PendingReversal preSend = currentPreSendReversal;
+        if (preSend != null && reversalManager != null) {
+            reversalManager.removePendingReversal(preSend.getTransactionId());
+            Log.d(TAG, "Cleared pre-send reversal record: " + preSend.getTransactionId());
+        }
+        currentPreSendReversal = null;
+    }
+
+    /**
+     * Promotes the current pre-send reversal to a recovery-eligible status (so
+     * the recovery loop will process it). Branches on the failure mode to set
+     * the correct three-state target (task #16):
+     *
+     * <ul>
+     *     <li>Timeout (no response) → STATUS_PENDING_RECONNECT_AND_REVERSE
+     *         (we don't know if host got the request; need to reconnect and reverse)</li>
+     *     <li>Connection error after send → STATUS_PENDING_RECONNECT_AND_REVERSE
+     *         (host may have processed; reconnect first)</li>
+     *     <li>Parse error / generic error with response present → STATUS_PENDING
+     *         (response received, just dispatch reversal directly)</li>
+     * </ul>
+     *
+     * <p>If no pre-send record exists, falls back to the legacy
+     * {@link #storePendingReversalIfNeeded(String)} path.</p>
+     *
+     * @param reason reversal reason code (see {@link HyosungProtocol})
+     */
+    private void promoteOrCreatePendingReversal(String reason) {
+        // Balance inquiries never reverse — nothing to unwind.
+        if (reversalsSuppressedForCurrentTxn()) {
+            Log.d(TAG, "Balance inquiry failed (" + reason + ") — no reversal generated");
+            currentPreSendReversal = null;
+            return;
+        }
+
+        ReversalPersistenceManager.PendingReversal preSend = currentPreSendReversal;
+        if (preSend != null && reversalManager != null) {
+            // Update auth data from response if we now have one
+            // (timeout case = currentResponse stays null, authData stays "")
+            String authData = "";
+            if (currentResponse != null && currentResponse.getAuthorizationData() != null) {
+                authData = currentResponse.getAuthorizationData();
+            }
+            if (!authData.isEmpty()) {
+                preSend.setAuthData(authData);
+            }
+
+            // Decide which of the three pending states to use:
+            //   - No response received → host might or might not have got it,
+            //     and connection may be broken → RECONNECT_AND_REVERSE
+            //   - Response received but parse/generic error → connection alive,
+            //     just dispatch → PENDING
+            String targetState;
+            boolean isTimeoutOrConnLoss = HyosungProtocol.REV_REASON_TIMEOUT.equals(reason)
+                    || (currentResponse == null);
+            if (isTimeoutOrConnLoss) {
+                targetState = ReversalPersistenceManager.PendingReversal
+                        .STATUS_PENDING_RECONNECT_AND_REVERSE;
+            } else {
+                targetState = ReversalPersistenceManager.PendingReversal.STATUS_PENDING;
+            }
+
+            reversalManager.promoteToStatus(preSend.getTransactionId(), reason, targetState);
+            // Record-scoped: only this transaction's receipt reacts (see ReversalProgress).
+            notifyProgress(ReversalProgress.record(preSend.getTransactionId(), "Reversal pending"));
+            currentPreSendReversal = null;
+            return;
+        }
+        // No pre-send record (e.g. reversalManager was null at send time) —
+        // fall back to legacy post-failure path
+        storePendingReversalIfNeeded(reason);
     }
 
     /**
@@ -128,6 +238,12 @@ public class AtmTransactionManager {
      * @param reason Reversal reason code (see HyosungProtocol.REV_REASON_*)
      */
     private void storePendingReversalIfNeeded(String reason) {
+        // Balance inquiries never reverse — nothing to unwind.
+        if (reversalsSuppressedForCurrentTxn()) {
+            Log.d(TAG, "Balance inquiry (" + reason + ") — no pending reversal stored");
+            return;
+        }
+
         if (reversalManager == null) {
             Log.w(TAG, "No reversal manager set - cannot store reversal");
             return;
@@ -172,12 +288,8 @@ public class AtmTransactionManager {
      * Gets the next sequence number (1-9999, wraps).
      */
     private int getNextSequenceNumber() {
-        int seq = sequenceNumber.getAndIncrement();
-        if (seq > 9999) {
-            sequenceNumber.set(1);
-            seq = 1;
-        }
-        return seq;
+        // W3 fix: atomic wrap-around using getAndUpdate
+        return sequenceNumber.getAndUpdate(n -> n >= 9999 ? 1 : n + 1);
     }
 
     // =========================================================================
@@ -195,12 +307,12 @@ public class AtmTransactionManager {
     public void performCashWithdrawal(final CastleCardData cardData, final long amountCents,
             final long surchargeCents, final String accountType) {
 
-        if (transactionInProgress) {
+        if (!transactionInProgress.compareAndSet(false, true)) {
             notifyError("Transaction already in progress");
             return;
         }
 
-        transactionInProgress = true;
+        // transactionInProgress already set by compareAndSet above
         resetReversalState();
         currentAmountCents = amountCents;
         currentSurchargeCents = surchargeCents;
@@ -278,14 +390,78 @@ public class AtmTransactionManager {
                     currentRequest = request;
                     notifyProgress("Connecting to host...");
 
+                    // KEY-LOADED flag check (BlueVerse compliance — task #17):
+                    // Defensive verification that working key is loaded before sending the
+                    // transaction. Equivalent to BlueVerse's devCmn->[0x888] check after
+                    // dispatch start. For non-DUKPT mode, the working key MUST be loaded
+                    // before we send — otherwise the host can't decrypt the PIN block.
+                    boolean isDukptMode = castech.emvtxn.GlobalPara.atmDukptEnabled;
+                    if (!isDukptMode && keyManager != null && !keyManager.isWorkingKeyLoaded()) {
+                        Log.e(TAG, "KEY-LOADED check failed: non-DUKPT mode but no working key loaded");
+                        notifyError("Working key not loaded — cannot complete transaction");
+                        return;
+                    }
+
+                    // Pre-persist reversal BEFORE send so that a crash/power loss between
+                    // the socket write and the response handler does not orphan an
+                    // authorized transaction. Cleared on clean approval, promoted on failure.
+                    // Matches the deployed Hyosung BlueVerse pre-send persistence pattern.
+                    if (reversalManager != null) {
+                        // EFX/Pulse TC86 needs F3 (retrieval ref) + F8 (status monitoring) +
+                        // F9 (EMV TLV) from the ORIGINAL 85 to match the reversal on the host.
+                        // Build the retrieval ref now (terminal clock + seq) — the host echoes
+                        // the same value in its 85 response, so this gives us field parity.
+                        String retrievalRef = ReversalRequest.buildRetrievalReference(
+                                new java.util.Date(), request.getSequenceNumber());
+                        currentPreSendReversal = reversalManager.createPreSendReversal(
+                            config.getTerminalId(),
+                            request.getSequenceNumber(),
+                            amountCents,
+                            surchargeCents,
+                            retrievalRef,
+                            request.getStatusMonitoring(),
+                            request.getEmvData());
+                        castech.emvtxn.GlobalPara.atmCurrentReversalId = currentPreSendReversal.getTransactionId();
+                        Log.d(TAG, "Pre-persisted reversal record for seq "
+                            + request.getSequenceNumber()
+                            + " (id=" + currentPreSendReversal.getTransactionId()
+                            + ", rrn=" + retrievalRef + ")");
+                    }
+
+                    // Connect FIRST, then mark the request as sent. A connect-time failure
+                    // (host down, TCP connect timeout, TLS handshake failure) must NOT
+                    // create a reversal: the host never received an 85, so a Type 86 for
+                    // it can never match — the drain would fail every attempt and take the
+                    // terminal OUT_OF_SERVICE after a single connect blip. A connect failure
+                    // lands in the catch below with requestSentToHost still false.
+                    //
+                    // Always a FRESH socket: the host closes its side after every exchange
+                    // and Socket.isConnected() cannot see that FIN, so a socket left open by
+                    // a health check would pass ensureConnected() and the 85 would be
+                    // written into a dead pipe (see AtmHostConnection.connectFresh).
+                    connection.connectFresh();
+
                     // Mark that we're sending to host - if we fail after this, may need reversal
                     requestSentToHost = true;
 
-                    // Send to host
-                    TransactionResponse response = connection.sendTransaction(request);
+                    // Send to host — use protocol-appropriate path
+                    TransactionResponse response;
+                    AtmProtocol protocol = connection.getProtocol();
+                    if (protocol != null && config.isTritonProtocol()) {
+                        Log.d(TAG, "Using Triton transaction request");
+                        byte[] requestMsg = protocol.buildTransactionRequest(request);
+                        byte[] responseMsg = connection.sendAndReceiveRaw(requestMsg);
+                        connection.completeTritonHandshake();
+                        response = protocol.parseTransactionResponse(responseMsg);
+                        connection.disconnect();
+                    } else {
+                        Log.d(TAG, "Using Hyosung transaction request");
+                        response = connection.sendTransaction(request);
+                    }
                     currentResponse = response;
 
-                    // Process response
+                    // Clean response received — process and decide whether to keep or
+                    // clear the pre-persisted reversal record (decided in processTransactionResponse)
                     processTransactionResponse(response, amountCents);
 
                 } catch (AtmHostConnection.ConnectionException e) {
@@ -296,31 +472,36 @@ public class AtmTransactionManager {
                             (e.getMessage().contains("timeout") || e.getMessage().contains("Timeout"));
                         String reason = isTimeout ? HyosungProtocol.REV_REASON_TIMEOUT :
                                                    HyosungProtocol.REV_REASON_HOST_ERROR;
-                        Log.w(TAG, "Connection error after sending - storing reversal (reason: " + reason + ")");
-                        storePendingReversalIfNeeded(reason);
+                        Log.w(TAG, "Connection error after sending - promoting reversal (reason: " + reason + ")");
+                        promoteOrCreatePendingReversal(reason);
+                    } else {
+                        // Send didn't happen — clear the pre-persist
+                        clearPreSendReversal();
                     }
                     handleConnectionError(e);
                 } catch (HyosungMessageParser.ParseException e) {
                     Log.e(TAG, "Parse error: " + e.getMessage());
-                    // Parse error after sending = possible approval, need reversal
                     if (requestSentToHost) {
-                        Log.w(TAG, "Parse error after sending - storing reversal");
-                        storePendingReversalIfNeeded(HyosungProtocol.REV_REASON_HOST_ERROR);
+                        Log.w(TAG, "Parse error after sending - promoting reversal");
+                        promoteOrCreatePendingReversal(HyosungProtocol.REV_REASON_HOST_ERROR);
+                    } else {
+                        clearPreSendReversal();
                     }
                     notifyError("Invalid response from host: " + e.getMessage());
                 } catch (Exception e) {
                     Log.e(TAG, "Transaction error: " + e.getMessage());
-                    // Generic error after sending = possible approval, need reversal
                     if (requestSentToHost) {
-                        Log.w(TAG, "Transaction error after sending - storing reversal");
-                        storePendingReversalIfNeeded(HyosungProtocol.REV_REASON_HOST_ERROR);
+                        Log.w(TAG, "Transaction error after sending - promoting reversal");
+                        promoteOrCreatePendingReversal(HyosungProtocol.REV_REASON_HOST_ERROR);
+                    } else {
+                        clearPreSendReversal();
                     }
                     notifyError("Transaction failed: " + e.getMessage());
                 } finally {
                     // Always disconnect - server closes connection after each transaction
                     connection.disconnect();
                     Log.d(TAG, "Disconnected after cash withdrawal");
-                    transactionInProgress = false;
+                    transactionInProgress.set(false);
                 }
             }
         });
@@ -338,12 +519,20 @@ public class AtmTransactionManager {
      */
     public void performBalanceInquiry(final CastleCardData cardData, final String accountType) {
 
-        if (transactionInProgress) {
+        if (!transactionInProgress.compareAndSet(false, true)) {
             notifyError("Transaction already in progress");
             return;
         }
 
-        transactionInProgress = true;
+        // Reset reversal tracking — same pattern as performCashWithdrawal.
+        // NOTE: balance inquiries do NOT generate reversals (see
+        // REVERSALS_FOR_BALANCE_INQUIRY). Nothing moves money, so there is nothing
+        // to unwind; the previous "generic across all transaction types" behaviour
+        // (BlueVerse IsReversalCondition() parity) caused a reversal storm.
+        resetReversalState();
+        currentIsBalanceInquiry = true;
+
+        // transactionInProgress already set by compareAndSet above
         notifyProgress("Checking balance...");
 
         executor.execute(new Runnable() {
@@ -360,9 +549,8 @@ public class AtmTransactionManager {
                     //     Log.w(TAG, "H0 status monitoring failed (continuing with transaction): " + e.getMessage());
                     // }
 
-                    // Debug: Log track 2 before creating request
                     String track2Value = cardData.getTrack2ForTransaction();
-                    Log.d(TAG, "DEBUG TRACK2 (BI): cardData.getTrack2ForTransaction() = [" + track2Value + "]");
+                    Log.d(TAG, "Track2 (BI): [masked, length=" + (track2Value != null ? track2Value.length() : 0) + "]");
 
                     TransactionRequest request = TransactionRequest.createBalanceInquiry(
                         config.getTerminalId(),
@@ -411,28 +599,117 @@ public class AtmTransactionManager {
                         Log.d(TAG, "Added PIN KSN to balance inquiry request: " + pinKsnHex);
                     }
 
-                    // Debug: Log track 2 after setting in request
-                    Log.d(TAG, "DEBUG TRACK2 (BI): request.getTrack2Data() = [" + request.getTrack2Data() + "]");
+                    Log.d(TAG, "BI request built, track2 present: " + (request.getTrack2Data() != null && !request.getTrack2Data().isEmpty()));
 
                     currentRequest = request;
                     notifyProgress("Connecting to host...");
 
-                    TransactionResponse response = connection.sendTransaction(request);
+                    // KEY-LOADED flag check (BlueVerse compliance — task #17, parity with withdrawal):
+                    // For non-DUKPT mode, the working key MUST be loaded before we send — otherwise
+                    // the host can't decrypt the PIN block and balance inquiry will fail with 76.
+                    boolean isDukptModeBI = castech.emvtxn.GlobalPara.atmDukptEnabled;
+                    if (!isDukptModeBI && keyManager != null && !keyManager.isWorkingKeyLoaded()) {
+                        Log.e(TAG, "KEY-LOADED check failed (BI): non-DUKPT mode but no working key loaded");
+                        notifyError("Working key not loaded — cannot complete balance inquiry");
+                        return;
+                    }
+
+                    // Pre-persist reversal BEFORE send (BlueVerse parity — IsReversalCondition is
+                    // state-based, not type-based, so BIs need the same protection as withdrawals).
+                    // If a connection-close happens mid-receive after the host approved, this record
+                    // gets promoted to RECONNECT_AND_REVERSE and drained on the next session.
+                    // Amount = 0 because BI doesn't move money — the Type 86 still echoes the original
+                    // Type 85 fields (including the BI account-type) which is what the processor needs
+                    // to identify and unwind the orphan approval.
+                    if (reversalManager != null && REVERSALS_FOR_BALANCE_INQUIRY) {
+                        // See withdrawal path for the EFX/Pulse TC86 layout rationale.
+                        String retrievalRef = ReversalRequest.buildRetrievalReference(
+                                new java.util.Date(), request.getSequenceNumber());
+                        currentPreSendReversal = reversalManager.createPreSendReversal(
+                            config.getTerminalId(),
+                            request.getSequenceNumber(),
+                            0L,   // amount — balance inquiry doesn't move money
+                            0L,   // surcharge
+                            retrievalRef,
+                            request.getStatusMonitoring(),
+                            request.getEmvData());
+                        castech.emvtxn.GlobalPara.atmCurrentReversalId = currentPreSendReversal.getTransactionId();
+                        Log.d(TAG, "Pre-persisted reversal record for BI seq "
+                            + request.getSequenceNumber()
+                            + " (id=" + currentPreSendReversal.getTransactionId()
+                            + ", rrn=" + retrievalRef + ")");
+                    } else {
+                        Log.d(TAG, "Balance inquiry — no reversal record armed (BI does not reverse)");
+                    }
+
+                    // Connect FIRST (on a fresh socket), then mark the request as sent —
+                    // same reasoning as the withdrawal path: a connect-time failure must
+                    // not arm a reversal for an 85 the host never received, and a socket
+                    // left over from a health check must never be reused.
+                    connection.connectFresh();
+
+                    // Mark that we're sending to host - if we fail after this, may need reversal
+                    requestSentToHost = true;
+
+                    // Send to host — use protocol-appropriate path
+                    TransactionResponse response;
+                    AtmProtocol protocol = connection.getProtocol();
+                    if (protocol != null && config.isTritonProtocol()) {
+                        Log.d(TAG, "Using Triton balance inquiry request");
+                        byte[] requestMsg = protocol.buildTransactionRequest(request);
+                        byte[] responseMsg = connection.sendAndReceiveRaw(requestMsg);
+                        connection.completeTritonHandshake();
+                        response = protocol.parseTransactionResponse(responseMsg);
+                        connection.disconnect();
+                    } else {
+                        Log.d(TAG, "Using Hyosung balance inquiry request");
+                        response = connection.sendTransaction(request);
+                    }
                     currentResponse = response;
 
+                    // Clean response received — processBalanceInquiryResponse already calls
+                    // clearPreSendReversal() on both approved and declined paths, so the
+                    // pre-persisted record is removed when the round-trip completed cleanly.
                     processBalanceInquiryResponse(response);
 
                 } catch (AtmHostConnection.ConnectionException e) {
+                    Log.e(TAG, "Connection error (BI): " + e.getMessage());
+                    // If request was sent, we may need a reversal (timeout/conn-close = possible approval)
+                    if (requestSentToHost) {
+                        boolean isTimeout = e.getMessage() != null &&
+                            (e.getMessage().contains("timeout") || e.getMessage().contains("Timeout"));
+                        String reason = isTimeout ? HyosungProtocol.REV_REASON_TIMEOUT :
+                                                   HyosungProtocol.REV_REASON_HOST_ERROR;
+                        Log.w(TAG, "BI connection error after sending — promoting reversal (reason: " + reason + ")");
+                        promoteOrCreatePendingReversal(reason);
+                    } else {
+                        // Send didn't happen — clear the pre-persist
+                        clearPreSendReversal();
+                    }
                     handleConnectionError(e);
                 } catch (HyosungMessageParser.ParseException e) {
+                    Log.e(TAG, "Parse error (BI): " + e.getMessage());
+                    if (requestSentToHost) {
+                        Log.w(TAG, "BI parse error after sending — promoting reversal");
+                        promoteOrCreatePendingReversal(HyosungProtocol.REV_REASON_HOST_ERROR);
+                    } else {
+                        clearPreSendReversal();
+                    }
                     notifyError("Invalid response from host: " + e.getMessage());
                 } catch (Exception e) {
+                    Log.e(TAG, "Balance inquiry error: " + e.getMessage());
+                    if (requestSentToHost) {
+                        Log.w(TAG, "BI error after sending — promoting reversal");
+                        promoteOrCreatePendingReversal(HyosungProtocol.REV_REASON_HOST_ERROR);
+                    } else {
+                        clearPreSendReversal();
+                    }
                     notifyError("Balance inquiry failed: " + e.getMessage());
                 } finally {
                     // Always disconnect - server closes connection after each transaction
                     connection.disconnect();
                     Log.d(TAG, "Disconnected after balance inquiry");
-                    transactionInProgress = false;
+                    transactionInProgress.set(false);
                 }
             }
         });
@@ -454,24 +731,44 @@ public class AtmTransactionManager {
             @Override
             public void run() {
                 try {
-                    ConfigRequest request = new ConfigRequest();
-                    request.setTerminalId(config.getTerminalId());
-                    request.setRoutingId(config.getRoutingId());
-                    request.setConfigType(configType);
+                    AtmProtocol protocol = connection.getProtocol();
 
-                    ConfigResponse response = connection.sendConfigRequest(request);
+                    if (protocol != null && config.isTritonProtocol()) {
+                        // Triton: Config Download (code 60)
+                        Log.d(TAG, "Using Triton config download (code 60)");
+                        connection.ensureConnected();
+                        byte[] requestMsg = protocol.buildConfigDownloadRequest(config.getTerminalId());
+                        byte[] responseMsg = connection.sendAndReceiveRaw(requestMsg);
+                        ConfigResponse response = protocol.parseConfigResponse(responseMsg);
 
-                    // Disconnect after config - server may close after handshake
-                    // This forces fresh connection for subsequent transactions
-                    connection.disconnect();
-                    Log.d(TAG, "Disconnected after config request (server closes after handshake)");
+                        connection.disconnect();
+                        Log.d(TAG, "Disconnected after Triton config request");
 
-                    // Load the working key
-                    if (keyManager.loadWorkingKey(response)) {
-                        notifyProgress("Working key loaded successfully");
-                        notifyConfigComplete(response);
+                        if (response != null && keyManager.loadWorkingKey(response)) {
+                            notifyProgress("Working key loaded successfully");
+                            notifyConfigComplete(response);
+                        } else {
+                            notifyError("Failed to load working key from Triton config");
+                        }
                     } else {
-                        notifyError("Failed to load working key");
+                        // Hyosung: Config Request (type 88)
+                        Log.d(TAG, "Using Hyosung config request (type 88)");
+                        ConfigRequest request = new ConfigRequest();
+                        request.setTerminalId(config.getTerminalId());
+                        request.setRoutingId(config.getRoutingId());
+                        request.setConfigType(configType);
+
+                        ConfigResponse response = connection.sendConfigRequest(request);
+
+                        connection.disconnect();
+                        Log.d(TAG, "Disconnected after Hyosung config request");
+
+                        if (keyManager.loadWorkingKey(response)) {
+                            notifyProgress("Working key loaded successfully");
+                            notifyConfigComplete(response);
+                        } else {
+                            notifyError("Failed to load working key");
+                        }
                     }
 
                 } catch (AtmHostConnection.ConnectionException e) {
@@ -480,6 +777,11 @@ public class AtmTransactionManager {
                     notifyError("Invalid configuration response: " + e.getMessage());
                 } catch (Exception e) {
                     notifyError("Configuration error: " + e.getMessage());
+                } finally {
+                    // The success paths above already disconnect; this covers the
+                    // failure paths, which used to leave the socket open for the next
+                    // operation. disconnect() is idempotent.
+                    connection.disconnect();
                 }
             }
         });
@@ -498,7 +800,66 @@ public class AtmTransactionManager {
      *
      * @throws Exception if key download fails after all retries
      */
+    /**
+     * STATIC on purpose: MainActivity re-initializes the host service on settings
+     * re-apply (opening the Admin screen, CasHUB config, startup sequencing), and
+     * each re-init constructs a NEW AtmTransactionManager. With an instance-level
+     * lock, every instance serialized only against itself — three instances put
+     * three parallel Type 88s on the wire (observed as request bursts on the MUX).
+     * One process talks to one host: the download slot is app-wide.
+     */
+    private static final Object keyDownloadLock = new Object();
+
+    /**
+     * Window in which a just-completed key download satisfies a queued caller.
+     * Sized well under any key lifetime — this only collapses the pile-up of
+     * concurrent requests, it never suppresses a genuinely later refresh.
+     * Static for the same reason as the lock.
+     */
+    private static final long KEY_DOWNLOAD_COALESCE_MS = 30_000L;
+    private static volatile long lastKeyDownloadSuccessMs = 0L;
+
+    /**
+     * Downloads working keys, coalescing concurrent requests.
+     *
+     * <p>This lock is the ONE choke point every key download passes through —
+     * startup renewal, the admin "Download Keys" and "Request New Key" buttons,
+     * openSession(), scheduled renewal and RC-76 key-sync all land here. It used
+     * to only {@code synchronized} around the download, which QUEUES rather than
+     * rejects: the second caller waited its turn and then sent its own redundant
+     * Type 88. The host answers one, the other times out and its retries clear the
+     * key the winner just loaded — the terminal ends up keyless and "not ready".
+     * (Very visible on EFX, where a response takes ~50s.)</p>
+     *
+     * <p>So once inside the lock we re-check: if a download succeeded moments ago,
+     * this request is already satisfied and returns without touching the wire.</p>
+     */
     public void downloadKeysSync() throws Exception {
+        synchronized (keyDownloadLock) {
+            long sinceSuccess = System.currentTimeMillis() - lastKeyDownloadSuccessMs;
+            if (lastKeyDownloadSuccessMs > 0 && sinceSuccess < KEY_DOWNLOAD_COALESCE_MS
+                    && keyManager != null) {
+                // Another instance may have completed the download (the manager is
+                // recreated on every settings re-apply), so THIS instance's flag can
+                // lag reality. The session key itself is in the secure element —
+                // re-sync our in-memory state from the persisted metadata before
+                // deciding a redundant Type 88 is needed.
+                boolean loaded = keyManager.isWorkingKeyLoaded()
+                        || keyManager.resyncHardwareKeyState();
+                if (loaded) {
+                    Log.d(TAG, "Key download coalesced: a working key loaded " + sinceSuccess
+                            + "ms ago — skipping redundant Type 88");
+                    return;
+                }
+            }
+            downloadKeysSyncInternal();
+            if (keyManager != null && keyManager.isWorkingKeyLoaded()) {
+                lastKeyDownloadSuccessMs = System.currentTimeMillis();
+            }
+        }
+    }
+
+    private void downloadKeysSyncInternal() throws Exception {
         Log.d(TAG, "Downloading keys synchronously...");
 
         int maxRetries = 3;
@@ -521,18 +882,38 @@ public class AtmTransactionManager {
                     connection.connect();
                 }
 
-                ConfigRequest request = new ConfigRequest();
-                request.setTerminalId(config.getTerminalId());
-                request.setRoutingId(config.getRoutingId());
-                request.setConfigType(HyosungProtocol.CONFIG_KEY_ONLY);
+                ConfigResponse response;
+                AtmProtocol protocol = connection.getProtocol();
 
-                ConfigResponse response = connection.sendConfigRequest(request);
+                if (protocol != null && config.isTritonProtocol()) {
+                    // Triton: Config Download (code 60)
+                    Log.d(TAG, "Using Triton config download (code 60) - sync");
+                    byte[] requestMsg = protocol.buildConfigDownloadRequest(config.getTerminalId());
+                    byte[] responseMsg = connection.sendAndReceiveRaw(requestMsg);
+                    // Complete Triton handshake: send ACK, wait for EOT
+                    connection.completeTritonHandshake();
+                    response = protocol.parseConfigResponse(responseMsg);
+                } else {
+                    // Hyosung: Config Request (type 88)
+                    Log.d(TAG, "Using Hyosung config request (type 88) - sync");
+                    ConfigRequest request = new ConfigRequest();
+                    request.setTerminalId(config.getTerminalId());
+                    request.setRoutingId(config.getRoutingId());
+                    request.setConfigType(HyosungProtocol.CONFIG_KEY_ONLY);
+                    response = connection.sendConfigRequest(request);
+                }
 
                 // Disconnect after config - server may close after handshake
                 connection.disconnect();
                 Log.d(TAG, "Disconnected after sync config request");
 
-                // Load the working key
+                // DUKPT mode: Type 88 round-trip is success on its own (hardware key, no working key to load)
+                if (castech.emvtxn.GlobalPara.atmDukptEnabled) {
+                    Log.d(TAG, "DUKPT mode: Type 88 round-trip successful on attempt " + attempt + " (no working key load needed)");
+                    return;
+                }
+
+                // MKSK mode: load the working key from response
                 if (keyManager.loadWorkingKey(response)) {
                     Log.d(TAG, "Working key loaded successfully (sync) on attempt " + attempt);
                     return; // Success!
@@ -684,6 +1065,11 @@ public class AtmTransactionManager {
                 } catch (Exception e) {
                     Log.e(TAG, "Health check failed: " + e.getMessage());
                     notifyHealthCheckResult(false);
+                } finally {
+                    // The host closes its side after every exchange. Never leave this
+                    // socket for the next operation — isConnected() would still report
+                    // it live and the next customer's 85 would go into a dead pipe.
+                    connection.disconnect();
                 }
             }
         });
@@ -712,6 +1098,9 @@ public class AtmTransactionManager {
                 } catch (Exception e) {
                     Log.e(TAG, "Status monitoring failed: " + e.getMessage(), e);
                     notifyHealthCheckResult(false);
+                } finally {
+                    // Same rule as the health check: never leave a socket behind.
+                    connection.disconnect();
                 }
             }
         });
@@ -821,8 +1210,20 @@ public class AtmTransactionManager {
                     Log.d(TAG, "Connecting for host totals request...");
                     connection.connect();
 
-                    // Send host totals request using connection's method
-                    HostTotalsResponse response = connection.sendHostTotalsRequest(reset);
+                    // Send host totals request — protocol-appropriate path
+                    HostTotalsResponse response;
+                    AtmProtocol protocol = connection.getProtocol();
+                    if (protocol != null && config.isTritonProtocol()) {
+                        Log.d(TAG, "Using Triton host totals request");
+                        byte[] requestMsg = protocol.buildHostTotalsRequest(
+                            config.getTerminalId(), 0, reset, 0, 0, 0, 0);
+                        byte[] responseMsg = connection.sendAndReceiveRaw(requestMsg);
+                        connection.completeTritonHandshake();
+                        response = protocol.parseHostTotalsResponse(responseMsg);
+                    } else {
+                        Log.d(TAG, "Using Hyosung host totals request");
+                        response = connection.sendHostTotalsRequest(reset);
+                    }
                     Log.d(TAG, "Host totals response: " + response);
 
                     if (callback != null) {
@@ -896,6 +1297,61 @@ public class AtmTransactionManager {
      *
      * @param reason Reversal reason code
      */
+    /**
+     * True when the in-memory last transaction (currentRequest + currentResponse)
+     * exists, i.e. {@link #sendReversal(String)} would actually send something
+     * rather than return silently.
+     */
+    public boolean hasReversibleTransaction() {
+        return currentRequest != null && currentResponse != null;
+    }
+
+    /**
+     * Sends a fully-constructed reversal that was built from a persisted record
+     * (i.e. survives an app restart, unlike the in-memory currentRequest/
+     * currentResponse path used by {@link #sendReversal(String)}). Called by
+     * {@code AtmHostService.sendReversalSync} when draining records that were
+     * written to disk in a previous session.
+     *
+     * @return true if the host accepted the reversal (response code "00")
+     */
+    /** Why the last {@link #sendReversalDirect} failed — host code or connection error; null after success. */
+    private volatile String lastReversalFailure;
+
+    public String getLastReversalFailure() {
+        return lastReversalFailure;
+    }
+
+    public boolean sendReversalDirect(ReversalRequest reversal) {
+        if (reversal == null) {
+            Log.w(TAG, "sendReversalDirect: null reversal request");
+            lastReversalFailure = "no reversal request";
+            return false;
+        }
+        try {
+            ReversalResponse response = sendReversalWithRetry(reversal);
+            if (response != null && response.isAccepted()) {
+                Log.d(TAG, "Reversal accepted (direct, responseCode="
+                        + response.getResponseCode() + ")");
+                lastReversalFailure = null;
+                notifyReversalComplete(true);
+                return true;
+            } else {
+                String code = (response != null) ? response.getResponseCode() : "(null response)";
+                String desc = (response != null) ? response.getResponseDescription() : "no response object";
+                Log.w(TAG, "Reversal not accepted (direct) — responseCode=" + code + " (" + desc + ")");
+                lastReversalFailure = "host responded " + code + " (" + desc + ")";
+                notifyReversalComplete(false);
+                return false;
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Reversal direct send failed: " + e.getMessage());
+            lastReversalFailure = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+            notifyReversalComplete(false);
+            return false;
+        }
+    }
+
     public void sendReversal(final String reason) {
         if (currentRequest == null || currentResponse == null) {
             Log.w(TAG, "No transaction to reverse");
@@ -914,10 +1370,15 @@ public class AtmTransactionManager {
                     ReversalResponse response = sendReversalWithRetry(reversal);
 
                     if (response != null && response.isAccepted()) {
-                        Log.d(TAG, "Reversal accepted");
+                        Log.d(TAG, "Reversal accepted (responseCode=" + response.getResponseCode() + ")");
                         notifyReversalComplete(true);
                     } else {
-                        Log.w(TAG, "Reversal not accepted");
+                        // Surface enough detail to identify *why* the host rejected — we
+                        // were previously logging just "not accepted" which hides whether
+                        // it's a wire/parse issue or a real host-side decision.
+                        String code = (response != null) ? response.getResponseCode() : "(null response)";
+                        String desc = (response != null) ? response.getResponseDescription() : "no response object";
+                        Log.w(TAG, "Reversal not accepted — responseCode=" + code + " (" + desc + ")");
                         notifyReversalComplete(false);
                     }
 
@@ -946,6 +1407,9 @@ public class AtmTransactionManager {
                     throw e;
                 }
                 Log.w(TAG, "Reversal attempt " + attempt + " failed, retrying...");
+                // Drop the socket the failed attempt used; the retry's ensureConnected()
+                // then opens a fresh one instead of writing into the same dead pipe.
+                connection.disconnect();
                 try {
                     Thread.sleep(config.getRetryDelayMs());
                 } catch (InterruptedException ie) {
@@ -984,6 +1448,11 @@ public class AtmTransactionManager {
                 scheduleKeyRenewal();
             }
 
+            // Clean approval — no reversal needed; clear the pre-persisted record
+            // (Dispense failure or customer cancel after this point will create
+            // a new reversal via storePendingReversalIfNeeded.)
+            clearPreSendReversal();
+
             notifyApproved(response);
 
         } else {
@@ -1000,6 +1469,10 @@ public class AtmTransactionManager {
                 downloadKeys();
             }
 
+            // Decline = host received and explicitly rejected.
+            // No reversal needed; clear the pre-persisted record.
+            clearPreSendReversal();
+
             notifyDeclined(response);
         }
     }
@@ -1012,6 +1485,8 @@ public class AtmTransactionManager {
               ", isApproved=" + response.isApproved());
         if (response.isApproved()) {
             Log.d(TAG, "processBalanceInquiryResponse: APPROVED - calling notifyBalanceReceived");
+            // Clean approval — clear pre-persisted reversal
+            clearPreSendReversal();
             notifyBalanceReceived(
                 response.getResponseCode(),
                 response.getAccountBalanceCents(),
@@ -1019,6 +1494,15 @@ public class AtmTransactionManager {
             );
         } else {
             Log.d(TAG, "processBalanceInquiryResponse: DECLINED - calling notifyDeclined");
+
+            // Key sync trigger (parity with processTransactionResponse): code 76
+            // signals "your key doesn't match what host expects" → re-download
+            if (response.requiresKeySync()) {
+                Log.w(TAG, "processBalanceInquiryResponse: Key sync required (code 76) - initiating key download");
+                downloadKeys();
+            }
+
+            clearPreSendReversal();
             notifyDeclined(response);
         }
     }
@@ -1074,10 +1558,26 @@ public class AtmTransactionManager {
     }
 
     /**
+     * Disconnects from the host UNLESS keep-alive is enabled in the processor
+     * config. Task #13: BlueVerse skips Open when the host is already open, but
+     * that only works if we don't tear down the connection after every
+     * transaction. With keep-alive on, the connection is retained between
+     * transactions. With keep-alive off (default), this method behaves identically
+     * to {@link AtmHostConnection#disconnect()}.
+     */
+    public void disconnectUnlessKeepAlive() {
+        if (config != null && config.isKeepAlive()) {
+            Log.d(TAG, "disconnectUnlessKeepAlive: keep-alive on — retaining connection");
+            return;
+        }
+        connection.disconnect();
+    }
+
+    /**
      * Checks if a transaction is in progress.
      */
     public boolean isTransactionInProgress() {
-        return transactionInProgress;
+        return transactionInProgress.get();
     }
 
     /**

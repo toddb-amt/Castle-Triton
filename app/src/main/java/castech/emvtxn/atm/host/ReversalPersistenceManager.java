@@ -37,6 +37,7 @@ public class ReversalPersistenceManager {
 
     private final Context context;
     private final SharedPreferences prefs;
+    private final ReversalJournal journal;
     private ReversalListener listener;
 
     /**
@@ -47,6 +48,15 @@ public class ReversalPersistenceManager {
     public ReversalPersistenceManager(Context context) {
         this.context = context.getApplicationContext();
         this.prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        this.journal = new ReversalJournal(this.context);
+    }
+
+    /**
+     * Returns the append-only journal (tasks #6 + #7). Used for audit,
+     * diagnostics, and post-mortem recovery verification.
+     */
+    public ReversalJournal getJournal() {
+        return journal;
     }
 
     /**
@@ -95,8 +105,11 @@ public class ReversalPersistenceManager {
         reversal.setTerminalId(terminalId);
         reversal.setSequenceNumber(sequenceNumber);
         reversal.setAuthData(authData != null ? authData : "");
-        reversal.setTrack2Data(track2Data);
-        reversal.setPinBlock(pinBlock);
+        // Track 2 + PIN block ARE persisted — see createPreSendReversal() comment
+        // for the PCI tradeoff rationale. Sequence number alone is not enough for
+        // most processors to match the reversal to the original Type 85.
+        reversal.setTrack2Data(track2Data == null ? "" : track2Data);
+        reversal.setPinBlock(pinBlock == null ? "" : pinBlock);
         reversal.setAmountCents(amountCents);
         reversal.setSurchargeCents(surchargeCents);
         reversal.setReasonCode(reason);
@@ -106,6 +119,119 @@ public class ReversalPersistenceManager {
 
         storePendingReversal(reversal);
         return reversal;
+    }
+
+    /**
+     * Creates and stores a {@code PENDING_PRESEND} reversal record BEFORE the
+     * transaction request is sent to the host. Used to ensure a reversal exists
+     * on disk even if the terminal crashes or loses power between the socket
+     * write and the response handler.
+     *
+     * <p>Lifecycle:
+     * <ul>
+     *     <li>On successful approval → call {@link #removePendingReversal(String)}
+     *         with the returned transaction ID.</li>
+     *     <li>On send failure / timeout → call {@link #promoteToPending(String, String)}
+     *         to convert the record from PRESEND to PENDING, making it eligible
+     *         for reversal recovery.</li>
+     *     <li>On terminal restart with a PRESEND record still present → the
+     *         record is processed as a timeout reversal (we cannot know if the
+     *         host received the request).</li>
+     * </ul>
+     *
+     * <p>Mirrors the pre-send persistence pattern observed in deployed Hyosung
+     * BlueVerse ATM software.
+     *
+     * @return the created {@code PendingReversal}; the caller must retain its
+     *         {@link PendingReversal#getTransactionId() transactionId} to later
+     *         remove or promote the record.
+     */
+    public PendingReversal createPreSendReversal(
+            String terminalId, int sequenceNumber,
+            long amountCents, long surchargeCents,
+            String retrievalReference, String statusMonitoring, String emvData) {
+
+        PendingReversal reversal = new PendingReversal();
+        reversal.setTransactionId(generateTransactionId());
+        reversal.setTerminalId(terminalId);
+        reversal.setSequenceNumber(sequenceNumber);
+        reversal.setAuthData("");
+        // EFX/Pulse TC86 layout does NOT carry track 2 or PIN block — leave empty.
+        reversal.setTrack2Data("");
+        reversal.setPinBlock("");
+        reversal.setAmountCents(amountCents);
+        reversal.setSurchargeCents(surchargeCents);
+        reversal.setReasonCode("");
+        reversal.setCreatedTime(System.currentTimeMillis());
+
+        // EFX/Pulse F3/F5/F8/F9 — must be populated so the host can match the
+        // reversal to the original 85. F5 (dispensed amount) defaults to 0 = full
+        // reversal; we don't track per-bill dispensing on the customer side.
+        reversal.setRetrievalReference(retrievalReference == null ? "" : retrievalReference);
+        reversal.setDispensedAmountCents(0L);
+        reversal.setStatusMonitoring(statusMonitoring == null ? "" : statusMonitoring);
+        reversal.setEmvData(emvData == null ? "" : emvData);
+        reversal.setAttemptCount(0);
+        reversal.setStatus(PendingReversal.STATUS_PENDING_PRESEND);
+
+        // Per-destination upload tracking (task #5): processor is always
+        // a required destination; RMS/audit get wired in when those integrations
+        // are added.
+        reversal.setUploadStatusFor(PendingReversal.DEST_PROCESSOR,
+                PendingReversal.UPLOAD_PENDING);
+
+        storePendingReversal(reversal);
+        journal.appendEvent("create_presend", reversal, null);
+        return reversal;
+    }
+
+    /**
+     * Promotes a {@code PENDING_PRESEND} record to one of the recovery-eligible
+     * pending states (default: {@link PendingReversal#STATUS_PENDING}). The
+     * record then becomes eligible for processing by the reversal recovery loop.
+     *
+     * @param transactionId the ID of the pre-send record
+     * @param reason        reversal reason code (see {@link HyosungProtocol})
+     */
+    public void promoteToPending(String transactionId, String reason) {
+        promoteToStatus(transactionId, reason, PendingReversal.STATUS_PENDING);
+    }
+
+    /**
+     * Promotes a record to a specific pending state. Used by callers that know
+     * whether the failure is host-down (RECONNECT states) vs simple reversal-needed.
+     *
+     * @param transactionId  the ID of the record to promote
+     * @param reason         reversal reason code
+     * @param targetStatus   one of STATUS_PENDING, STATUS_PENDING_RECONNECT_AND_EXIT,
+     *                       STATUS_PENDING_RECONNECT_AND_REVERSE
+     */
+    public void promoteToStatus(String transactionId, String reason, String targetStatus) {
+        List<PendingReversal> all = getPendingReversals();
+        for (PendingReversal r : all) {
+            if (transactionId.equals(r.getTransactionId())) {
+                r.setStatus(targetStatus);
+                r.setReasonCode(reason != null ? reason : "");
+                savePendingReversals(all);
+                journal.appendEvent("promote", r,
+                        "target=" + targetStatus + " reason=" + reason);
+                Log.d(TAG, "Promoted pre-send reversal to " + targetStatus + ": "
+                        + transactionId + " reason=" + reason);
+                return;
+            }
+        }
+        Log.w(TAG, "promoteToStatus: no record with id " + transactionId);
+    }
+
+    /**
+     * Returns true if the given status is one of the recovery-eligible states
+     * (any STATUS_PENDING* variant or STATUS_FAILED for retry).
+     */
+    public static boolean isDrainableStatus(String status) {
+        return PendingReversal.STATUS_PENDING.equals(status)
+                || PendingReversal.STATUS_PENDING_RECONNECT_AND_EXIT.equals(status)
+                || PendingReversal.STATUS_PENDING_RECONNECT_AND_REVERSE.equals(status)
+                || PendingReversal.STATUS_FAILED.equals(status);
     }
 
     /**
@@ -162,15 +288,20 @@ public class ReversalPersistenceManager {
      */
     public void removePendingReversal(String transactionId) {
         List<PendingReversal> pending = getPendingReversals();
+        PendingReversal removed = null;
         // Manual removal to avoid Java 8 lambdas (Castle terminal compatibility)
         java.util.Iterator<PendingReversal> iterator = pending.iterator();
         while (iterator.hasNext()) {
             PendingReversal r = iterator.next();
             if (r.getTransactionId().equals(transactionId)) {
+                removed = r;
                 iterator.remove();
             }
         }
         savePendingReversals(pending);
+        if (removed != null) {
+            journal.appendEvent("remove", removed, null);
+        }
         Log.d(TAG, "Removed pending reversal: " + transactionId);
     }
 
@@ -197,6 +328,40 @@ public class ReversalPersistenceManager {
         savePendingReversals(pending);
     }
 
+    /** Records WHY the last attempt failed without counting another attempt (Admin diagnostics). */
+    public void noteAttemptFailure(String transactionId, String errorMessage) {
+        if (errorMessage == null) return;
+        List<PendingReversal> pending = getPendingReversals();
+        for (PendingReversal rev : pending) {
+            if (rev.getTransactionId().equals(transactionId)) {
+                rev.setLastError(errorMessage);
+                break;
+            }
+        }
+        savePendingReversals(pending);
+    }
+
+    /** Finds one pending record by id, or null. */
+    public PendingReversal findPendingReversal(String transactionId) {
+        if (transactionId == null) return null;
+        for (PendingReversal rev : getPendingReversals()) {
+            if (transactionId.equals(rev.getTransactionId())) return rev;
+        }
+        return null;
+    }
+
+    /** Puts a FAILED record back to PENDING for an operator/background retry — no attempt counted. */
+    public void markForRetry(String transactionId) {
+        List<PendingReversal> pending = getPendingReversals();
+        for (PendingReversal rev : pending) {
+            if (rev.getTransactionId().equals(transactionId)) {
+                rev.setStatus(PendingReversal.STATUS_PENDING);
+                break;
+            }
+        }
+        savePendingReversals(pending);
+    }
+
     /**
      * Clears all pending reversals (use with caution!).
      */
@@ -216,16 +381,21 @@ public class ReversalPersistenceManager {
      * @param success Whether it was successful
      */
     public void addToCompletedHistory(PendingReversal reversal, boolean success) {
+        pushHistory(CompletedReversal.completed(reversal, success));
+    }
+
+    /**
+     * Records a human resolution: the record leaves the pending list (see
+     * {@link #removePendingReversal}) but its identity, amount, attempt count and the
+     * operator's reason survive in history — a resolved record is never silently gone.
+     */
+    public void addResolvedToHistory(PendingReversal reversal, String resolution, String resolvedBy) {
+        pushHistory(CompletedReversal.resolved(reversal, resolution, resolvedBy));
+        journal.appendEvent("resolve", reversal, "by=" + resolvedBy + " reason=" + resolution);
+    }
+
+    private void pushHistory(CompletedReversal completed) {
         List<CompletedReversal> history = getCompletedHistory();
-
-        CompletedReversal completed = new CompletedReversal();
-        completed.setTransactionId(reversal.getTransactionId());
-        completed.setAmountCents(reversal.getAmountCents());
-        completed.setCreatedTime(reversal.getCreatedTime());
-        completed.setCompletedTime(System.currentTimeMillis());
-        completed.setSuccess(success);
-        completed.setAttempts(reversal.getAttemptCount());
-
         history.add(0, completed); // Add to beginning
 
         // Trim history
@@ -282,17 +452,48 @@ public class ReversalPersistenceManager {
     /**
      * Converts a PendingReversal to a ReversalRequest for sending.
      */
+    /**
+     * Builds a {@link ReversalRequest} from a persisted {@link PendingReversal}.
+     *
+     * <p><b>Timeout vs Financial reversal distinction (task #4):</b></p>
+     * <ul>
+     *     <li>If {@code pending.getAuthData()} is empty, this is a <b>Timeout
+     *         Reversal</b> — host never responded, no authorization data
+     *         available, reversal carries only original request fields.</li>
+     *     <li>If {@code pending.getAuthData()} is non-empty, this is a
+     *         <b>Financial Reversal</b> — host responded with an approval, but
+     *         dispense/cancel/other post-approval failure occurred. Reversal
+     *         carries the approval auth data so the processor can match it.</li>
+     * </ul>
+     *
+     * <p>The distinction is encoded by which write site populated authData:</p>
+     * <ul>
+     *     <li>{@link #createPreSendReversal} writes empty authData (pre-send,
+     *         possibly will become timeout)</li>
+     *     <li>{@link AtmTransactionManager#promoteOrCreatePendingReversal}
+     *         updates authData from response when response was received</li>
+     *     <li>{@link #createAndStorePendingReversal} (legacy post-failure path)
+     *         takes authData as a parameter</li>
+     * </ul>
+     */
     public ReversalRequest toReversalRequest(PendingReversal pending, String routingId) {
         ReversalRequest request = new ReversalRequest();
         request.setRoutingId(routingId);
         request.setTerminalId(pending.getTerminalId());
         request.setOriginalSequenceNumber(pending.getSequenceNumber());
-        request.setOriginalAuthData(pending.getAuthData());
+        request.setOriginalAuthData(pending.getAuthData() != null ? pending.getAuthData() : "");
+        // EFX/Pulse TC86 layout does NOT carry these — left for backwards-compat only.
         request.setTrack2Data(pending.getTrack2Data());
         request.setPinBlock(pending.getPinBlock());
         request.setOriginalAmountCents(pending.getAmountCents());
         request.setOriginalSurchargeCents(pending.getSurchargeCents());
         request.setReversalReason(pending.getReasonCode());
+
+        // EFX/Pulse TC86 fields — the ones that actually go on the wire.
+        request.setRetrievalReference(pending.getRetrievalReference());
+        request.setDispensedAmountCents(pending.getDispensedAmountCents());
+        request.setStatusMonitoring(pending.getStatusMonitoring());
+        request.setEmvData(pending.getEmvData());
         return request;
     }
 
@@ -318,24 +519,105 @@ public class ReversalPersistenceManager {
      * Represents a pending reversal stored for later processing.
      */
     public static class PendingReversal {
+        /**
+         * Reversal record written BEFORE the transaction request is sent.
+         * On clean approval the record is removed. On send failure or timeout
+         * it is promoted to one of the recovery states below.
+         */
+        public static final String STATUS_PENDING_PRESEND = "pending_presend";
+
+        /**
+         * Reversal needs to be sent to host. Host connection assumed to be alive.
+         * Mirrors BlueVerse {@code MemGet(3, 0x3ec) == 1} — recovery loop should
+         * dispatch this reversal immediately.
+         */
         public static final String STATUS_PENDING = "pending";
+
+        /**
+         * Reversal needs reconnect then exit (no immediate send required).
+         * Mirrors BlueVerse {@code MemGet(3, 0x3ec) == 2}. Drain loop should
+         * verify host connectivity; on reconnect success, mark complete and exit
+         * (the next session-Open will handle any follow-up). Used when the
+         * reversal record was promoted but the failure mode suggests the host
+         * may have processed the original transaction successfully.
+         */
+        public static final String STATUS_PENDING_RECONNECT_AND_EXIT = "pending_reconnect_exit";
+
+        /**
+         * Reversal needs reconnect then dispatch.
+         * Mirrors BlueVerse {@code MemGet(3, 0x3ec) == 3}. Drain loop should
+         * reconnect first, then dispatch the reversal. Used when connection was
+         * lost during send and a reversal is required.
+         */
+        public static final String STATUS_PENDING_RECONNECT_AND_REVERSE = "pending_reconnect_reverse";
+
+        /** Reversal is currently being sent to host. */
         public static final String STATUS_PROCESSING = "processing";
+
+        /** Reversal failed after all retries. */
         public static final String STATUS_FAILED = "failed";
+
+        // ---- Per-destination upload tracking (task #5, UP_TYPE pattern) ----
+        // Mirrors BlueVerse's UP_TYPE enum + SetUploadedIndex / GetUploadLastIndex
+        // (see HYOSUNG_BLUEVERSE_REVERSE_ENGINEERING_FINDINGS.md §3). A single
+        // reversal record may need to propagate to multiple downstream systems
+        // (processor, RMS, audit log, etc.); upload state is tracked per
+        // destination independently.
+
+        /** Upload destination: the processor host (reversal acceptance). */
+        public static final String DEST_PROCESSOR = "processor";
+
+        /** Upload destination: remote management server (audit/monitoring). */
+        public static final String DEST_RMS = "rms";
+
+        /** Upload destination: local audit log (always required). */
+        public static final String DEST_AUDIT = "audit";
+
+        /** Upload not yet attempted for this destination. */
+        public static final String UPLOAD_PENDING = "pending";
+
+        /** Upload in progress for this destination. */
+        public static final String UPLOAD_IN_PROGRESS = "in_progress";
+
+        /** Upload completed successfully for this destination. */
+        public static final String UPLOAD_COMPLETED = "completed";
+
+        /** Upload failed (will retry). */
+        public static final String UPLOAD_FAILED = "failed";
+
+        /** Upload not applicable for this destination (not configured). */
+        public static final String UPLOAD_NA = "na";
 
         private String transactionId;
         private String terminalId;
         private int sequenceNumber;
         private String authData;
-        private String track2Data;
-        private String pinBlock;
+        private String track2Data;       // legacy / unused in EFX TC86 layout
+        private String pinBlock;         // legacy / unused in EFX TC86 layout
         private long amountCents;
         private long surchargeCents;
-        private String reasonCode;
+        private String reasonCode;       // legacy / unused in EFX TC86 layout
         private long createdTime;
         private long lastAttemptTime;
         private int attemptCount;
         private String status;
         private String lastError;
+
+        // ---- EFX/Pulse TC86 fields (what SWC actually consumes) ----
+        private String retrievalReference;  // F3: 26-char MMDDYYYY+HHMMSS+12-digit seq
+        private long dispensedAmountCents;  // F5: 0 for a full reversal
+        private String statusMonitoring;    // F8: same as original 85 F12
+        private String emvData;             // F9: same as original 85 F13 (with "ud" prefix)
+
+        /**
+         * Per-destination upload state map (task #5). Key = destination
+         * identifier (DEST_PROCESSOR, DEST_RMS, DEST_AUDIT). Value = upload
+         * status (UPLOAD_PENDING / UPLOAD_IN_PROGRESS / UPLOAD_COMPLETED /
+         * UPLOAD_FAILED / UPLOAD_NA). Initialized to empty; populated as
+         * upload destinations are configured and progressed.
+         */
+        private java.util.Map<String, String> uploadStatus =
+                new java.util.HashMap<>();
 
         // Getters and setters
         public String getTransactionId() { return transactionId; }
@@ -380,6 +662,68 @@ public class ReversalPersistenceManager {
         public String getLastError() { return lastError; }
         public void setLastError(String lastError) { this.lastError = lastError; }
 
+        // ---- EFX/Pulse TC86 field accessors ----
+        public String getRetrievalReference() { return retrievalReference; }
+        public void setRetrievalReference(String s) { this.retrievalReference = s; }
+
+        public long getDispensedAmountCents() { return dispensedAmountCents; }
+        public void setDispensedAmountCents(long c) { this.dispensedAmountCents = c; }
+
+        public String getStatusMonitoring() { return statusMonitoring; }
+        public void setStatusMonitoring(String s) { this.statusMonitoring = s; }
+
+        public String getEmvData() { return emvData; }
+        public void setEmvData(String s) { this.emvData = s; }
+
+        // ---- Per-destination upload tracking (task #5) ----
+
+        /**
+         * Returns the upload status for a specific destination, or
+         * {@link #UPLOAD_PENDING} if not yet set.
+         */
+        public String getUploadStatusFor(String destination) {
+            if (uploadStatus == null) return UPLOAD_PENDING;
+            String s = uploadStatus.get(destination);
+            return s != null ? s : UPLOAD_PENDING;
+        }
+
+        /**
+         * Sets the upload status for a specific destination.
+         */
+        public void setUploadStatusFor(String destination, String status) {
+            if (uploadStatus == null) {
+                uploadStatus = new java.util.HashMap<>();
+            }
+            uploadStatus.put(destination, status);
+        }
+
+        /**
+         * Returns the full upload status map (live reference). Used by
+         * persistence layer for serialization.
+         */
+        public java.util.Map<String, String> getUploadStatusMap() {
+            if (uploadStatus == null) uploadStatus = new java.util.HashMap<>();
+            return uploadStatus;
+        }
+
+        public void setUploadStatusMap(java.util.Map<String, String> map) {
+            this.uploadStatus = map != null ? map : new java.util.HashMap<>();
+        }
+
+        /**
+         * Returns true if all configured destinations have COMPLETED uploads.
+         * Destinations marked UPLOAD_NA are treated as completed.
+         */
+        public boolean allUploadsComplete() {
+            if (uploadStatus == null || uploadStatus.isEmpty()) return false;
+            for (String s : uploadStatus.values()) {
+                if (!UPLOAD_COMPLETED.equals(s) && !UPLOAD_NA.equals(s)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
         /**
          * Gets formatted amount as dollars.
          */
@@ -415,6 +759,21 @@ public class ReversalPersistenceManager {
                 obj.put("attemptCount", attemptCount);
                 obj.put("status", status);
                 obj.put("lastError", lastError);
+
+                // EFX/Pulse TC86 fields
+                obj.put("retrievalReference", retrievalReference);
+                obj.put("dispensedAmountCents", dispensedAmountCents);
+                obj.put("statusMonitoring", statusMonitoring);
+                obj.put("emvData", emvData);
+
+                // Per-destination upload tracking (task #5)
+                if (uploadStatus != null && !uploadStatus.isEmpty()) {
+                    JSONObject up = new JSONObject();
+                    for (java.util.Map.Entry<String, String> e : uploadStatus.entrySet()) {
+                        up.put(e.getKey(), e.getValue());
+                    }
+                    obj.put("uploadStatus", up);
+                }
             } catch (JSONException e) {
                 Log.e(TAG, "Error converting to JSON: " + e.getMessage());
             }
@@ -440,6 +799,23 @@ public class ReversalPersistenceManager {
             rev.attemptCount = obj.optInt("attemptCount", 0);
             rev.status = obj.optString("status", STATUS_PENDING);
             rev.lastError = obj.optString("lastError", "");
+
+            // EFX/Pulse TC86 fields (default to empty for older records — those will
+            // fail SWC validation but won't crash; operator can Clear them).
+            rev.retrievalReference = obj.optString("retrievalReference", "");
+            rev.dispensedAmountCents = obj.optLong("dispensedAmountCents", 0);
+            rev.statusMonitoring = obj.optString("statusMonitoring", "");
+            rev.emvData = obj.optString("emvData", "");
+
+            // Per-destination upload tracking (task #5)
+            JSONObject up = obj.optJSONObject("uploadStatus");
+            if (up != null) {
+                java.util.Iterator<String> keys = up.keys();
+                while (keys.hasNext()) {
+                    String k = keys.next();
+                    rev.uploadStatus.put(k, up.optString(k, UPLOAD_PENDING));
+                }
+            }
             return rev;
         }
 
@@ -464,6 +840,10 @@ public class ReversalPersistenceManager {
         private long completedTime;
         private boolean success;
         private int attempts;
+        /** Operator's reason when a record was resolved by hand instead of sent; "" otherwise. */
+        private String resolution = "";
+        /** Who resolved it ("SUPER" / "NORMAL" admin tier); "" for drain results. */
+        private String resolvedBy = "";
 
         // Getters and setters
         public String getTransactionId() { return transactionId; }
@@ -484,6 +864,36 @@ public class ReversalPersistenceManager {
         public int getAttempts() { return attempts; }
         public void setAttempts(int attempts) { this.attempts = attempts; }
 
+        public String getResolution() { return resolution == null ? "" : resolution; }
+        public void setResolution(String resolution) { this.resolution = resolution == null ? "" : resolution; }
+
+        public String getResolvedBy() { return resolvedBy == null ? "" : resolvedBy; }
+        public void setResolvedBy(String resolvedBy) { this.resolvedBy = resolvedBy == null ? "" : resolvedBy; }
+
+        /** History entry for a record the drain finished with (sent, or gave up on). */
+        public static CompletedReversal completed(PendingReversal reversal, boolean success) {
+            CompletedReversal c = new CompletedReversal();
+            c.setTransactionId(reversal.getTransactionId());
+            c.setAmountCents(reversal.getAmountCents());
+            c.setCreatedTime(reversal.getCreatedTime());
+            c.setCompletedTime(System.currentTimeMillis());
+            c.setSuccess(success);
+            c.setAttempts(reversal.getAttemptCount());
+            return c;
+        }
+
+        /**
+         * History entry for a record a human resolved with a stated reason (processor
+         * confirmed the original declined / reversed it manually / duplicate). Never a
+         * success: nothing was sent to the host — the reason is the evidence.
+         */
+        public static CompletedReversal resolved(PendingReversal reversal, String resolution, String resolvedBy) {
+            CompletedReversal c = completed(reversal, false);
+            c.setResolution(resolution);
+            c.setResolvedBy(resolvedBy);
+            return c;
+        }
+
         public String getFormattedAmount() {
             return String.format(Locale.US, "$%.2f", amountCents / 100.0);
         }
@@ -502,6 +912,8 @@ public class ReversalPersistenceManager {
                 obj.put("completedTime", completedTime);
                 obj.put("success", success);
                 obj.put("attempts", attempts);
+                obj.put("resolution", resolution == null ? "" : resolution);
+                obj.put("resolvedBy", resolvedBy == null ? "" : resolvedBy);
             } catch (JSONException e) {
                 Log.e(TAG, "Error converting to JSON: " + e.getMessage());
             }
@@ -516,6 +928,8 @@ public class ReversalPersistenceManager {
             rev.completedTime = obj.optLong("completedTime", 0);
             rev.success = obj.optBoolean("success", false);
             rev.attempts = obj.optInt("attempts", 0);
+            rev.resolution = obj.optString("resolution", "");
+            rev.resolvedBy = obj.optString("resolvedBy", "");
             return rev;
         }
     }

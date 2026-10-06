@@ -11,6 +11,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
+import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.RadioButton;
@@ -21,7 +22,6 @@ import android.widget.Toast;
 
 import androidx.fragment.app.Fragment;
 
-import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -42,17 +42,27 @@ import castech.emvtxn.test.EmvCryptogramTest;
 public class Fragment_page_admin_atm extends Fragment {
     private static final String TAG = "AdminATM";
     private static final String PREFS_NAME = "ATM_Admin_Prefs";
-    private static final String KEY_PIN_HASH = "admin_pin_hash";
-    private static final String KEY_PIN_SALT = "admin_pin_salt";
     private static final String KEY_FAILED_ATTEMPTS = "failed_attempts";
     private static final String KEY_LOCKOUT_TIME = "lockout_time";
     private static final int MAX_FAILED_ATTEMPTS = 3;
     private static final long LOCKOUT_DURATION_MS = 5 * 60 * 1000; // 5 minutes
-    private static final String DEFAULT_PIN = "123456";
+
+    // Fixed admin passwords — only TFI changes these (by shipping a new build).
+    // The old user-changeable stored-hash / "Change Default PIN" flow was
+    // removed 2026-09-11. Super Admin sees everything; Normal Admin is limited
+    // to Reversal Management, View Transaction History, WiFi, and Diagnostics.
+    private static final String SUPER_ADMIN_PIN = "8675309";
+    private static final String NORMAL_ADMIN_PIN = "123456";
+
+    // Access tiers returned by verifyPinTier().
+    private static final int ACCESS_NONE = 0;
+    private static final int ACCESS_NORMAL = 1;
+    private static final int ACCESS_SUPER = 2;
 
     private static MainActivity mainActivity = null;
     private View rootView;
     private boolean isAuthenticated = false;
+    private int accessLevel = ACCESS_NONE;  // set on successful admin login
     private boolean isUserVisible = false;  // Track actual user visibility from setMenuVisibility
 
     // UI Elements - Fee Configuration
@@ -70,6 +80,7 @@ public class Fragment_page_admin_atm extends Fragment {
 
     // UI Elements - Host Settings
     private Spinner spinnerProcessorType;
+    private Spinner spinnerProtocolType;
     private EditText edtHostAddress;
     private EditText edtHostPort;
     private EditText edtTerminalId;
@@ -84,6 +95,16 @@ public class Fragment_page_admin_atm extends Fragment {
     private Button btnDownloadKeys;
     private Button btnRequestNewKey;
     private Button btnTestPrinter;
+
+    // WiFi configuration
+    private android.widget.EditText edtWifiSsid;
+    private android.widget.EditText edtWifiPassword;
+    private android.widget.Spinner spinnerWifiSecurity;
+    private TextView txvWifiStatus;
+    private Button btnWifiConnect;
+    private Button btnWifiStatus;
+    private Button btnWifiScan;
+    private static final int REQ_WIFI_SCAN_PERMISSION = 4711;
     private Button btnTestCardReader;
     private Button btnSaveSettings;
     private Button btnExit;
@@ -91,7 +112,14 @@ public class Fragment_page_admin_atm extends Fragment {
     // UI Elements - Reversal Management
     private TextView txvReversalStatus;
     private Button btnProcessReversals;
-    private Button btnClearReversals;
+    private LinearLayout layReversalRecords;
+
+    // UI Elements - POS Mode (semi-integrated proxy)
+    private CheckBox cbEnablePosMode;
+    private EditText edtPosProxyUrl;
+    private EditText edtPosAccessKey;
+    private TextView txvPosStatus;
+    private castech.emvtxn.pos.PosConfig posConfig;
 
     // Processor list
     private List<String> processorList = new ArrayList<>();
@@ -110,6 +138,12 @@ public class Fragment_page_admin_atm extends Fragment {
 
     public Fragment_page_admin_atm(MainActivity activity) {
         mainActivity = activity;
+    }
+
+    // Required no-arg constructor for Android fragment restoration on activity
+    // recreation (see Fragment_page_main_menu). mainActivity is static so it
+    // survives. Without this, recreation crashed with NoSuchMethodException.
+    public Fragment_page_admin_atm() {
     }
 
     @Override
@@ -171,6 +205,8 @@ public class Fragment_page_admin_atm extends Fragment {
         if (!isAuthenticated) {
             pinDialogShown = false;
         }
+        // Refresh reversal status — host may have been initialized since fragment created
+        updateReversalStatus();
     }
 
     @Override
@@ -215,6 +251,7 @@ public class Fragment_page_admin_atm extends Fragment {
 
         // Host Settings
         spinnerProcessorType = rootView.findViewById(R.id.spinnerProcessorType);
+        spinnerProtocolType = rootView.findViewById(R.id.spinnerProtocolType);
         edtHostAddress = rootView.findViewById(R.id.edtHostAddress);
         edtHostPort = rootView.findViewById(R.id.edtHostPort);
         edtTerminalId = rootView.findViewById(R.id.edtTerminalId);
@@ -233,10 +270,18 @@ public class Fragment_page_admin_atm extends Fragment {
         btnSaveSettings = rootView.findViewById(R.id.btnSaveSettings);
         btnExit = rootView.findViewById(R.id.btnExit);
 
+        // POS Mode controls
+        cbEnablePosMode = rootView.findViewById(R.id.cbEnablePosMode);
+        edtPosProxyUrl = rootView.findViewById(R.id.edtPosProxyUrl);
+        edtPosAccessKey = rootView.findViewById(R.id.edtPosAccessKey);
+        txvPosStatus = rootView.findViewById(R.id.txvPosStatus);
+        posConfig = new castech.emvtxn.pos.PosConfig(getContext());
+        loadPosSettings();
+
         // Reversal Management
         txvReversalStatus = rootView.findViewById(R.id.txvReversalStatus);
         btnProcessReversals = rootView.findViewById(R.id.btnProcessReversals);
-        btnClearReversals = rootView.findViewById(R.id.btnClearReversals);
+        layReversalRecords = rootView.findViewById(R.id.layReversalRecords);
 
         // Kiosk Mode
         switchKioskMode = rootView.findViewById(R.id.switchKioskMode);
@@ -245,8 +290,338 @@ public class Fragment_page_admin_atm extends Fragment {
         switchAutoReboot = rootView.findViewById(R.id.switchAutoReboot);
         btnApplyKiosk = rootView.findViewById(R.id.btnApplyKiosk);
 
-        // Setup processor spinner
+        // WiFi configuration
+        edtWifiSsid = rootView.findViewById(R.id.edtWifiSsid);
+        edtWifiPassword = rootView.findViewById(R.id.edtWifiPassword);
+        spinnerWifiSecurity = rootView.findViewById(R.id.spinnerWifiSecurity);
+        txvWifiStatus = rootView.findViewById(R.id.txvWifiStatus);
+        btnWifiConnect = rootView.findViewById(R.id.btnWifiConnect);
+        btnWifiStatus = rootView.findViewById(R.id.btnWifiStatus);
+        btnWifiScan = rootView.findViewById(R.id.btnWifiScan);
+        setupWifiSection();
+
+        // Setup processor and protocol spinners
         setupProcessorSpinner();
+        setupProtocolSpinner();
+    }
+
+    // ==================== WiFi Configuration ====================
+    // Uses Castle CtSettings (settings service). Security `type` per the Castles
+    // Android API Reference v5.0: 1=NOPASS, 2=WEP, 3=WPA/WPA2. All CtSettings
+    // calls run off the UI thread (binder calls into the settings service).
+
+    /** Spinner order — index maps to CtSettings type via WIFI_TYPE_VALUES. */
+    private static final String[] WIFI_TYPE_LABELS = {"WPA/WPA2", "WEP", "Open (no password)"};
+    private static final int[] WIFI_TYPE_VALUES = {3, 2, 1};
+
+    private void setupWifiSection() {
+        if (spinnerWifiSecurity != null) {
+            android.widget.ArrayAdapter<String> adapter = new android.widget.ArrayAdapter<>(
+                    getContext(), android.R.layout.simple_spinner_item, WIFI_TYPE_LABELS);
+            adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+            spinnerWifiSecurity.setAdapter(adapter);
+            spinnerWifiSecurity.setSelection(0);  // WPA/WPA2 default
+        }
+        if (btnWifiConnect != null) {
+            btnWifiConnect.setOnClickListener(v -> connectWifi());
+        }
+        if (btnWifiStatus != null) {
+            btnWifiStatus.setOnClickListener(v -> refreshWifiStatus());
+        }
+        if (btnWifiScan != null) {
+            btnWifiScan.setOnClickListener(v -> scanWifiNetworks());
+        }
+        // Show current state when the admin screen opens
+        refreshWifiStatus();
+    }
+
+    /**
+     * Scans for visible WiFi networks and shows a pick-list. Android gates scan
+     * RESULTS behind location permission, so request it on first use (one-time
+     * system dialog on the admin screen).
+     */
+    private void scanWifiNetworks() {
+        if (getContext() == null) return;
+        if (androidx.core.content.ContextCompat.checkSelfPermission(getContext(),
+                android.Manifest.permission.ACCESS_FINE_LOCATION)
+                != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{android.Manifest.permission.ACCESS_FINE_LOCATION},
+                    REQ_WIFI_SCAN_PERMISSION);
+            return;  // continues in onRequestPermissionsResult
+        }
+        // Android suppresses scan RESULTS system-wide when Location Services are
+        // off (even with the permission granted) — detect that up front and give
+        // the admin a one-tap path to the system toggle instead of an empty list.
+        if (!isLocationEnabled()) {
+            new android.app.AlertDialog.Builder(getContext())
+                    .setTitle("Location Services Off")
+                    .setMessage("Android requires Location Services to be ON to list WiFi "
+                            + "networks (system rule). Turn it on, then scan again.")
+                    .setPositiveButton("Open Location Settings", (d, w) -> {
+                        try {
+                            startActivity(new android.content.Intent(
+                                    android.provider.Settings.ACTION_LOCATION_SOURCE_SETTINGS));
+                        } catch (Throwable t) {
+                            Toast.makeText(getContext(), "Could not open settings: " + t.getMessage(),
+                                    Toast.LENGTH_LONG).show();
+                        }
+                    })
+                    .setNegativeButton("Cancel", null)
+                    .show();
+            return;
+        }
+        doWifiScan();
+    }
+
+    private boolean isLocationEnabled() {
+        try {
+            int mode = android.provider.Settings.Secure.getInt(
+                    requireContext().getContentResolver(),
+                    android.provider.Settings.Secure.LOCATION_MODE,
+                    android.provider.Settings.Secure.LOCATION_MODE_OFF);
+            return mode != android.provider.Settings.Secure.LOCATION_MODE_OFF;
+        } catch (Throwable t) {
+            return true;  // can't tell — let the scan try rather than block it
+        }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == REQ_WIFI_SCAN_PERMISSION) {
+            if (grantResults.length > 0
+                    && grantResults[0] == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                doWifiScan();
+            } else {
+                Toast.makeText(getContext(),
+                        "Location permission is required by Android to list WiFi networks",
+                        Toast.LENGTH_LONG).show();
+            }
+        }
+    }
+
+    private void doWifiScan() {
+        setWifiStatusText("Scanning for networks...");
+        if (btnWifiScan != null) btnWifiScan.setEnabled(false);
+
+        new Thread(() -> {
+            java.util.List<android.net.wifi.ScanResult> results = null;
+            String error = null;
+            try {
+                // Make sure the radio is on (Castle settings service; app can't
+                // toggle WiFi itself on targetSdk >= 29)
+                try { new CTOS.CtSettings().openWifi(); } catch (Throwable ignore) {}
+
+                android.net.wifi.WifiManager wm = (android.net.wifi.WifiManager)
+                        requireContext().getApplicationContext()
+                                .getSystemService(android.content.Context.WIFI_SERVICE);
+                wm.startScan();  // may be throttled — cached results still work
+                Thread.sleep(2500);
+                results = wm.getScanResults();
+            } catch (SecurityException se) {
+                error = "Permission denied reading scan results";
+            } catch (Throwable t) {
+                error = "Scan failed: " + t.getMessage();
+            }
+
+            // Dedupe by SSID keeping the strongest signal, drop hidden/empty SSIDs
+            final java.util.List<android.net.wifi.ScanResult> networks = new java.util.ArrayList<>();
+            if (results != null) {
+                java.util.Map<String, android.net.wifi.ScanResult> best = new java.util.LinkedHashMap<>();
+                for (android.net.wifi.ScanResult r : results) {
+                    if (r.SSID == null || r.SSID.isEmpty()) continue;
+                    android.net.wifi.ScanResult prev = best.get(r.SSID);
+                    if (prev == null || r.level > prev.level) best.put(r.SSID, r);
+                }
+                networks.addAll(best.values());
+                java.util.Collections.sort(networks, (a, b) -> b.level - a.level);
+            }
+
+            final String err = error;
+            if (getActivity() == null) return;
+            getActivity().runOnUiThread(() -> {
+                if (btnWifiScan != null) btnWifiScan.setEnabled(true);
+                if (err != null) {
+                    setWifiStatusText(err);
+                    return;
+                }
+                if (networks.isEmpty()) {
+                    setWifiStatusText("No networks found. If WiFi is on, check that "
+                            + "Location Services are enabled (Android requires them for scans).");
+                    return;
+                }
+                showWifiPickList(networks);
+                refreshWifiStatus();
+            });
+        }).start();
+    }
+
+    /** Signal bars + security label per network; tap fills SSID + security type. */
+    private void showWifiPickList(final java.util.List<android.net.wifi.ScanResult> networks) {
+        String[] items = new String[networks.size()];
+        for (int i = 0; i < networks.size(); i++) {
+            android.net.wifi.ScanResult r = networks.get(i);
+            items[i] = wifiSignalBars(r.level) + "  " + r.SSID
+                    + "  (" + wifiSecurityLabel(r.capabilities) + ")";
+        }
+        new android.app.AlertDialog.Builder(getContext())
+                .setTitle("Select WiFi Network (" + networks.size() + " found)")
+                .setItems(items, (dialog, which) -> {
+                    android.net.wifi.ScanResult picked = networks.get(which);
+                    if (edtWifiSsid != null) edtWifiSsid.setText(picked.SSID);
+                    if (spinnerWifiSecurity != null) {
+                        spinnerWifiSecurity.setSelection(wifiSecuritySpinnerIndex(picked.capabilities));
+                    }
+                    if (edtWifiPassword != null) {
+                        edtWifiPassword.setText("");
+                        edtWifiPassword.requestFocus();
+                    }
+                    Toast.makeText(getContext(),
+                            "Selected \"" + picked.SSID + "\" — enter the password and tap Connect",
+                            Toast.LENGTH_LONG).show();
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private String wifiSignalBars(int dbm) {
+        if (dbm >= -55) return "▂▄▆█";
+        if (dbm >= -66) return "▂▄▆ ";
+        if (dbm >= -77) return "▂▄  ";
+        return "▂   ";
+    }
+
+    private String wifiSecurityLabel(String caps) {
+        if (caps == null) return "Open";
+        if (caps.contains("WPA")) return caps.contains("WPA3") ? "WPA3" : "WPA/WPA2";
+        if (caps.contains("WEP")) return "WEP";
+        return "Open";
+    }
+
+    /** Maps ScanResult capabilities to the security spinner index (WPA / WEP / Open). */
+    private int wifiSecuritySpinnerIndex(String caps) {
+        if (caps != null && caps.contains("WPA")) return 0;
+        if (caps != null && caps.contains("WEP")) return 1;
+        if (caps == null || caps.contains("ESS") && !caps.contains("WPA") && !caps.contains("WEP")) return 2;
+        return 0;
+    }
+
+    private void connectWifi() {
+        final String ssid = edtWifiSsid != null ? edtWifiSsid.getText().toString().trim() : "";
+        final String password = edtWifiPassword != null ? edtWifiPassword.getText().toString() : "";
+        final int typeIdx = spinnerWifiSecurity != null ? spinnerWifiSecurity.getSelectedItemPosition() : 0;
+        final int type = WIFI_TYPE_VALUES[Math.max(0, Math.min(typeIdx, WIFI_TYPE_VALUES.length - 1))];
+
+        if (ssid.isEmpty()) {
+            Toast.makeText(getContext(), "Enter an SSID", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (type != 1 && password.isEmpty()) {
+            Toast.makeText(getContext(), "Enter the WiFi password (or choose Open)", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        setWifiStatusText("Connecting to \"" + ssid + "\" ...");
+        if (btnWifiConnect != null) btnWifiConnect.setEnabled(false);
+
+        new Thread(() -> {
+            String result;
+            try {
+                CTOS.CtSettings settings = new CTOS.CtSettings();
+                settings.openWifi();
+                // DHCP connect; returns a success/failure message string
+                String ret = settings.setDhcpWifi(ssid, password, type);
+                result = "Connect result: " + (ret != null ? ret : "(no response)");
+                Log.d(TAG, "WiFi setDhcpWifi(\"" + ssid + "\", type=" + type + ") -> " + ret);
+            } catch (Throwable t) {
+                result = "WiFi connect failed: " + t.getMessage();
+                Log.e(TAG, "WiFi connect error", t);
+            }
+            final String msg = result;
+            if (getActivity() != null) {
+                getActivity().runOnUiThread(() -> {
+                    if (btnWifiConnect != null) btnWifiConnect.setEnabled(true);
+                    Toast.makeText(getContext(), msg, Toast.LENGTH_LONG).show();
+                });
+            }
+            // Give the association a moment, then show the resulting state
+            try { Thread.sleep(3000); } catch (InterruptedException ignored) {}
+            refreshWifiStatus();
+        }).start();
+    }
+
+    private void refreshWifiStatus() {
+        new Thread(() -> {
+            String status;
+            String currentSsid = null;
+            try {
+                CTOS.CtSettings settings = new CTOS.CtSettings();
+                java.util.Map<?, ?> cfg = settings.getWifiConfig();
+                if (cfg == null || cfg.isEmpty()) {
+                    status = "WiFi: no configuration returned";
+                } else {
+                    StringBuilder sb = new StringBuilder();
+                    for (java.util.Map.Entry<?, ?> e : cfg.entrySet()) {
+                        sb.append(e.getKey()).append(": ").append(e.getValue()).append("\n");
+                        // Remember the connected SSID so we can prefill the field
+                        String k = String.valueOf(e.getKey()).toLowerCase();
+                        if (k.contains("ssid") && e.getValue() != null) {
+                            currentSsid = String.valueOf(e.getValue())
+                                    .replace("\"", "").trim();
+                        }
+                    }
+                    status = sb.toString().trim();
+                }
+            } catch (Throwable t) {
+                status = "WiFi status unavailable: " + t.getMessage();
+                Log.w(TAG, "getWifiConfig failed: " + t.getMessage());
+            }
+
+            // Fallback for the current SSID: WifiManager connection info (works
+            // when the Castles config map doesn't include an ssid field)
+            if (currentSsid == null || currentSsid.isEmpty()
+                    || "<unknown ssid>".equalsIgnoreCase(currentSsid)) {
+                try {
+                    android.net.wifi.WifiManager wm = (android.net.wifi.WifiManager)
+                            requireContext().getApplicationContext()
+                                    .getSystemService(android.content.Context.WIFI_SERVICE);
+                    android.net.wifi.WifiInfo info = wm.getConnectionInfo();
+                    if (info != null && info.getSSID() != null) {
+                        String s = info.getSSID().replace("\"", "").trim();
+                        if (!s.isEmpty() && !"<unknown ssid>".equalsIgnoreCase(s)) {
+                            currentSsid = s;
+                        }
+                    }
+                } catch (Throwable ignore) {}
+            }
+
+            final String st = status;
+            final String ssid = currentSsid;
+            if (getActivity() != null) {
+                getActivity().runOnUiThread(() -> {
+                    if (txvWifiStatus != null) {
+                        txvWifiStatus.setText(ssid != null && !ssid.isEmpty()
+                                ? "Connected: " + ssid + "\n" + st : st);
+                    }
+                    // Prefill the SSID field with the current network — only if the
+                    // admin hasn't typed anything (never clobber their input)
+                    if (edtWifiSsid != null && ssid != null && !ssid.isEmpty()
+                            && edtWifiSsid.getText().toString().trim().isEmpty()) {
+                        edtWifiSsid.setText(ssid);
+                    }
+                });
+            }
+        }).start();
+    }
+
+    private void setWifiStatusText(final String text) {
+        if (getActivity() != null) {
+            getActivity().runOnUiThread(() -> {
+                if (txvWifiStatus != null) {
+                    txvWifiStatus.setText(text);
+                }
+            });
+        }
     }
 
     private void setupProcessorSpinner() {
@@ -266,6 +641,27 @@ public class Fragment_page_admin_atm extends Fragment {
         );
         adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
         spinnerProcessorType.setAdapter(adapter);
+    }
+
+    private void setupProtocolSpinner() {
+        List<String> protocolList = new ArrayList<>();
+        protocolList.add("Hyosung STD1");
+        protocolList.add("Triton Standard");
+
+        ArrayAdapter<String> adapter = new ArrayAdapter<>(
+            getContext(),
+            android.R.layout.simple_spinner_item,
+            protocolList
+        );
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        spinnerProtocolType.setAdapter(adapter);
+
+        // Set current selection based on GlobalPara
+        if ("TRITON".equals(GlobalPara.atmProtocolType)) {
+            spinnerProtocolType.setSelection(1);
+        } else {
+            spinnerProtocolType.setSelection(0);
+        }
     }
 
     private void setupListeners() {
@@ -304,9 +700,6 @@ public class Fragment_page_admin_atm extends Fragment {
         // Reversal Management buttons
         if (btnProcessReversals != null) {
             btnProcessReversals.setOnClickListener(v -> processPendingReversals());
-        }
-        if (btnClearReversals != null) {
-            btnClearReversals.setOnClickListener(v -> clearPendingReversals());
         }
 
         // Update reversal status
@@ -356,7 +749,7 @@ public class Fragment_page_admin_atm extends Fragment {
 
         final EditText input = new EditText(getContext());
         input.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_VARIATION_PASSWORD);
-        input.setHint("Enter 4-6 digit PIN");
+        input.setHint("Enter admin PIN");
 
         LinearLayout layout = new LinearLayout(getContext());
         layout.setOrientation(LinearLayout.VERTICAL);
@@ -366,11 +759,16 @@ public class Fragment_page_admin_atm extends Fragment {
 
         builder.setPositiveButton("OK", (dialog, which) -> {
             String enteredPin = input.getText().toString();
-            if (verifyPin(enteredPin)) {
+            int tier = verifyPinTier(enteredPin);
+            if (tier != ACCESS_NONE) {
                 isAuthenticated = true;
+                accessLevel = tier;
                 resetFailedAttempts();
                 setContentVisible(true);
-                Toast.makeText(getContext(), "Access granted", Toast.LENGTH_SHORT).show();
+                applyAccessLevel(tier);
+                Toast.makeText(getContext(),
+                    tier == ACCESS_SUPER ? "Super Admin access granted" : "Admin access granted",
+                    Toast.LENGTH_SHORT).show();
             } else {
                 incrementFailedAttempts();
                 int remaining = MAX_FAILED_ATTEMPTS - getFailedAttempts();
@@ -398,103 +796,113 @@ public class Fragment_page_admin_atm extends Fragment {
         builder.show();
     }
 
+    /**
+     * Returns the access tier for an entered password, or {@link #ACCESS_NONE}.
+     * Passwords are fixed in the build (only TFI changes them by shipping a new
+     * version) — there is no on-terminal PIN change.
+     */
+    private int verifyPinTier(String enteredPin) {
+        if (SUPER_ADMIN_PIN.equals(enteredPin)) return ACCESS_SUPER;
+        if (NORMAL_ADMIN_PIN.equals(enteredPin)) return ACCESS_NORMAL;
+        return ACCESS_NONE;
+    }
+
+    /** Any valid admin password (used by the kiosk-apply re-confirmation). */
     private boolean verifyPin(String enteredPin) {
-        SharedPreferences prefs = getContext().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
-        String storedHash = prefs.getString(KEY_PIN_HASH, null);
+        return verifyPinTier(enteredPin) != ACCESS_NONE;
+    }
 
-        if (storedHash == null) {
-            // First time - accept default PIN without prompting to change
-            if (enteredPin.equals(DEFAULT_PIN)) {
-                return true;
+    /**
+     * Enables/greys admin sections by access tier — restricted sections stay
+     * VISIBLE but are disabled and dimmed, not hidden.
+     * <ul>
+     *   <li>Super Admin ({@code 8675309}) — everything active.</li>
+     *   <li>Normal Admin ({@code 123456}) — only Reversal Management,
+     *       View Transaction History, WiFi Configuration, and Diagnostics are
+     *       active; all other sections are greyed out. The destructive "Clear"
+     *       buttons stay Super-only (greyed for Normal).</li>
+     * </ul>
+     * Sections are flat siblings in the scroll column, each led by a header
+     * with an id; {@link #setSectionEnabled} enables/dims the run of views
+     * between one header and the next.
+     */
+    private void applyAccessLevel(int tier) {
+        if (rootView == null) return;
+        boolean sup = (tier == ACCESS_SUPER);
+
+        // Super-only sections — greyed out + disabled for Normal Admin (still visible)
+        setSectionEnabled(R.id.hdrFeeConfig,    R.id.hdrWithdrawal,   sup);
+        setSectionEnabled(R.id.hdrWithdrawal,   R.id.hdrTerminalInfo, sup);
+        setSectionEnabled(R.id.hdrTerminalInfo, R.id.hdrHostSettings, sup);
+        setSectionEnabled(R.id.hdrHostSettings, R.id.hdrReversal,     sup);
+        // Normal-admin sections — always active once authenticated
+        setSectionEnabled(R.id.hdrReversal,     R.id.hdrHistory,      true);
+        setSectionEnabled(R.id.hdrHistory,      R.id.hdrWifi,         true);
+        setSectionEnabled(R.id.hdrWifi,         R.id.hdrDiagnostics,  true);
+        setSectionEnabled(R.id.hdrDiagnostics,  R.id.hdrKiosk,        true);
+        // Kiosk is the last section — 0 = "to end of column"
+        setSectionEnabled(R.id.hdrKiosk,        0,                    sup);
+
+        // Destructive "Clear" actions live inside the normal sections, so re-apply
+        // them AFTER the section pass above: Super-only, greyed for Normal. (Per-record
+        // reversal Resolve buttons are built in updateReversalStatus() with the tier.)
+        setViewEnabledDimmed(rootView.findViewById(R.id.btnClearHistory), sup);
+        updateReversalStatus();
+
+        // "Request New Working Key" is available to BOTH tiers even though it
+        // sits in the (otherwise Super-only) Host Settings section — a field tech
+        // may need to re-request a key. Re-enable it after the section pass.
+        setViewEnabledDimmed(rootView.findViewById(R.id.btnRequestNewKey), true);
+    }
+
+    /**
+     * Enables (or disables + dims) every direct child of the scroll column from
+     * {@code startHeaderId} (inclusive) up to {@code endHeaderId} (exclusive);
+     * {@code endHeaderId <= 0} means "to the end of the column". Views stay
+     * visible either way.
+     */
+    private void setSectionEnabled(int startHeaderId, int endHeaderId, boolean enabled) {
+        View start = rootView.findViewById(startHeaderId);
+        if (start == null || !(start.getParent() instanceof ViewGroup)) return;
+        ViewGroup col = (ViewGroup) start.getParent();
+        int from = col.indexOfChild(start);
+        if (from < 0) return;
+        int to = col.getChildCount();
+        if (endHeaderId > 0) {
+            View end = rootView.findViewById(endHeaderId);
+            if (end != null) {
+                int ei = col.indexOfChild(end);
+                if (ei >= 0) to = ei;
             }
-            return false;
         }
-
-        String salt = prefs.getString(KEY_PIN_SALT, "");
-        String enteredHash = hashPin(enteredPin, salt);
-        return storedHash.equals(enteredHash);
-    }
-
-    private void promptChangePin() {
-        new AlertDialog.Builder(getContext())
-            .setTitle("Change Default PIN")
-            .setMessage("Default PIN detected. Would you like to set a new PIN?")
-            .setPositiveButton("Yes", (dialog, which) -> showChangePinDialog())
-            .setNegativeButton("Later", null)
-            .show();
-    }
-
-    private void showChangePinDialog() {
-        AlertDialog.Builder builder = new AlertDialog.Builder(getContext());
-        builder.setTitle("Set New Admin PIN");
-
-        LinearLayout layout = new LinearLayout(getContext());
-        layout.setOrientation(LinearLayout.VERTICAL);
-        layout.setPadding(50, 40, 50, 10);
-
-        final EditText inputNew = new EditText(getContext());
-        inputNew.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_VARIATION_PASSWORD);
-        inputNew.setHint("New PIN (4-6 digits)");
-        layout.addView(inputNew);
-
-        final EditText inputConfirm = new EditText(getContext());
-        inputConfirm.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_VARIATION_PASSWORD);
-        inputConfirm.setHint("Confirm PIN");
-        layout.addView(inputConfirm);
-
-        builder.setView(layout);
-
-        builder.setPositiveButton("Save", (dialog, which) -> {
-            String newPin = inputNew.getText().toString();
-            String confirmPin = inputConfirm.getText().toString();
-
-            if (newPin.length() < 4 || newPin.length() > 6) {
-                Toast.makeText(getContext(), "PIN must be 4-6 digits", Toast.LENGTH_SHORT).show();
-                return;
-            }
-
-            if (!newPin.equals(confirmPin)) {
-                Toast.makeText(getContext(), "PINs do not match", Toast.LENGTH_SHORT).show();
-                return;
-            }
-
-            saveNewPin(newPin);
-            Toast.makeText(getContext(), "PIN changed successfully", Toast.LENGTH_SHORT).show();
-        });
-
-        builder.setNegativeButton("Cancel", null);
-        builder.show();
-    }
-
-    private void saveNewPin(String pin) {
-        String salt = generateSalt();
-        String hash = hashPin(pin, salt);
-
-        SharedPreferences.Editor editor = getContext()
-            .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit();
-        editor.putString(KEY_PIN_HASH, hash);
-        editor.putString(KEY_PIN_SALT, salt);
-        editor.apply();
-    }
-
-    private String hashPin(String pin, String salt) {
-        try {
-            MessageDigest md = MessageDigest.getInstance("SHA-256");
-            md.update((salt + pin).getBytes());
-            byte[] digest = md.digest();
-            StringBuilder sb = new StringBuilder();
-            for (byte b : digest) {
-                sb.append(String.format("%02x", b));
-            }
-            return sb.toString();
-        } catch (Exception e) {
-            Log.e(TAG, "Hash error: " + e.getMessage());
-            return pin; // Fallback to plain (not secure, but won't crash)
+        for (int i = from; i < to; i++) {
+            setViewEnabledDimmed(col.getChildAt(i), enabled);
         }
     }
 
-    private String generateSalt() {
-        return String.valueOf(System.currentTimeMillis());
+    /**
+     * Enables/disables a view and its entire subtree, dimming to 40% alpha when
+     * disabled so a restricted control reads as "greyed out". Leaves visibility
+     * untouched: a control the layout defaults to gone (the flat/percentage fee
+     * sub-layouts, the Clear buttons) must stay hidden until its own logic shows
+     * it — forcing VISIBLE here showed both fee layouts at once and surfaced the
+     * Clear buttons with nothing to clear.
+     */
+    private void setViewEnabledDimmed(View v, boolean enabled) {
+        if (v == null) return;
+        v.setAlpha(enabled ? 1f : 0.4f);
+        setViewTreeEnabled(v, enabled);
+    }
+
+    private void setViewTreeEnabled(View v, boolean enabled) {
+        if (v == null) return;
+        v.setEnabled(enabled);
+        if (v instanceof ViewGroup) {
+            ViewGroup vg = (ViewGroup) v;
+            for (int i = 0; i < vg.getChildCount(); i++) {
+                setViewTreeEnabled(vg.getChildAt(i), enabled);
+            }
+        }
     }
 
     private boolean isLockedOut() {
@@ -527,8 +935,14 @@ public class Fragment_page_admin_atm extends Fragment {
 
     private void setLockoutTime() {
         long lockoutUntil = System.currentTimeMillis() + LOCKOUT_DURATION_MS;
+        // The lockout IS the penalty for the failed attempts, so the counter starts
+        // over with it. It used to stay at MAX after the lockout expired (it was only
+        // reset on success), so one mistype on the next visit gave remaining = -1 and
+        // an immediate 5-minute relock — a permanent one-strike lockout. No attempt
+        // is possible while locked (the PIN dialog is gated on isLockedOut()), so
+        // resetting here cannot grant extra tries.
         getContext().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            .edit().putLong(KEY_LOCKOUT_TIME, lockoutUntil).apply();
+            .edit().putLong(KEY_LOCKOUT_TIME, lockoutUntil).putInt(KEY_FAILED_ATTEMPTS, 0).apply();
     }
 
     private void setContentVisible(boolean visible) {
@@ -543,13 +957,20 @@ public class Fragment_page_admin_atm extends Fragment {
     private void loadSettings() {
         SharedPreferences prefs = getContext().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
 
-        // Migration: Enable DUKPT mode (injected key at C000/0000) - one-time reset
+        // Migration: one-time PIN-key reset. MUST follow the build flavor — this
+        // previously forced DUKPT at C000/0000 unconditionally, which broke the MKSK
+        // build on every fresh install (PIN encrypt at C000/0000 → 0x2905 key not
+        // exist; MKSK's master key lives at C000/0010).
         if (!prefs.getBoolean("migrated_to_dukpt_v2", false)) {
-            Log.d(TAG, "Migrating settings: Enabling DUKPT at C000/0000");
+            boolean dukptMode = "DUKPT".equals(BuildConfig.KEY_MODE);
+            Log.d(TAG, "Migrating settings: KEY_MODE=" + BuildConfig.KEY_MODE
+                    + " → dukpt_enabled=" + dukptMode);
             SharedPreferences.Editor editor = prefs.edit();
-            editor.putBoolean("dukpt_enabled", true);  // DUKPT ENABLED
-            editor.putInt("dukpt_key_set", 0x0000C000);  // C000
-            editor.putInt("dukpt_key_index", 0x00000000);  // 0000
+            editor.putBoolean("dukpt_enabled", dukptMode);
+            if (dukptMode) {
+                editor.putInt("dukpt_key_set", 0x0000C000);    // DUKPT IPEK at C000/0000
+                editor.putInt("dukpt_key_index", 0x00000000);
+            }
             editor.putString("pin_block_format", "FORMAT0");
             editor.putBoolean("migrated_to_dukpt_v2", true);
             editor.apply();
@@ -604,6 +1025,14 @@ public class Fragment_page_admin_atm extends Fragment {
             if (processorIndex < spinnerProcessorType.getCount()) {
                 spinnerProcessorType.setSelection(processorIndex);
             }
+            // Load protocol selection
+            int protocolIndex = prefs.getInt("protocol_index", 0);
+            if (protocolIndex < spinnerProtocolType.getCount()) {
+                spinnerProtocolType.setSelection(protocolIndex);
+            }
+            // Apply protocol type to GlobalPara immediately
+            GlobalPara.atmProtocolType = protocolIndex == 1 ? "TRITON" : "HYOSUNG";
+
             edtHostAddress.setText(prefs.getString("host_address", ""));
             edtHostPort.setText(prefs.getString("host_port", "9057"));
             edtTerminalId.setText(prefs.getString("terminal_id", ""));
@@ -613,23 +1042,42 @@ public class Fragment_page_admin_atm extends Fragment {
             chkUseTls.setChecked(prefs.getBoolean("use_tls", true));
         }
 
-        // DUKPT PIN encryption settings
-        // Key injected at C000/0000 per Castle Key Injection Tool documentation
-        GlobalPara.atmDukptEnabled = prefs.getBoolean("dukpt_enabled", true);  // Default ENABLED
+        // PIN encryption settings — key location depends on protocol
         GlobalPara.atmPinBlockFormat = prefs.getString("pin_block_format", "FORMAT0");
-        GlobalPara.atmDukptKeySet = prefs.getInt("dukpt_key_set", 0x0000C000);   // C000 - Castle default
-        GlobalPara.atmDukptKeyIndex = prefs.getInt("dukpt_key_index", 0x00000000); // 0000 - Castle default
 
-        Log.d(TAG, "Loaded DUKPT settings: enabled=" + GlobalPara.atmDukptEnabled +
-                   ", format=" + GlobalPara.atmPinBlockFormat +
-                   ", keySet=" + String.format("0x%04X", GlobalPara.atmDukptKeySet) +
-                   ", keyIndex=" + String.format("0x%04X", GlobalPara.atmDukptKeyIndex));
+        // Build flavor determines DUKPT vs MKSK; key location depends on protocol
+        GlobalPara.atmDukptEnabled = "DUKPT".equals(BuildConfig.KEY_MODE);
+        if ("TRITON".equals(GlobalPara.atmProtocolType)) {
+            GlobalPara.atmDukptKeySet = 0x0000CFFF;
+            GlobalPara.atmDukptKeyIndex = 0x00000000;
+        } else {
+            GlobalPara.atmDukptKeySet = prefs.getInt("dukpt_key_set", 0x0000C000);
+            GlobalPara.atmDukptKeyIndex = prefs.getInt("dukpt_key_index", 0x00000000);
+        }
+        GlobalPara.onlinePinKeySet = GlobalPara.atmDukptKeySet;
+        GlobalPara.onlinePinKeyIndex = GlobalPara.atmDukptKeyIndex;
+        Log.d(TAG, "Loaded PIN settings (" + GlobalPara.atmProtocolType + "/" +
+                   BuildConfig.KEY_MODE + "): key=" +
+                   String.format("0x%04X/0x%04X", GlobalPara.atmDukptKeySet, GlobalPara.atmDukptKeyIndex));
 
         // Also update GlobalPara
         updateGlobalPara();
     }
 
+    /** The Save button: persists everything on the page, POS-mode settings included. */
     private void saveSettings() {
+        saveSettings(true);
+    }
+
+    /**
+     * @param includePosSettings false for the IMPLICIT saves that Test Connection,
+     *        Download Keys and Request New Working Key run before their host call.
+     *        Those exist to persist the host settings they depend on; they must not
+     *        also commit the POS-mode checkbox. That is how a POS-site terminal lost
+     *        POS mode on 2026-09-18: a stray tap had unchecked "Enable POS Mode" and a
+     *        later Request New Working Key silently persisted it.
+     */
+    private void saveSettings(boolean includePosSettings) {
         try {
             SharedPreferences.Editor editor = getContext()
                 .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit();
@@ -645,9 +1093,10 @@ public class Fragment_page_admin_atm extends Fragment {
 
             // Host settings
             editor.putInt("processor_index", spinnerProcessorType.getSelectedItemPosition());
-            editor.putString("host_address", edtHostAddress.getText().toString());
-            editor.putString("host_port", edtHostPort.getText().toString());
-            editor.putString("terminal_id", edtTerminalId.getText().toString());
+            editor.putInt("protocol_index", spinnerProtocolType.getSelectedItemPosition());
+            editor.putString("host_address", edtHostAddress.getText().toString().trim());
+            editor.putString("host_port", edtHostPort.getText().toString().trim());
+            editor.putString("terminal_id", edtTerminalId.getText().toString().trim());
             if (chkUseTls != null) {
                 editor.putBoolean("use_tls", chkUseTls.isChecked());
             }
@@ -669,6 +1118,12 @@ public class Fragment_page_admin_atm extends Fragment {
 
             editor.apply();
 
+            // Persist POS Mode settings (own SharedPreferences file via PosConfig) —
+            // only for the explicit Save button, never for an implicit save.
+            if (includePosSettings) {
+                savePosSettings();
+            }
+
             // Update GlobalPara
             updateGlobalPara();
 
@@ -681,7 +1136,24 @@ public class Fragment_page_admin_atm extends Fragment {
                 }
             }
 
-            Toast.makeText(getContext(), "Settings saved", Toast.LENGTH_SHORT).show();
+            // Re-initialize the host service so the new settings (processor, host
+            // URL/port, TLS, terminal ID, DUKPT mode, etc.) take effect immediately.
+            // Without this, the live AtmHostService keeps the old config (or remains
+            // null if no service was ever initialized) and the next transaction
+            // either hits the wrong host or fails with "AtmHostService not available".
+            // Matches what the existing Test Connection button already does.
+            if (mainActivity != null) {
+                Log.d(TAG, "Settings saved — re-initializing host service so new config takes effect");
+                new Thread(() -> {
+                    try {
+                        mainActivity.initializeAtmHostService();
+                    } catch (Exception ex) {
+                        Log.e(TAG, "Host re-init failed after settings save: " + ex.getMessage());
+                    }
+                }, "SaveSettings-HostReinit").start();
+            }
+
+            Toast.makeText(getContext(), "Settings saved — reloading host…", Toast.LENGTH_SHORT).show();
             Log.d(TAG, "Settings saved successfully");
         } catch (Exception e) {
             Log.e(TAG, "Error saving settings: " + e.getMessage());
@@ -705,9 +1177,9 @@ public class Fragment_page_admin_atm extends Fragment {
             GlobalPara.atmMaxAmount = Double.parseDouble(edtMaxAmount.getText().toString());
 
             // Update host settings
-            GlobalPara.atmHostAddress = edtHostAddress.getText().toString();
-            GlobalPara.atmHostPort = Integer.parseInt(edtHostPort.getText().toString());
-            GlobalPara.atmTerminalId = edtTerminalId.getText().toString();
+            GlobalPara.atmHostAddress = edtHostAddress.getText().toString().trim();
+            GlobalPara.atmHostPort = Integer.parseInt(edtHostPort.getText().toString().trim());
+            GlobalPara.atmTerminalId = edtTerminalId.getText().toString().trim();
             if (chkUseTls != null) {
                 GlobalPara.atmUseTls = chkUseTls.isChecked();
             }
@@ -715,7 +1187,11 @@ public class Fragment_page_admin_atm extends Fragment {
             // Update processor type based on spinner selection
             GlobalPara.atmProcessorType = getProcessorTypeFromSpinner(spinnerProcessorType.getSelectedItemPosition());
 
+            // Update protocol type based on spinner selection
+            GlobalPara.atmProtocolType = spinnerProtocolType.getSelectedItemPosition() == 1 ? "TRITON" : "HYOSUNG";
+
             Log.d(TAG, "GlobalPara updated - Processor: " + GlobalPara.atmProcessorType +
+                      ", Protocol: " + GlobalPara.atmProtocolType +
                       ", Host: " + GlobalPara.atmHostAddress + ":" + GlobalPara.atmHostPort +
                       ", TLS: " + GlobalPara.atmUseTls);
         } catch (Exception e) {
@@ -768,8 +1244,11 @@ public class Fragment_page_admin_atm extends Fragment {
     }
 
     private String getDeviceSerial() {
-        // TODO: Get actual serial from Castle SDK
-        return "ATM-" + System.currentTimeMillis() % 10000;
+        if (GlobalPara.mainActivity != null) {
+            String sn = GlobalPara.mainActivity.getHardwareSerialNumber();
+            if (!sn.isEmpty()) return sn;
+        }
+        return "(unavailable)";
     }
 
     // ==================== Host Operations ====================
@@ -801,8 +1280,9 @@ public class Fragment_page_admin_atm extends Fragment {
             return;
         }
 
-        // Save settings first so they're available to host service
-        saveSettings();
+        // Save host settings first so they're available to host service (implicit
+        // save: leaves the POS-mode settings alone)
+        saveSettings(false);
 
         txvHostStatus.setText("Status: Initializing host service...");
         txvHostStatus.setTextColor(0xFF666666);
@@ -825,6 +1305,9 @@ public class Fragment_page_admin_atm extends Fragment {
         Log.d(TAG, "testConnection: calling initializeAtmHostService()");
         mainActivity.initializeAtmHostService();
         final AtmHostService hostService = mainActivity.getAtmHostService();
+
+        // Refresh reversal status — host service now (re)initialized
+        updateReversalStatus();
 
         Log.d(TAG, "testConnection: hostService=" + (hostService != null ? "OK" : "NULL"));
 
@@ -975,8 +1458,9 @@ public class Fragment_page_admin_atm extends Fragment {
             return;
         }
 
-        // Ensure settings are saved (this is fast, OK on main thread)
-        saveSettings();
+        // Ensure host settings are saved (this is fast, OK on main thread). Implicit
+        // save: the POS-mode settings are not touched.
+        saveSettings(false);
 
         txvHostStatus.setText("Status: Initializing...");
         txvHostStatus.setTextColor(0xFF666666);
@@ -999,6 +1483,10 @@ public class Fragment_page_admin_atm extends Fragment {
                         updateStatus("Initializing host service...");
                         mainActivity.initializeAtmHostService();
                         hostService = mainActivity.getAtmHostService();
+                        // Refresh reversal status now that host is initialized
+                        if (getActivity() != null) {
+                            getActivity().runOnUiThread(() -> updateReversalStatus());
+                        }
                     }
 
                     if (hostService == null) {
@@ -1092,8 +1580,9 @@ public class Fragment_page_admin_atm extends Fragment {
             return;
         }
 
-        // Ensure settings are saved (this is fast, OK on main thread)
-        saveSettings();
+        // Ensure host settings are saved (this is fast, OK on main thread). Implicit
+        // save: the POS-mode settings are not touched.
+        saveSettings(false);
 
         txvHostStatus.setText("Status: Initializing...");
         txvHostStatus.setTextColor(0xFF666666);
@@ -1108,17 +1597,19 @@ public class Fragment_page_admin_atm extends Fragment {
                         return;
                     }
 
+                    // Always reinitialize to pick up current protocol/host settings
+                    updateStatus("Initializing host service...");
+                    mainActivity.initializeAtmHostService();
                     AtmHostService hostService = mainActivity.getAtmHostService();
-
-                    if (hostService == null) {
-                        updateStatus("Initializing host service...");
-                        mainActivity.initializeAtmHostService();
-                        hostService = mainActivity.getAtmHostService();
-                    }
 
                     if (hostService == null) {
                         showError("Host service not configured");
                         return;
+                    }
+
+                    // Refresh reversal status now that host is (re)initialized
+                    if (getActivity() != null) {
+                        getActivity().runOnUiThread(() -> updateReversalStatus());
                     }
 
                     updateStatus("Requesting new working key...");
@@ -1186,12 +1677,29 @@ public class Fragment_page_admin_atm extends Fragment {
             try {
                 MainActivity.CTOS_Printer printer = mainActivity.getPrinter();
                 if (printer != null) {
-                    printer.printf("=== PRINTER TEST ===\n");
-                    printer.printf("ATM Version: " + MainActivity.APP_VERSION + "\n");
-                    printer.printf("Date: " + new java.text.SimpleDateFormat("MM/dd/yyyy HH:mm:ss").format(new java.util.Date()) + "\n");
-                    printer.printf("Terminal ID: " + edtTerminalId.getText().toString() + "\n");
-                    printer.printf("===================\n\n\n");
-                    printer.goprintf();
+                    // Build ONE page and print it in a single printf() call.
+                    // (printf is self-contained: initPage + drawText + printPage.
+                    // Calling it per-line printed a separate page each time, and
+                    // goprintf() printed the legacy hard-coded SAMPLE RECEIPT.)
+                    // This exercises the real receipt print path so the test shows
+                    // exactly the font/bold/width a live receipt will have.
+                    String test =
+                        "================================\n" +
+                        "         PRINTER TEST           \n" +
+                        "================================\n" +
+                        "\n" +
+                        "ATM Version: " + MainActivity.APP_VERSION + "\n" +
+                        "Date: " + new java.text.SimpleDateFormat("MM/dd/yyyy HH:mm:ss")
+                                .format(new java.util.Date()) + "\n" +
+                        "Terminal ID: " + edtTerminalId.getText().toString() + "\n" +
+                        "--------------------------------\n" +
+                        "Withdrawal Amount: $100.00\n" +
+                        "Service Fee:       $3.00\n" +
+                        "Total Charged:     $103.00\n" +
+                        "TransID: TXN1786284020883\n" +
+                        "================================\n" +
+                        "\n\n\n";
+                    printer.printf(test);
                     Toast.makeText(getContext(), "Printer test successful", Toast.LENGTH_SHORT).show();
                 } else {
                     Toast.makeText(getContext(), "Printer not available", Toast.LENGTH_SHORT).show();
@@ -1273,24 +1781,152 @@ public class Fragment_page_admin_atm extends Fragment {
         if (txvReversalStatus == null) return;
 
         AtmHostService hostService = (mainActivity != null) ? mainActivity.getAtmHostService() : null;
-        if (hostService != null && hostService.isInitialized()) {
-            int pendingCount = hostService.getPendingReversalCount();
-            txvReversalStatus.setText("Pending Reversals: " + pendingCount);
-            if (btnProcessReversals != null) {
-                btnProcessReversals.setEnabled(pendingCount > 0);
-            }
-            if (btnClearReversals != null) {
-                btnClearReversals.setEnabled(pendingCount > 0);
-            }
-        } else {
+        if (hostService == null || !hostService.isInitialized()) {
             txvReversalStatus.setText("Pending Reversals: N/A (Host not configured)");
             if (btnProcessReversals != null) btnProcessReversals.setEnabled(false);
-            if (btnClearReversals != null) btnClearReversals.setEnabled(false);
+            if (layReversalRecords != null) layReversalRecords.removeAllViews();
+            return;
         }
+
+        castech.emvtxn.atm.host.ReversalPersistenceManager mgr = hostService.getReversalManager();
+        List<castech.emvtxn.atm.host.ReversalPersistenceManager.PendingReversal> records =
+                (mgr != null) ? mgr.getPendingReversals() : new ArrayList<>();
+        AtmHostService.ReversalBacklog backlog = hostService.getReversalBacklog();
+        castech.emvtxn.atm.host.ReversalGatePolicy.Decision gate = backlog.gate();
+
+        String gateText;
+        switch (gate.outcome) {
+            case OUT_OF_SERVICE:   gateText = "OUT OF SERVICE — safety stop ("
+                    + castech.emvtxn.atm.host.ReversalGatePolicy.SAFETY_STOP_FAILED_RECORDS
+                    + "+ failed). Resolve or retry to restore service."; break;
+            case WAIT_DRAIN_RUNNING: gateText = "Drain running — customers wait"; break;
+            case WAIT_START_DRAIN:   gateText = "Active records — next customer starts the drain"; break;
+            default:                 gateText = backlog.failedCount > 0
+                    ? "In service — failed record(s) retried in background every 15 min"
+                    : "In service"; break;
+        }
+        txvReversalStatus.setText("Pending Reversals: " + records.size()
+                + " (active " + backlog.activeCount + ", failed " + backlog.failedCount + ")\n" + gateText);
+        if (btnProcessReversals != null) {
+            btnProcessReversals.setEnabled(!records.isEmpty() && !backlog.drainRunning);
+        }
+        renderReversalRecords(hostService, records);
     }
 
     /**
-     * Processes all pending reversals.
+     * One card per pending record: when / seq / amount / status / attempts / last error,
+     * with Retry (any admin) and Resolve (Super only, reason required, kept in history).
+     */
+    private void renderReversalRecords(final AtmHostService hostService,
+                                       List<castech.emvtxn.atm.host.ReversalPersistenceManager.PendingReversal> records) {
+        if (layReversalRecords == null || getContext() == null) return;
+        layReversalRecords.removeAllViews();
+        final boolean isSuper = accessLevel == ACCESS_SUPER;
+        final java.text.SimpleDateFormat fmt = new java.text.SimpleDateFormat("MM/dd HH:mm", java.util.Locale.US);
+        for (final castech.emvtxn.atm.host.ReversalPersistenceManager.PendingReversal rec : records) {
+            LinearLayout card = new LinearLayout(getContext());
+            card.setOrientation(LinearLayout.VERTICAL);
+            card.setPadding(12, 8, 12, 8);
+            card.setBackgroundColor(0xFFF5F5F5);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+            lp.bottomMargin = 8;
+            card.setLayoutParams(lp);
+
+            boolean failed = castech.emvtxn.atm.host.ReversalPersistenceManager.PendingReversal.STATUS_FAILED
+                    .equals(rec.getStatus());
+            String last = rec.getLastAttemptTime() > 0 ? fmt.format(new java.util.Date(rec.getLastAttemptTime())) : "never";
+            String err = (rec.getLastError() == null || rec.getLastError().isEmpty()) ? "—" : rec.getLastError();
+
+            TextView head = new TextView(getContext());
+            head.setTextSize(13);
+            head.setTextColor(failed ? 0xFFD32F2F : 0xFF333333);
+            head.setText(fmt.format(new java.util.Date(rec.getCreatedTime()))
+                    + "  seq " + rec.getSequenceNumber()
+                    + "  " + rec.getFormattedAmount()
+                    + "  " + rec.getStatus().toUpperCase(java.util.Locale.US));
+            card.addView(head);
+
+            TextView detail = new TextView(getContext());
+            detail.setTextSize(11);
+            detail.setTextColor(0xFF666666);
+            detail.setText("Attempts: " + rec.getAttemptCount() + "   Last: " + last
+                    + (rec.getRetrievalReference() != null && !rec.getRetrievalReference().isEmpty()
+                        ? "   RRN: " + rec.getRetrievalReference() : "")
+                    + "\nLast error: " + err);
+            card.addView(detail);
+
+            LinearLayout row = new LinearLayout(getContext());
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            Button btnRetry = new Button(getContext());
+            btnRetry.setText("Retry now");
+            btnRetry.setTextSize(12);
+            btnRetry.setOnClickListener(v -> retryReversal(hostService, rec));
+            row.addView(btnRetry, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+            Button btnResolve = new Button(getContext());
+            btnResolve.setText("Resolve…");
+            btnResolve.setTextSize(12);
+            btnResolve.setEnabled(isSuper);
+            btnResolve.setAlpha(isSuper ? 1f : 0.4f);
+            btnResolve.setOnClickListener(v -> resolveReversal(hostService, rec));
+            row.addView(btnResolve, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+            card.addView(row);
+
+            layReversalRecords.addView(card);
+        }
+    }
+
+    private void retryReversal(AtmHostService hostService,
+                               castech.emvtxn.atm.host.ReversalPersistenceManager.PendingReversal rec) {
+        if (hostService.isTransactionInProgress()) {
+            Toast.makeText(getContext(), "Transaction in progress — try again shortly", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        txvReversalStatus.setText("Retrying reversal seq " + rec.getSequenceNumber() + "…");
+        if (btnProcessReversals != null) btnProcessReversals.setEnabled(false);
+        hostService.retryReversal(rec.getTransactionId(), reversalUiCallback());
+    }
+
+    /**
+     * Super-only. Removes the record from the pending list with a REQUIRED reason; it
+     * stays in history (reason + who). Lifts the safety stop if the failed count drops
+     * under it. This is the field escape hatch for a record the host will never accept.
+     */
+    private void resolveReversal(final AtmHostService hostService,
+                                 final castech.emvtxn.atm.host.ReversalPersistenceManager.PendingReversal rec) {
+        if (accessLevel != ACCESS_SUPER) {
+            Log.w(TAG, "resolveReversal refused — Super Admin only (tier=" + accessLevel + ")");
+            Toast.makeText(getContext(), "Super Admin only", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        final EditText input = new EditText(getContext());
+        input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
+        input.setHint("Reason (required) — e.g. processor confirmed original declined");
+        new AlertDialog.Builder(getContext())
+            .setTitle("Resolve reversal seq " + rec.getSequenceNumber() + " (" + rec.getFormattedAmount() + ")")
+            .setMessage("Removes this record from the pending list WITHOUT sending it. "
+                    + "It stays in history with your reason.\n\n"
+                    + "Only resolve after confirming with the processor that the original "
+                    + "was declined or has already been reversed. Last error:\n"
+                    + (rec.getLastError() == null ? "—" : rec.getLastError()))
+            .setView(input)
+            .setPositiveButton("Resolve", (dialog, which) -> {
+                String reason = input.getText() == null ? "" : input.getText().toString().trim();
+                if (reason.length() < 4) {
+                    Toast.makeText(getContext(), "A reason is required", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                boolean ok = hostService.resolveReversal(rec.getTransactionId(), reason, "super-admin");
+                Toast.makeText(getContext(), ok ? "Reversal resolved — kept in history" : "Record not found",
+                        Toast.LENGTH_SHORT).show();
+                updateReversalStatus();
+            })
+            .setNegativeButton("Cancel", null)
+            .show();
+    }
+
+    /**
+     * Processes all pending reversals (FAILED ones included) on the drain executor.
      */
     private void processPendingReversals() {
         AtmHostService hostService = (mainActivity != null) ? mainActivity.getAtmHostService() : null;
@@ -1308,14 +1944,19 @@ public class Fragment_page_admin_atm extends Fragment {
         // Disable button during processing
         if (btnProcessReversals != null) btnProcessReversals.setEnabled(false);
         txvReversalStatus.setText("Processing " + pendingCount + " reversal(s)...");
+        hostService.processPendingReversals(reversalUiCallback());
+    }
 
-        hostService.processPendingReversals(new AtmHostService.ReversalProcessingCallback() {
+    /** Shared UI callback for Process / Retry: shows WHY a record failed, not just a count. */
+    private AtmHostService.ReversalProcessingCallback reversalUiCallback() {
+        final List<String> failures = new ArrayList<>();
+        return new AtmHostService.ReversalProcessingCallback() {
             @Override
             public void onProcessingReversal(castech.emvtxn.atm.host.ReversalPersistenceManager.PendingReversal reversal) {
                 if (getActivity() != null) {
-                    getActivity().runOnUiThread(() -> {
-                        txvReversalStatus.setText("Processing: " + reversal.getFormattedAmount());
-                    });
+                    getActivity().runOnUiThread(() ->
+                            txvReversalStatus.setText("Processing: " + reversal.getFormattedAmount()
+                                    + " (seq " + reversal.getSequenceNumber() + ")"));
                 }
             }
 
@@ -1327,6 +1968,7 @@ public class Fragment_page_admin_atm extends Fragment {
             @Override
             public void onReversalFailed(castech.emvtxn.atm.host.ReversalPersistenceManager.PendingReversal reversal, String error) {
                 Log.w(TAG, "Reversal failed: " + reversal.getTransactionId() + " - " + error);
+                failures.add("seq " + reversal.getSequenceNumber() + ": " + error);
             }
 
             @Override
@@ -1335,45 +1977,12 @@ public class Fragment_page_admin_atm extends Fragment {
                     getActivity().runOnUiThread(() -> {
                         updateReversalStatus();
                         String message = successCount + " succeeded, " + failCount + " failed";
-                        Toast.makeText(getContext(), "Reversal processing complete: " + message, Toast.LENGTH_LONG).show();
+                        if (!failures.isEmpty()) message += "\n" + String.join("\n", failures);
+                        Toast.makeText(getContext(), "Reversal processing: " + message, Toast.LENGTH_LONG).show();
                     });
                 }
             }
-        });
-    }
-
-    /**
-     * Clears all pending reversals (with confirmation).
-     */
-    private void clearPendingReversals() {
-        AtmHostService hostService = (mainActivity != null) ? mainActivity.getAtmHostService() : null;
-        if (hostService == null || !hostService.isInitialized()) {
-            Toast.makeText(getContext(), "Host service not initialized", Toast.LENGTH_SHORT).show();
-            return;
-        }
-
-        int pendingCount = hostService.getPendingReversalCount();
-        if (pendingCount == 0) {
-            Toast.makeText(getContext(), "No pending reversals to clear", Toast.LENGTH_SHORT).show();
-            return;
-        }
-
-        // Show confirmation dialog
-        new AlertDialog.Builder(getContext())
-            .setTitle("Clear Pending Reversals")
-            .setMessage("Are you sure you want to clear " + pendingCount + " pending reversal(s)?\n\n" +
-                       "WARNING: This will delete the reversal records without processing them. " +
-                       "Only do this if you're certain the original transactions were not approved.")
-            .setPositiveButton("Clear", (dialog, which) -> {
-                castech.emvtxn.atm.host.ReversalPersistenceManager reversalMgr = hostService.getReversalManager();
-                if (reversalMgr != null) {
-                    reversalMgr.clearAllPendingReversals();
-                    updateReversalStatus();
-                    Toast.makeText(getContext(), "Pending reversals cleared", Toast.LENGTH_SHORT).show();
-                }
-            })
-            .setNegativeButton("Cancel", null)
-            .show();
+        };
     }
 
     private void applyKioskSettings() {
@@ -1473,8 +2082,58 @@ public class Fragment_page_admin_atm extends Fragment {
 
     private void exitAdmin() {
         isAuthenticated = false;
+        accessLevel = ACCESS_NONE;
         if (mainActivity != null) {
             mainActivity.navigateToPage(GlobalDef.d_PAGE_MAIN_MENU);
+        }
+    }
+
+    // ---- POS Mode settings ----------------------------------------------------
+
+    /** Populates the POS Mode controls from {@link castech.emvtxn.pos.PosConfig}. */
+    private void loadPosSettings() {
+        if (posConfig == null) return;
+        if (cbEnablePosMode != null)  cbEnablePosMode.setChecked(posConfig.isEnabled());
+        if (edtPosProxyUrl != null)   edtPosProxyUrl.setText(posConfig.getProxyBaseUrl());
+        if (edtPosAccessKey != null)  edtPosAccessKey.setText(posConfig.getTerminalAccessKey());
+        if (txvPosStatus != null) {
+            String state = (mainActivity != null && mainActivity.getPosOrchestratorState() != null)
+                    ? mainActivity.getPosOrchestratorState() : "not running";
+            boolean jwtExpired = posConfig.isJwtExpired();
+            int pending = (mainActivity != null && mainActivity.getAtmHostService() != null)
+                    ? mainActivity.getAtmHostService().getPendingReversalCount() : 0;
+            txvPosStatus.setText("POS state: " + state
+                    + " | JWT: " + (jwtExpired ? "expired/missing" : "cached")
+                    + " | pending reversals: " + pending);
+        }
+    }
+
+    /**
+     * Persists the POS Mode controls to {@link castech.emvtxn.pos.PosConfig}.
+     * Changes take effect on next app restart (orchestrator boots from
+     * MainActivity.startPosModeIfEnabled at startup).
+     */
+    private void savePosSettings() {
+        if (posConfig == null) return;
+        // A greyed control is read-only for this tier (the POS section is Super-only);
+        // its state is never persisted, whatever it happens to hold.
+        if (edtPosProxyUrl != null && edtPosProxyUrl.isEnabled()) {
+            posConfig.setProxyBaseUrl(edtPosProxyUrl.getText().toString().trim());
+        }
+        if (edtPosAccessKey != null && edtPosAccessKey.isEnabled()) {
+            posConfig.setTerminalAccessKey(edtPosAccessKey.getText().toString().trim());
+        }
+        if (cbEnablePosMode != null && cbEnablePosMode.isEnabled()) {
+            boolean wasEnabled = posConfig.isEnabled();
+            boolean nowEnabled = cbEnablePosMode.isChecked();
+            posConfig.setEnabled(nowEnabled);
+            if (wasEnabled != nowEnabled) {
+                // Loud and attributable: this flips the terminal between POS-driven
+                // and walk-up operation.
+                Log.w(TAG, "POS Mode toggled " + (nowEnabled ? "ON" : "OFF")
+                        + " by admin tier=" + (accessLevel == ACCESS_SUPER ? "SUPER" : "NORMAL")
+                        + " via Save Settings — restart required");
+            }
         }
     }
 }

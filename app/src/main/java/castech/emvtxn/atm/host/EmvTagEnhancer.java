@@ -446,6 +446,10 @@ public class EmvTagEnhancer {
     public static String buildStatusMonitoring() {
         StringBuilder sb = new StringBuilder();
 
+        // NOTE: deliberately does NOT poll the printer here. Status monitoring is
+        // built on the transaction thread; the paper check lives in the pre-transaction
+        // guard instead (see AtmHostService), keeping hardware I/O off this path.
+
         // Status prefix + Platform (X = Android/Hyosung)
         sb.append("sX");
 
@@ -471,6 +475,13 @@ public class EmvTagEnhancer {
         sb.append("30");
 
         // Receipt Printer (Type=0, Status=0, Paper=1=OK)
+        //
+        // DO NOT report a printer fault here. Sending Status=1/Paper=0 ("010")
+        // caused Switch Commerce to reject the message and close the connection
+        // ~9ms after TX, which orphaned the transaction and triggered a reversal
+        // storm (2026-08-09). Out-of-paper is handled by BLOCKING the transaction
+        // before it starts (AtmHostService.performWithdrawal / performBalanceInquiry),
+        // so the terminal never transacts while out of paper.
         sb.append("001");
 
         // Journal (Type=1, Status=0, Paper=0, Count=0000)

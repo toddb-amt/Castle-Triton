@@ -27,6 +27,8 @@ public class TransactionRequest {
     private String infoHeader;          // Field 0: H0.NNNNNN
     private String terminalId;          // Field 1: Terminal ID (6-8 chars)
     private String transactionType;     // Field 3: e.g., CWCACA, BISASA
+    private String operationType;       // Generic: WITHDRAWAL, BALANCE_INQUIRY, TRANSFER
+    private String accountType;         // Generic: CA (checking), SA (savings), CC (credit)
     private int sequenceNumber;         // Field 4: 0001-9999
     private String track2Data;          // Field 6: Card track 2 with sentinels
     private String encryptedTrack2;     // DUKPT encrypted track 2 (hex string)
@@ -64,6 +66,8 @@ public class TransactionRequest {
         TransactionRequest req = new TransactionRequest();
         req.setTerminalId(terminalId);
         req.setTransactionType(HyosungProtocol.OP_CASH_WITHDRAWAL + accountType + accountType);
+        req.setOperationType("WITHDRAWAL");
+        req.setAccountType(accountType);
         req.setTrack2Data(track2Data);
         req.setPinBlock(pinBlock);
         req.setAmountCents(amountCents);
@@ -86,6 +90,8 @@ public class TransactionRequest {
         TransactionRequest req = new TransactionRequest();
         req.setTerminalId(terminalId);
         req.setTransactionType(HyosungProtocol.OP_BALANCE_INQUIRY + accountType + accountType);
+        req.setOperationType("BALANCE_INQUIRY");
+        req.setAccountType(accountType);
         req.setTrack2Data(track2Data);
         req.setPinBlock(pinBlock);
         req.setAmountCents(0);
@@ -110,6 +116,8 @@ public class TransactionRequest {
         TransactionRequest req = new TransactionRequest();
         req.setTerminalId(terminalId);
         req.setTransactionType(HyosungProtocol.OP_TRANSFER + sourceAccount + destAccount);
+        req.setOperationType("TRANSFER");
+        req.setAccountType(sourceAccount);
         req.setTrack2Data(track2Data);
         req.setPinBlock(pinBlock);
         req.setAmountCents(amountCents);
@@ -144,6 +152,22 @@ public class TransactionRequest {
 
     public String getTransactionCode() {
         return HyosungProtocol.MSG_TYPE_TRANSACTION;
+    }
+
+    public String getOperationType() {
+        return operationType;
+    }
+
+    public void setOperationType(String operationType) {
+        this.operationType = operationType;
+    }
+
+    public String getAccountType() {
+        return accountType;
+    }
+
+    public void setAccountType(String accountType) {
+        this.accountType = accountType;
     }
 
     public String getTransactionType() {

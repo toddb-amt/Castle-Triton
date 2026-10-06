@@ -5,7 +5,7 @@ import android.widget.EditText;
 
 import androidx.appcompat.app.AlertDialog;
 
-class GlobalPara
+public class GlobalPara
 {
 	public static MainActivity mainActivity;
 	public static boolean appListOK = false;
@@ -54,8 +54,11 @@ class GlobalPara
 	// Online PIN key location - Use C000/0000 where our DUKPT key is injected
 	// Castle support confirmed: modify to match your injected key location
 	// Same key used for both card data encryption and online PIN (like their sample)
-	public static final int onlinePinKeySet = 0x0000C000;
-	public static final int onlinePinKeyIndex = 0x00000000;
+	// PIN key location — set by AtmHostService based on protocol:
+	// Triton: CFFF/0000 (TMK/Master Key)
+	// Hyosung: C000/0000 (DUKPT)
+	public static int onlinePinKeySet = 0x0000C000;
+	public static int onlinePinKeyIndex = 0x00000000;
 
 	public static String tag = "TAG";
 	public static ClessLed clLED;
@@ -138,14 +141,12 @@ class GlobalPara
 	public static String atmPinBlockFormat = "FORMAT0";  // Format 0 with DUKPT
 
 	// DUKPT settings - ENABLED for PIN encryption
-	// Processor must have BDK matching the injected key to decrypt PIN blocks
-	// -------------------------------------------------------------------------
-	// PRODUCTION KEYS (Terminal GH111001):
-	//   BDK Combined:  1546E5DC159D573E62F80D0201C4C70E
-	//   IPEK Combined: B38195E85C40AAAB79F8D9E005563203 (KCV: CA8B26)
-	//   KSN:           3E5B8E08533633200000
-	// -------------------------------------------------------------------------
-	public static boolean atmDukptEnabled = true;  // DUKPT ENABLED for PIN
+	// Key material is managed via Key Injection Tool / KeyBRIDGE HSM
+	// See DUKPT_KEY_REFERENCE.md for key ceremony documentation
+	// Default MUST follow the build flavor. Hard-coding `true` meant the MKSK build
+	// ran the DUKPT PIN path before AtmHostService.initialize() had run (or at all,
+	// if init failed), encrypting at C000/0000 where MKSK has no key → 0x2905.
+	public static boolean atmDukptEnabled = "DUKPT".equals(BuildConfig.KEY_MODE);
 	public static int atmDukptKeySet = 0x0000C000;    // DUKPT key set - C000 has PIN attribute, C001 only has DECRYPT
 	public static int atmDukptKeyIndex = 0x00000000;  // DUKPT key index
 	public static String atmDukptKsn = "";            // KSN captured after PIN encryption
@@ -162,11 +163,29 @@ class GlobalPara
 	public static int atmAutoRebootHour = 3;            // Reboot hour (24h format)
 	public static int atmAutoRebootMinute = 0;          // Reboot minute
 
+	// Printer / Paper Handling
+	// =========================================================================
+	// Policy when the receipt printer reports out-of-paper (CtPrint.STATUS_NOPAPPER_ERR):
+	//   false (default) = allow the transaction to proceed receipt-less; the customer
+	//                     is warned on screen and the host is told Paper=0.
+	//   true            = block new transactions until paper is refilled (out-of-service
+	//                     behaviour). Use where a printed receipt is mandatory.
+	public static boolean atmBlockTxnWhenOutOfPaper = false;
+
+	// Live paper state, refreshed from the printer. Read by the host status builder
+	// (STD1 Field 12) and the receipt UI. True when the printer reports paper out.
+	public static boolean atmPrinterOutOfPaper = false;
+
 	// ATM Host Configuration
 	// =========================================================================
 
 	// Processor selection: "DNS", "SWITCH_COMMERCE", "EFX", "CARDTRONICS", etc.
 	public static String atmProcessorType = "DNS";
+
+	// Protocol selection: "HYOSUNG" or "TRITON"
+	// ENQ handshake: true = send ENQ before request (Triton spec), false = skip ENQ (some MUX/processors)
+	public static boolean atmTritonEnqEnabled = false;  // Default OFF — MUX may not support ENQ
+	public static String atmProtocolType = "HYOSUNG";  // Default to Hyosung for MUX compatibility
 
 	// Host connection settings
 	public static String atmHostAddress = "";  // e.g., "atm.processor.com"
@@ -175,40 +194,52 @@ class GlobalPara
 	public static boolean atmUseTls = true;    // Use TLS/SSL for connection
 
 	// Current transaction data (captured during card read)
-	public static String atmTrack2Data = "";
-	public static String atmEncryptedPinBlock = "";
-	public static String atmEmvData = "";
-	public static String atmSensitiveEmvData = "";  // Separate 5A/57 data (clear PAN for PIN translation)
-	public static int atmEntryMode = 0;  // 0=unknown, 1=contact, 2=contactless, 3=MSR
-	public static String atmClearPan = "";  // Clear PAN from server (for PIN block creation)
+	// W1 fix: volatile for thread safety — written by EMV thread, read by UI/host threads
+	public static volatile String atmTrack2Data = "";
+	public static volatile String atmEncryptedPinBlock = "";
+	public static volatile String atmEmvData = "";
+	public static volatile String atmSensitiveEmvData = "";  // Separate 5A/57 data (clear PAN for PIN translation)
+	public static volatile int atmEntryMode = 0;  // 0=unknown, 1=contact, 2=contactless, 3=MSR
+	public static volatile String atmClearPan = "";  // Clear PAN from server (for PIN block creation)
 
 	// PIN collected after transaction flag (for No-CVM cryptogram approach)
 	// When true, PIN was collected AFTER Generate AC (cryptogram already exists)
 	// This is needed because SDK can't do internal PIN with DUKPT (error 0x00001003)
-	public static boolean atmPinCollectedPostTransaction = false;
+	public static volatile boolean atmPinCollectedPostTransaction = false;
 
 	// Host response data
-	public static String atmAuthCode = "";
-	public static String atmReferenceNumber = "";
-	public static String atmAuthDate = "";
-	public static String atmAuthTime = "";
-	public static String atmResponseCode = "";
-	public static String atmResponseMessage = "";
-	public static long atmAccountBalance = 0;
-	public static long atmAvailableBalance = 0;
+	public static volatile String atmAuthCode = "";
+	public static volatile String atmReferenceNumber = "";
+	public static volatile String atmAuthDate = "";
+	public static volatile String atmAuthTime = "";
+	public static volatile String atmResponseCode = "";
+	public static volatile String atmResponseMessage = "";
+	public static volatile long atmAccountBalance = 0;
+	public static volatile long atmAvailableBalance = 0;
+
+	// ---- Reversal status (set by drain progress notifications, read by receipt UI/printer) ----
+	/** Latest [REVERSAL] progress message — "in progress…", "approved (...)", "pending — contact merchant", etc. */
+	public static volatile String atmReversalStatus = "";
+	/** True while a reversal drain is actively running. UI uses this to delay auto-print. */
+	public static volatile boolean atmReversalInProgress = false;
+	/** True if at least one reversal was successfully sent in the last drain. Receipt printer keys off this. */
+	public static volatile boolean atmReversalSent = false;
 
 	// EMV host response data for txnCompletion (tags 91, 71, 72)
-	public static byte[] atmIssuerAuthData = null;      // Tag 91 - Issuer Authentication Data
-	public static byte[] atmIssuerScript71 = null;      // Tag 71 - Issuer Script Template 1
-	public static byte[] atmIssuerScript72 = null;      // Tag 72 - Issuer Script Template 2
+	public static volatile byte[] atmIssuerAuthData = null;      // Tag 91 - Issuer Authentication Data
+	public static volatile byte[] atmIssuerScript71 = null;      // Tag 71 - Issuer Script Template 1
+	public static volatile byte[] atmIssuerScript72 = null;      // Tag 72 - Issuer Script Template 2
 
 	// Transaction state
-	public static boolean atmHostCallInProgress = false;
-	public static boolean atmHostCallSuccess = false;
-	public static boolean atmNeedsReversal = false;
+	public static volatile boolean atmHostCallInProgress = false;
+	public static volatile boolean atmHostCallSuccess = false;
+	public static volatile boolean atmNeedsReversal = false;
+	/** Id of the reversal record belonging to the CURRENT transaction (pre-send record); "" when none.
+	 *  Only progress messages tagged with this id may touch the receipt's reversal block. */
+	public static volatile String atmCurrentReversalId = "";
 
 	// Balance inquiry mode
-	public static boolean atmBalanceInquiryMode = false;
+	public static volatile boolean atmBalanceInquiryMode = false;
 
 	// Transaction in progress flag - prevents starting new transaction while one is active
 	public static boolean atmTransactionInProgress = false;
@@ -230,6 +261,10 @@ class GlobalPara
 		atmBalanceInquiryMode = false;
 		atmTransactionComplete = false;
 		atmTransactionInProgress = false;
+		// EMV result code from the prior transaction — must clear so the receipt
+		// fragment's onResume doesn't treat stale data as "has transaction data"
+		// and auto-print the previous receipt.
+		transactionResult = 0;
 		atmAccountType = ATM_ACCOUNT_CHECKING; // Default to Checking
 
 		// Reset card data
@@ -254,6 +289,12 @@ class GlobalPara
 		atmResponseMessage = "";
 		atmAccountBalance = 0;
 		atmAvailableBalance = 0;
+
+		// Reset reversal status — prior reversal info should not leak into the next txn
+		atmReversalStatus = "";
+		atmReversalInProgress = false;
+		atmReversalSent = false;
+		atmCurrentReversalId = "";
 		atmIssuerAuthData = null;
 		atmIssuerScript71 = null;
 		atmIssuerScript72 = null;

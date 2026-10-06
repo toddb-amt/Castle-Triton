@@ -28,6 +28,13 @@ public class Fragment_page_main_menu extends Fragment {
         mainActivity = activity;
     }
 
+    // Required no-arg constructor: Android re-instantiates fragments via reflection
+    // when the activity is recreated (e.g. an orientation change from handling the
+    // terminal to change paper). Without this the restore crashed with
+    // NoSuchMethodException. mainActivity is static, so it survives recreation.
+    public Fragment_page_main_menu() {
+    }
+
     @Override
     public View onCreateView(LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
         try {
@@ -38,7 +45,8 @@ public class Fragment_page_main_menu extends Fragment {
             btnWithdrawal.setOnClickListener(new View.OnClickListener() {
                 @Override
                 public void onClick(View v) {
-                    // Set ATM withdrawal mode and navigate to amount selection
+                    // Clear prior transaction state before starting a new flow.
+                    GlobalPara.resetATMTransactionState();
                     GlobalPara.atmBalanceInquiryMode = false;
                     if (mainActivity != null) {
                         mainActivity.navigateToPage(GlobalDef.d_PAGE_AMOUNT_SELECTION);
@@ -51,13 +59,16 @@ public class Fragment_page_main_menu extends Fragment {
             btnBalanceInquiry.setOnClickListener(new View.OnClickListener() {
                 @Override
                 public void onClick(View v) {
-                    // Set balance inquiry mode and navigate to transaction
+                    // Clear prior transaction state — otherwise the adjacent
+                    // RECEIPT fragment (pre-created by ViewPager) auto-prints
+                    // the previous receipt on resume.
+                    GlobalPara.resetATMTransactionState();
                     GlobalPara.atmBalanceInquiryMode = true;
                     GlobalPara.atmSelectedAmount = "0.00";
                     GlobalPara.atmFee = "0.00";
                     GlobalPara.atmTotal = "0.00";
                     GlobalPara.strAmount = "0"; // Amount in cents for EMV SDK
-                    GlobalPara.atmAccountType = GlobalPara.ATM_ACCOUNT_CHECKING; // Default to Checking
+                    GlobalPara.atmAccountType = GlobalPara.ATM_ACCOUNT_CHECKING;
                     if (mainActivity != null) {
                         mainActivity.navigateToPage(GlobalDef.d_PAGE_TRANSACTION);
                     }
@@ -119,5 +130,23 @@ public class Fragment_page_main_menu extends Fragment {
         // This ensures clean state for next transaction
         GlobalPara.resetATMTransactionState();
         android.util.Log.d("MainMenu", "onResume - ATM state reset");
+
+        // Refresh the out-of-paper banner at idle (safe: no transaction running).
+        // One-shot on a background thread — NOT a timer. refreshPaperStateSafely()
+        // itself refuses to touch the SDK if a transaction is somehow in progress,
+        // so this can never race the EMV thread (which crashed the CTOS service
+        // when an earlier version polled on a timer).
+        if (mainActivity != null) {
+            new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        mainActivity.refreshPaperStateSafely();
+                    } catch (Throwable t) {
+                        android.util.Log.w(TAG, "Paper refresh failed: " + t.getMessage());
+                    }
+                }
+            }).start();
+        }
     }
 }

@@ -89,7 +89,7 @@ public class HyosungMessageBuilder {
                 log("TRACK2 (EMV): WARNING - No PIN KSN, falling back to Track2 KSN: " + ksnForField7);
             }
             log("TRACK2 (EMV): Using CLEAR track 2 - ARQC provides security");
-            log("  Field 6 (clear): [" + track2ForMessage + "]");
+            log("  Field 6 (clear): " + castech.emvtxn.LogMask.track2(track2ForMessage));
             log("  Field 7 (KSN for PIN): " + ksnForField7);
         } else if (request.hasEncryptedTrack2()) {
             // MSR transaction (swipe): Use ENCRYPTED Track 2
@@ -97,12 +97,12 @@ public class HyosungMessageBuilder {
             track2ForMessage = "e" + request.getEncryptedTrack2();
             ksnForField7 = request.getTrack2Ksn();
             log("TRACK2 (MSR): Using DUKPT encrypted track 2");
-            log("  Field 6 (encrypted data): " + track2ForMessage.substring(0, Math.min(40, track2ForMessage.length())) + "...");
+            log("  Field 6 (encrypted data): " + castech.emvtxn.LogMask.len(track2ForMessage));
             log("  Field 7 (KSN): " + ksnForField7);
         } else {
             // Fallback: Use clear track 2 if available
             track2ForMessage = nullToEmpty(request.getTrack2Data());
-            log("TRACK2 (fallback): [" + track2ForMessage + "]");
+            log("TRACK2 (fallback): " + castech.emvtxn.LogMask.track2(track2ForMessage));
         }
         fields[6] = track2ForMessage;                           // Field 6: Track 2 Data
 
@@ -115,10 +115,14 @@ public class HyosungMessageBuilder {
         // Field 13: EMV Data - must have "ud" prefix per Hyosung spec
         String emvData = nullToEmpty(request.getEmvData());
         String emvField = emvData.isEmpty() ? "" : "ud" + emvData;
+        // Redact 5A/57 before truncating: the enhancer appends the sensitive tags
+        // last today, so the prefix happens to be clean, but the log must not
+        // depend on tag order to stay PCI-clean.
+        String emvRedacted = castech.emvtxn.LogMask.tlv(emvData);
         log("DEBUG EMV: Raw EMV data length=" + emvData.length() +
-            ", first 60 chars: [" + (emvData.length() > 60 ? emvData.substring(0, 60) + "..." : emvData) + "]");
-        log("DEBUG EMV: Field 13 will be (first 80 chars): [" +
-            (emvField.length() > 80 ? emvField.substring(0, 80) + "..." : emvField) + "]");
+            ", first 60 chars: [" + (emvRedacted.length() > 60 ? emvRedacted.substring(0, 60) + "..." : emvRedacted) + "]");
+        log("DEBUG EMV: Field 13 will be " + emvField.length() + " chars"
+            + (emvField.isEmpty() ? "" : " (\"ud\" + redacted TLV): [ud" + emvRedacted + "]"));
         fields[13] = emvField;
 
         return frameMessage(fields);
@@ -135,19 +139,29 @@ public class HyosungMessageBuilder {
      * @return Framed message bytes ready for transmission
      */
     public byte[] buildReversalRequest(ReversalRequest request) {
-        String[] fields = new String[11];
+        // 10-field EFX/Pulse layout. Production processors (SWC and others) reject
+        // the 11-field Hyosung STD1 layout by silently closing the connection.
+        // See docs/CASTLE_POS_INTEGRATION_SPEC.md and the mux audit. The dropped
+        // fields (track 2, PIN block, reversal reason) are not carried in TC86;
+        // the host correlates the reversal to its original 85 via F3 (retrieval
+        // reference) + F8 (status monitoring) + F9 (EMV TLV).
+        String[] fields = new String[10];
 
-        fields[0] = request.getInfoHeader();                    // Field 0: Info Header
-        fields[1] = request.getTerminalId();                    // Field 1: Terminal ID
-        fields[2] = HyosungProtocol.MSG_TYPE_REVERSAL;          // Field 2: Transaction Code
-        fields[3] = nullToEmpty(request.getOriginalAuthData()); // Field 3: Original Auth Data
-        fields[4] = request.getOriginalSequenceNumberString();  // Field 4: Original Sequence
-        fields[5] = nullToEmpty(request.getTrack2Data());       // Field 5: Track 2 Data
-        fields[6] = "";                                         // Field 6: Reserved
-        fields[7] = nullToEmpty(request.getPinBlock());         // Field 7: PIN Block
-        fields[8] = String.valueOf(request.getOriginalAmountCents()); // Field 8: Original Amount
-        fields[9] = String.valueOf(request.getOriginalSurchargeCents()); // Field 9: Original Surcharge
-        fields[10] = nullToEmpty(request.getReversalReason());  // Field 10: Reversal Reason
+        fields[0] = request.getInfoHeader();                              // F0: Info Header
+        fields[1] = request.getTerminalId();                              // F1: Terminal ID
+        fields[2] = HyosungProtocol.MSG_TYPE_REVERSAL;                    // F2: Transaction Code
+        fields[3] = nullToEmpty(request.getRetrievalReference());         // F3: Retrieval Reference (26 chars)
+        fields[4] = String.valueOf(request.getOriginalAmountCents());     // F4: Amount (cents)
+        fields[5] = String.valueOf(request.getDispensedAmountCents());    // F5: Dispensed amount (0 = full reversal)
+        fields[6] = String.valueOf(request.getOriginalSurchargeCents()); // F6: Surcharge (cents)
+        fields[7] = nullToEmpty(request.getMiscFlag());                   // F7: Misc flag (typically "1")
+        fields[8] = nullToEmpty(request.getStatusMonitoring());           // F8: Status monitoring block (same as original 85 F12)
+
+        // F9: EMV TLV with "ud" prefix (same as TC85 F13 — see buildTransactionRequest line 117).
+        // Production GH001029 reversals send "ud9F02...", our GH111003 was sending bare "9F02..."
+        // which causes SWC to misparse the field.
+        String emvRaw = request.getEmvData();
+        fields[9] = (emvRaw == null || emvRaw.isEmpty()) ? "" : "ud" + emvRaw;
 
         return frameMessage(fields);
     }

@@ -84,6 +84,18 @@ public class AtmSettingsManager {
 
         Log.d(TAG, "Loading ATM settings from storage");
 
+        // If SharedPreferences is empty (fresh install OR — under CasHUB — the agent
+        // clean-reinstalled the app on boot and wiped app data), try to restore the
+        // config from KMS-II storage, which survives reinstalls. Then re-persist it
+        // to SharedPreferences so the rest of this method loads the restored values.
+        if (isFirstRun()) {
+            Log.w(TAG, "No saved settings (fresh install/reinstall) — attempting KMS-II restore");
+            if (KmsConfigStore.restore()) {
+                persistToPrefs();  // write the KMS-restored GlobalPara values into prefs
+                Log.w(TAG, "Settings restored from KMS-II backup and re-persisted to prefs");
+            }
+        }
+
         // Load host configuration
         GlobalPara.atmHostAddress = hostPrefs.getString(KEY_HOST_ADDRESS, "");
         GlobalPara.atmHostPort = hostPrefs.getInt(KEY_HOST_PORT, 8002);
@@ -96,6 +108,17 @@ public class AtmSettingsManager {
         GlobalPara.atmPercentageFee = getDouble(regularPrefs, KEY_PERCENTAGE_FEE, 0.0);
         GlobalPara.atmMinAmount = getDouble(regularPrefs, KEY_MIN_AMOUNT, 20.00);
         GlobalPara.atmMaxAmount = getDouble(regularPrefs, KEY_MAX_AMOUNT, 500.00);
+
+        // CENTRAL CONFIG: whatever CasHUB pushed for this package is authoritative
+        // and overrides the local values above. The agent re-serves it on every
+        // boot, so a CasHUB-managed terminal never needs on-terminal entry. Persist
+        // the applied values to prefs (so hasHostConfiguration()/admin screen see
+        // them) and to KMS-II (so they survive even if the param is later removed).
+        if (CasHubParams.applyToConfig(context)) {
+            persistToPrefs();
+            KmsConfigStore.backup();
+            Log.w(TAG, "CasHUB central config applied and persisted (overrides local)");
+        }
 
         Log.d(TAG, "Settings loaded - Host: " + GlobalPara.atmHostAddress +
                 ", Port: " + GlobalPara.atmHostPort +
@@ -119,6 +142,30 @@ public class AtmSettingsManager {
 
         Log.d(TAG, "Saving ATM settings to storage");
 
+        persistToPrefs();
+
+        // Also back up to KMS-II so the config survives a CasHUB clean-reinstall,
+        // which wipes SharedPreferences (see KmsConfigStore).
+        KmsConfigStore.backup();
+
+        Log.d(TAG, "Settings saved successfully");
+    }
+
+    /**
+     * Public wrapper for {@link #persistToPrefs()} so a live CasHUB parameter
+     * update (handled off the admin screen) can flush the applied GlobalPara
+     * config into SharedPreferences. Does not touch KMS-II.
+     */
+    public void persistCurrentToPrefs() {
+        if (!initialized) return;
+        persistToPrefs();
+    }
+
+    /**
+     * Writes the current GlobalPara ATM config to SharedPreferences. Does NOT
+     * touch KMS-II (used by the KMS restore path to avoid a redundant re-backup).
+     */
+    private void persistToPrefs() {
         // Save host configuration
         SharedPreferences.Editor hostEditor = hostPrefs.edit();
         hostEditor.putString(KEY_HOST_ADDRESS, GlobalPara.atmHostAddress);
@@ -136,8 +183,6 @@ public class AtmSettingsManager {
         putDouble(regularEditor, KEY_MAX_AMOUNT, GlobalPara.atmMaxAmount);
         regularEditor.putBoolean(KEY_SETTINGS_INITIALIZED, true);
         regularEditor.apply();
-
-        Log.d(TAG, "Settings saved successfully");
     }
 
     /**
@@ -160,6 +205,7 @@ public class AtmSettingsManager {
         // Mark settings as initialized
         regularPrefs.edit().putBoolean(KEY_SETTINGS_INITIALIZED, true).apply();
 
+        KmsConfigStore.backup();  // survive CasHUB reinstall
         Log.d(TAG, "Host settings saved");
     }
 
@@ -182,6 +228,7 @@ public class AtmSettingsManager {
         editor.putBoolean(KEY_SETTINGS_INITIALIZED, true);
         editor.apply();
 
+        KmsConfigStore.backup();  // survive CasHUB reinstall
         Log.d(TAG, "Fee settings saved");
     }
 

@@ -15,5 +15,9 @@ Thumbs.db
 # Sensitive
 *.jks
 *.keystore
+keystore.properties
 google-vision-key.json
 *.env
+
+# Castles-confidential CasHUB manuals — never commit
+docs/Cashub/

@@ -231,7 +231,49 @@ public class TransactionResponse {
      * Checks if the transaction was approved.
      */
     public boolean isApproved() {
-        return HyosungProtocol.isApproved(responseCode);
+        // Check both Hyosung ("00") and Triton ("000") approval codes
+        return HyosungProtocol.isApproved(responseCode) || "000".equals(responseCode);
+    }
+
+    /**
+     * Gets human-readable description for Triton response codes.
+     */
+    public static String getTritonResponseDescription(String code) {
+        if (code == null) return "Unknown";
+        switch (code) {
+            case "000": return "Transaction Approved";
+            case "001": return "Expired Card";
+            case "002": return "Unauthorized Usage";
+            case "003": return "PIN Error";
+            case "004": return "Invalid PIN";
+            case "005": return "Bank Unavailable";
+            case "006": return "Card Not Supported";
+            case "007": return "Insufficient Funds";
+            case "008": return "Ineligible Transaction";
+            case "009": return "Ineligible Account";
+            case "010": return "Daily Withdrawals Exceeded";
+            case "011": return "Cannot Process Transaction";
+            case "012": return "Amount Too Large";
+            case "013": return "Account Closed";
+            case "014": return "PIN Tries Exceeded";
+            case "015": return "Database Problem";
+            case "016": return "Withdrawal Limit Reached";
+            case "017": return "Invalid Amount";
+            case "018": return "External Decline";
+            case "019": return "System Error";
+            case "020": return "Contact Card Issuer";
+            case "021": return "Routing Lookup Problem";
+            case "022": return "Message Edit Error";
+            case "023": return "Transaction Not Supported";
+            case "024": return "Insufficient Funds";
+            case "027": return "CRC Error";
+            case "033": return "Response Exceeds Message Size";
+            case "034": return "Missing Information";
+            case "035": return "Second Invalid PIN";
+            case "111": return "Reversal Declined";
+            case "222": return "PIN Change Declined";
+            default: return "Declined (" + code + ")";
+        }
     }
 
     /**
@@ -263,9 +305,45 @@ public class TransactionResponse {
     }
 
     /**
+     * Determines whether this response indicates that a reversal should be
+     * generated. Mirrors BlueVerse {@code IsReversalCondition} (task #20).
+     *
+     * <p>In production ATM software, a reversal is typically triggered by
+     * post-approval failures (dispense fail, customer cancel, etc.) — those
+     * are detected by the device layer, not the response itself. However,
+     * certain response codes/states from the host can also indicate that the
+     * terminal should reverse a previously-authorized transaction.</p>
+     *
+     * <p>Current implementation returns false for all "happy path" responses.
+     * If we observe processors using specific response codes to signal "please
+     * reverse," they should be added here.</p>
+     *
+     * <p>Note: this method does NOT trigger reversals for declines — declined
+     * transactions don't need reversal because the host didn't authorize them.</p>
+     *
+     * @return true if a reversal should be generated based on the response alone
+     */
+    public boolean requiresReversal() {
+        // No host-driven reversal conditions identified yet. Reversal triggers
+        // currently come from: connection errors (catch blocks), post-approval
+        // dispense failures (sendReversal call sites), and customer cancel
+        // (UI-driven sendReversal). If a processor's response codes are
+        // discovered to indicate "please reverse," add the checks here.
+        return false;
+    }
+
+    /**
      * Gets the human-readable response description.
      */
     public String getResponseDescription() {
+        // Use display message from host (FID 'p' receipt text) if available
+        if (displayMessage != null && !displayMessage.isEmpty()) {
+            return displayMessage;
+        }
+        // Try Triton codes first (3-digit), then Hyosung (2-digit)
+        if (responseCode != null && responseCode.length() == 3) {
+            return getTritonResponseDescription(responseCode);
+        }
         return HyosungProtocol.getResponseDescription(responseCode);
     }
 

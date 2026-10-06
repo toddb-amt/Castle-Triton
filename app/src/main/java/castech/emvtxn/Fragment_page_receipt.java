@@ -9,6 +9,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.TextView;
+import android.widget.Toast;
 import android.util.Log;
 
 import java.text.DecimalFormat;
@@ -67,8 +68,15 @@ public class Fragment_page_receipt extends Fragment {
         // Set up button listeners
         setupButtonListeners();
 
-        // Display transaction results
-        displayTransactionResults();
+        // Only render results if there's actual transaction data. Otherwise the
+        // adjacent ViewPager pre-creation of this fragment will auto-print an
+        // empty receipt (e.g. when the user clicks Balance Inquiry, which
+        // navigates to TRANSACTION and pre-loads RECEIPT).
+        if (hasTransactionDataToDisplay()) {
+            displayTransactionResults();
+        } else {
+            Log.d(TAG, "onCreateView: no transaction data — skipping display/auto-print");
+        }
 
         // Don't start timeout in onCreateView - only in onResume when visible
         // This prevents timeout from firing when ViewPager pre-creates adjacent fragments
@@ -265,7 +273,55 @@ public class Fragment_page_receipt extends Fragment {
 
         // Display host response data
         displayHostResponseData(isSuccess);
+
+        // Update the on-screen reversal status line. Refreshed whenever
+        // refreshDisplay() is called by MainActivity's onProgress hook.
+        updateReversalStatusDisplay();
+
+        // Auto-print the receipt on first display (approve or decline) — BUT
+        // hold off while a reversal drain is actively running. The receipt
+        // should reflect the final outcome (including reversal info) rather
+        // than printing mid-flight and then surprising the customer.
+        if (!autoPrintTriggered && !GlobalPara.atmReversalInProgress) {
+            autoPrintTriggered = true;
+            // Use post() to ensure UI is fully laid out before kicking off the print
+            if (view != null) {
+                view.post(() -> {
+                    Log.d(TAG, "Auto-printing receipt on display");
+                    printReceipt();
+                });
+            }
+        } else if (GlobalPara.atmReversalInProgress) {
+            Log.d(TAG, "Auto-print deferred — reversal drain in progress");
+        }
     }
+
+    /**
+     * Updates (or hides) the on-screen reversal status line based on the
+     * current {@link GlobalPara#atmReversalStatus}. Safe to call on any
+     * thread — posts to the UI thread internally.
+     */
+    private void updateReversalStatusDisplay() {
+        if (view == null) return;
+        final String status = GlobalPara.atmReversalStatus;
+        if (status == null || status.isEmpty()) {
+            return;  // nothing to show — leave the label hidden
+        }
+        // Use the existing response-message slot to show reversal status without
+        // adding a new XML widget. Color it amber/orange so customers notice.
+        if (mainActivity != null) {
+            mainActivity.runOnUiThread(() -> {
+                if (txvResponseMessage != null) {
+                    txvResponseMessage.setText("Reversal: " + status);
+                    txvResponseMessage.setTextColor(getResources().getColor(android.R.color.holo_orange_dark));
+                    txvResponseMessage.setVisibility(View.VISIBLE);
+                }
+            });
+        }
+    }
+
+    /** Tracks whether auto-print has already fired for this receipt display. */
+    private boolean autoPrintTriggered = false;
 
     /**
      * Displays the decline reason from the host response.
@@ -457,9 +513,11 @@ public class Fragment_page_receipt extends Fragment {
     private void printReceipt() {
         Log.d(TAG, "Printing receipt...");
 
-        // Disable print button temporarily
-        btnPrintReceipt.setEnabled(false);
-        btnPrintReceipt.setText("Printing...");
+        // Disable print button temporarily while the printer is busy
+        if (btnPrintReceipt != null) {
+            btnPrintReceipt.setEnabled(false);
+            btnPrintReceipt.setText("Printing...");
+        }
 
         // Run print in separate thread to avoid blocking UI
         new Thread(new Runnable() {
@@ -468,16 +526,29 @@ public class Fragment_page_receipt extends Fragment {
                 try {
                     boolean printSuccess = printReceiptContent();
 
-                    // Update UI on main thread
+                    // Update UI on main thread — re-enable for duplicate print on both
+                    // success and failure paths (customer / merchant may want a copy).
                     if (getActivity() != null) {
                         getActivity().runOnUiThread(new Runnable() {
                             @Override
                             public void run() {
-                                if (printSuccess) {
-                                    btnPrintReceipt.setText("Receipt Printed ✓");
-                                } else {
-                                    btnPrintReceipt.setText("Print Failed - Try Again");
+                                if (btnPrintReceipt != null) {
+                                    if (printSuccess) {
+                                        btnPrintReceipt.setText("Print Another Receipt");
+                                    } else if (GlobalPara.atmPrinterOutOfPaper) {
+                                        // Out of paper: the receipt shown on screen IS the
+                                        // receipt. Retrying will not help, so say so plainly.
+                                        btnPrintReceipt.setText("Out of Paper — Receipt On Screen");
+                                    } else {
+                                        btnPrintReceipt.setText("Print Failed — Tap to Retry");
+                                    }
                                     btnPrintReceipt.setEnabled(true);
+                                }
+                                if (!printSuccess && GlobalPara.atmPrinterOutOfPaper
+                                        && getContext() != null) {
+                                    Toast.makeText(getContext(),
+                                            "Out of paper — your receipt is shown on screen. Please note your transaction details.",
+                                            Toast.LENGTH_LONG).show();
                                 }
                             }
                         });
@@ -488,8 +559,10 @@ public class Fragment_page_receipt extends Fragment {
                         getActivity().runOnUiThread(new Runnable() {
                             @Override
                             public void run() {
-                                btnPrintReceipt.setText("Print Failed - Try Again");
-                                btnPrintReceipt.setEnabled(true);
+                                if (btnPrintReceipt != null) {
+                                    btnPrintReceipt.setText("Print Failed — Tap to Retry");
+                                    btnPrintReceipt.setEnabled(true);
+                                }
                             }
                         });
                     }
@@ -562,7 +635,7 @@ public class Fragment_page_receipt extends Fragment {
             receipt.append("Date/Time: ").append(dateTime).append("\n");
 
             String txnId = GlobalPara.atmTransactionId != null ? GlobalPara.atmTransactionId : "";
-            receipt.append("Transaction ID: ").append(txnId).append("\n");
+            receipt.append("TransID: ").append(txnId).append("\n");
 
             // Print authorization code if available
             String authCode = GlobalPara.atmAuthCode;
@@ -578,6 +651,27 @@ public class Fragment_page_receipt extends Fragment {
 
             receipt.append("\n");
 
+            // Reversal section — append only if a reversal was attempted for this txn.
+            // Tells the customer "your transaction failed AND we sent the reversal so
+            // your card was not charged" (or pending status if reversal didn't complete).
+            String reversalStatus = GlobalPara.atmReversalStatus;
+            if (reversalStatus != null && !reversalStatus.isEmpty()) {
+                receipt.append("--------------------------------\n");
+                receipt.append("           REVERSAL             \n");
+                receipt.append("--------------------------------\n");
+                if (GlobalPara.atmReversalSent) {
+                    receipt.append("Status: SENT TO PROCESSOR\n");
+                    receipt.append("Card NOT charged.\n");
+                } else if (GlobalPara.atmReversalInProgress) {
+                    receipt.append("Status: IN PROGRESS\n");
+                } else {
+                    receipt.append("Status: PENDING\n");
+                    receipt.append("Please contact merchant.\n");
+                }
+                receipt.append("Detail: ").append(reversalStatus).append("\n");
+                receipt.append("\n");
+            }
+
             receipt.append("================================\n");
             receipt.append("     Thank you for using our    \n");
             receipt.append("           ATM Service          \n");
@@ -592,9 +686,20 @@ public class Fragment_page_receipt extends Fragment {
                 MainActivity.CTOS_Printer printer = mainActivity.getPrinter();
                 Log.d(TAG, "getPrinter() returned: " + (printer != null ? "valid printer" : "NULL"));
                 if (printer != null) {
+                    // Check paper BEFORE printing so an empty roll is reported as
+                    // "out of paper" rather than a generic print failure. Also keeps
+                    // GlobalPara (and therefore the host status field) honest.
+                    boolean outOfPaper = printer.isOutOfPaper();
+                    GlobalPara.atmPrinterOutOfPaper = outOfPaper;
+                    if (outOfPaper) {
+                        Log.e(TAG, "Receipt NOT printed - printer is OUT OF PAPER");
+                        return false;
+                    }
                     Log.d(TAG, "Calling printer.printf() with " + receipt.length() + " chars");
+                    // printf() is self-contained: initPage + drawText + printPage.
+                    // Do NOT call goprintf() — that's a legacy SAMPLE RECEIPT demo, not a flush.
                     printer.printf(receipt.toString());
-                    Log.d(TAG, "Receipt sent to printer successfully");
+                    Log.d(TAG, "Receipt printed successfully");
                     return true;
                 } else {
                     Log.e(TAG, "Printer is null - may be running on emulator or printer not initialized");
@@ -639,11 +744,16 @@ public class Fragment_page_receipt extends Fragment {
 
     private void resetATMParameters() {
         Log.d(TAG, "resetATMParameters called");
+        // Reset auto-print flag so next transaction's receipt auto-prints
+        autoPrintTriggered = false;
         // Reset all ATM transaction parameters
         GlobalPara.atmSelectedAmount = "0.00";
         GlobalPara.atmFee = "0.00";
         GlobalPara.atmTotal = "0.00";
         GlobalPara.atmTransactionComplete = false;
+        // Clear EMV transaction result so onResume doesn't think old data is still valid
+        // and auto-print the previous receipt on the next transaction.
+        GlobalPara.transactionResult = 0;
         GlobalPara.atmTransactionId = "";
         GlobalPara.atmLastFourDigits = "";
         GlobalPara.atmBalanceInquiryMode = false; // Important: reset balance inquiry flag
@@ -690,15 +800,21 @@ public class Fragment_page_receipt extends Fragment {
         view = null;
     }
 
+    /**
+     * Returns true if the receipt fragment should render results (and auto-print).
+     * Used to suppress display when ViewPager pre-creates the fragment with no data.
+     */
+    private boolean hasTransactionDataToDisplay() {
+        return GlobalPara.atmTransactionComplete ||
+               GlobalPara.transactionResult != 0 ||
+               (GlobalPara.atmResponseCode != null && !GlobalPara.atmResponseCode.isEmpty()) ||
+               (GlobalPara.atmResponseMessage != null && !GlobalPara.atmResponseMessage.isEmpty());
+    }
+
     @Override
     public void onResume() {
         super.onResume();
-        // Refresh display if we have transaction data (complete or not)
-        // Check multiple indicators that a transaction occurred
-        boolean hasTransactionData = GlobalPara.atmTransactionComplete ||
-                                     GlobalPara.transactionResult != 0 ||
-                                     (GlobalPara.atmResponseCode != null && !GlobalPara.atmResponseCode.isEmpty()) ||
-                                     (GlobalPara.atmResponseMessage != null && !GlobalPara.atmResponseMessage.isEmpty());
+        boolean hasTransactionData = hasTransactionDataToDisplay();
 
         if (hasTransactionData) {
             Log.d(TAG, "onResume: Transaction data found, refreshing display");

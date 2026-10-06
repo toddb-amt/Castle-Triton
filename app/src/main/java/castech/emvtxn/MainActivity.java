@@ -90,6 +90,7 @@ import castech.emvtxn.atm.host.AtmHostService;
 import castech.emvtxn.atm.host.CastleCardData;
 import castech.emvtxn.atm.host.CastleKeyManager;
 import castech.emvtxn.atm.host.PinBlockFormatter;
+import castech.emvtxn.atm.host.Track2PanExtractor;
 import castech.emvtxn.atm.host.ProcessorConfig;
 import castech.emvtxn.atm.host.HyosungProtocol;
 import castech.emvtxn.test.EmvCryptogramTest;
@@ -110,2397 +111,20 @@ import CTOS.emvcl.EMVCLRcDataEx;
 import CTOS.emvcl.EMVCLSecureDataInfo;
 import CTOS.emvcl.EMVCLUIReqData;
 
-
-class Debugger {
-    public static void addSTR(String tag, String title) {
-        Log.d(tag, title);
-    }
-
-    public static void addINT(String tag, String title, int len) {
-        Log.d(tag, title + String.format("= %d, (0x%02X)", len, len));
-    }
-
-    public static void addHex(String tag, String title, byte[] array, int len) {
-        Log.d(tag, title + Converter.byteArray2HexString(array, len).toUpperCase());
-    }
-
-    public static void addHEX(String tag, String title, byte[] brray, int index, int len) {
-        Log.d(tag, title + Converter.byteArray2HexString(brray, index, len).toUpperCase());
-    }
-}
-
-class Converter {
-    public static byte[] hexString2ByteArray(String hexString) {
-        // Null safety check
-        if (hexString == null || hexString.isEmpty()) {
-            return new byte[0];
-        }
-        byte[] byteArray = new byte[hexString.length() / 2];
-        for (int i = 0; i < byteArray.length; i++) {
-            byteArray[i] = (byte) Integer.parseInt(hexString.substring(2 * i, 2 * i + 2), 16);
-        }
-
-        return byteArray;
-    }
-
-    public static String byteArray2HexString(byte[] array, int len) {
-        StringBuffer hexString = new StringBuffer();
-
-        for (int i = 0; i < len; i++) {
-            int intVal = array[i] & 0xFF;
-
-            if (intVal < 0x10) {
-                hexString.append("0");
-            }
-
-            hexString.append(Integer.toHexString(intVal).toUpperCase());
-        }
-        return hexString.toString();
-    }
-
-    public static String byteArray2HexString(byte[] array, int index, int len) {
-        StringBuffer hexString = new StringBuffer();
-
-        for (int i = index; i < len + index; i++) {
-            int intVal = array[i] & 0xFF;
-
-            if (intVal < 0x10) {
-                hexString.append("0");
-            }
-
-            hexString.append(Integer.toHexString(intVal));
-        }
-        return hexString.toString();
-    }
-
-    public static String asciiBytesToString(byte[] bytes) {
-        if ((bytes == null) || (bytes.length == 0)) {
-            return "";
-        }
-
-        char[] result = new char[bytes.length];
-
-        for (int i = 0; i < bytes.length; i++) {
-            result[i] = (char) bytes[i];
-        }
-
-        return new String(result);
-    }
-
-    public static String amtPadding(String strAmt) {
-        // Null safety check
-        if (strAmt == null || strAmt.isEmpty()) {
-            return "000000000000";
-        }
-        switch (strAmt.length()) {
-            case 0:
-                return "000000000000";
-            case 1:
-                return "00000000000" + strAmt;
-            case 2:
-                return "0000000000" + strAmt;
-            case 3:
-                return "000000000" + strAmt;
-            case 4:
-                return "00000000" + strAmt;
-            case 5:
-                return "0000000" + strAmt;
-            case 6:
-                return "000000" + strAmt;
-            case 7:
-                return "00000" + strAmt;
-            case 8:
-                return "0000" + strAmt;
-            case 9:
-                return "000" + strAmt;
-            case 10:
-                return "00" + strAmt;
-            case 11:
-                return "0" + strAmt;
-
-            default:
-                return strAmt;
-        }
-
-    }
-}
-
-class MyUtility {
-    static final String MyUtilTAG = "EMV_AP_MyUtil";
-
-    static void sleep(long ms) {
-        try {
-            Thread.sleep(ms);
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-        return;
-    }
-
-    static MainActivity activity = null;
-    static ViewPager viewPager = null;
-    static GlobalPara glblPara = null;
-
-    static void setViewPager(MainActivity a, ViewPager v, GlobalPara g) {
-        activity = a;
-        viewPager = v;
-        glblPara = g;
-    }
-
-    static void switchPage(final int pageIndex, long ms) {
-        if (activity == null) {
-            Debugger.addSTR(MyUtilTAG, "Activity null !");
-            return;
-        }
-        if (viewPager == null) {
-            Debugger.addSTR(MyUtilTAG, "ViewPager null !");
-            return;
-        }
-        if (glblPara == null) {
-            Debugger.addSTR(MyUtilTAG, "GlobalPara null !");
-            return;
-        }
-
-        glblPara.layoutViewCreate = 0;
-
-        activity.runOnUiThread(new Runnable() {
-            @Override
-            public void run() {
-                viewPager.setCurrentItem(pageIndex, false);
-                glblPara.layoutViewCreate = 1;
-            }
-        });
-
-        do {
-            //Debugger.addSTR(MyUtilTAG, "Page Switch Not OK Yet! ");
-            sleep(ms);
-        } while (glblPara.layoutViewCreate == 0);
-
-    }
-
-}
-
-class TLVUtility {
-    String TAG = "TLVUtility";
-
-    int intTLVDataBaseLen;
-    byte TLVDataBase[] = new byte[4096];
-
-    public int TLVDataGet(TlvData tlv) {
-        TlvData tempData = new TlvData();
-        int[] lens = new int[3];
-        int curTagLen = 0;
-        int curLenLen = 0;
-        int curValueLen = 0;
-        int i = 0;
-        int intRtn;
-
-        tlv.len = 0;
-        tempData.value = new byte[1024];
-
-        while (i < intTLVDataBaseLen) {
-            lens[0] = lens[1] = lens[2] = 0;
-
-            intRtn = getTLV(TLVDataBase, i, tempData, lens, false);
-            if (intRtn != 0) {
-                return 1;
-            }
-
-            curTagLen = lens[0];
-            curLenLen = lens[1];
-            curValueLen = lens[2];
-            if (tlv.tag == tempData.tag) {
-                System.arraycopy(tempData.value, 0, tlv.value, 0, tempData.len);
-                tlv.len = tempData.len;
-                return 0;
-            }
-            i += curValueLen + curTagLen + curLenLen;
-        }
-
-        return 1;
-    }
-
-    public void TLVDataParse(byte[] buffer, int len) {
-        TlvData tempTlvData = new TlvData();
-        int[] lens = new int[3];
-        int curTagLen = 0;
-        int curLenLen = 0;
-        int curValueLen = 0;
-        int i = 0;
-        int intRtn;
-
-        tempTlvData.value = new byte[1024];
-
-        while (i < len) {
-            Arrays.fill(tempTlvData.value, (byte) 0);
-            lens[0] = lens[1] = lens[2] = 0;
-
-            intRtn = getTLV(buffer, i, tempTlvData, lens, true);
-            if (intRtn != 0) {
-                return;
-            }
-
-            curTagLen = lens[0];
-            curLenLen = lens[1];
-            curValueLen = lens[2];
-            i += (curValueLen + curTagLen + curLenLen);
-
-            TLVDataAdd(tempTlvData);
-        }
-    }
-
-    public int getTLV(byte[] buffer, int index, TlvData tlv, int[] lens, boolean isShowlog) {
-        int tagLen = 0;
-        int lengthLen = 0;
-
-        if ((buffer[index] & 0x0000001F) == 0x0000001F) {
-            if ((buffer[index + 1] & 0x00000080) == 0x00000080) {
-                if ((buffer[index + 2] & 0x00000080) == 0x00000080) {
-                    //4-byte tag not support
-                    Debugger.addHEX(TAG, "4-byte tag not support : ", buffer, index, 4);
-                    return 1;
-                } else {
-                    //3 bytes tag
-                    tlv.tag = ((buffer[index] & 0x000000FF) << 16) | ((buffer[index + 1] & 0x000000FF) << 8) | ((buffer[index + 2] & 0x000000FF));
-                    tagLen = 3;
-                }
-            } else {
-                //2 bytes tag
-                tlv.tag = ((buffer[index] & 0x000000FF) << 8) | ((buffer[index + 1] & 0x000000FF));
-                tagLen = 2;
-            }
-        } else {
-            //1 byte tag
-            tlv.tag = (buffer[index] & 0x000000FF);
-            tagLen = 1;
-        }
-        if (isShowlog == true) {
-            Log.d(TAG, "Tag : " + String.format("0x%08X", tlv.tag));
-        }
-        index += tagLen;
-        lens[0] = tagLen;
-
-        lengthLen = 1;
-        if ((buffer[index] & 0x00000080) == 0x00000080) {
-            lengthLen += (buffer[index] & 0x0000007F);
-
-            if (lengthLen == 2) {
-                tlv.len = (buffer[index + 1] & 0x000000FF);
-            } else if (lengthLen == 3) {
-                tlv.len = ((buffer[index + 1] & 0x000000FF) << 8) | ((buffer[index + 2] & 0x000000FF));
-            } else {
-                //4-byte length not support
-                Debugger.addHEX(TAG, "4-byte len not support : ", buffer, index, 4);
-                return 1;
-            }
-        } else {
-            tlv.len = (buffer[index] & 0x000000FF);
-        }
-        if (isShowlog == true) {
-            Debugger.addHEX(TAG, String.format("Len(Dec) : %d, Len(TLV) : ", tlv.len), buffer, index, lengthLen);
-        }
-        index += lengthLen;
-        lens[1] = lengthLen;
-
-        System.arraycopy(buffer, index, tlv.value, 0, tlv.len);
-        lens[2] = tlv.len;
-
-        return 0;
-    }
-
-    public int TLVDataAdd(TlvData tlv) {
-        TlvData tempTlvData = new TlvData();
-        int[] lens = new int[3];
-        int curTagLen = 0;
-        int curLenLen = 0;
-        int curValueLen = 0;
-        int nextTag_i = 0;
-        byte temp[] = new byte[10];
-        int i = 0;
-        int j = 0;
-        int intRtn;
-
-        tempTlvData.value = new byte[1024];
-
-        while (i < intTLVDataBaseLen) {
-            lens[0] = lens[1] = lens[2] = 0;
-
-            intRtn = getTLV(TLVDataBase, i, tempTlvData, lens, false);
-            if (intRtn != 0) {
-                return 1;
-            }
-
-            curTagLen = lens[0];
-            curLenLen = lens[1];
-            curValueLen = lens[2];
-
-            nextTag_i = (i + curTagLen + curLenLen + curValueLen);
-
-            if (tlv.tag == tempTlvData.tag) {
-                System.arraycopy(TLVDataBase, nextTag_i, TLVDataBase, i, (intTLVDataBaseLen - nextTag_i));
-                intTLVDataBaseLen -= (curTagLen + curLenLen + curValueLen);
-                break;
-            }
-
-            i = nextTag_i;
-        }
-        //TLVDataRemove(tlv.tag);
-
-        //tag
-        if ((tlv.tag & 0xFF000000) != 0) {
-            //4-byte tag not support
-            Log.d(TAG, "4-byte tag not support2 : " + String.format("0x%08X", tlv.tag));
-            return 1;
-        } else {
-            if ((tlv.tag & 0x00FF0000) != 0) {
-                temp[j++] = (byte) ((tlv.tag & 0x00FF0000) >> 16);
-            }
-
-            if ((tlv.tag & 0x0000FF00) != 0) {
-                temp[j++] = (byte) ((tlv.tag & 0x0000FF00) >> 8);
-            }
-
-            temp[j++] = (byte) (tlv.tag & 0x000000FF);
-        }
-
-        //len
-        //temp[j++] = (byte)tlv.len;
-        if (tlv.len < 0) {
-            //length < 0
-            Log.d(TAG, "len < 0 : " + String.format("0x%d", tlv.len));
-            return 1;
-        } else if (tlv.len > 0x0000FFFF) {
-            //4-byte length not support
-            Log.d(TAG, "4-byte len not support2 : " + String.format("0x%d", tlv.len));
-            return 1;
-        } else if (tlv.len > 0x000000FF) {
-            temp[j++] = (byte) 0x82;
-            temp[j++] = (byte) ((tlv.len & 0x0000FF00) >> 8);
-            temp[j++] = (byte) ((tlv.len & 0x000000FF));
-        } else if (tlv.len > 0x0000007F) {
-            temp[j++] = (byte) 0x81;
-            temp[j++] = (byte) ((tlv.len & 0x000000FF));
-        } else {
-            temp[j++] = (byte) ((tlv.len & 0x000000FF));
-        }
-
-        System.arraycopy(temp, 0, TLVDataBase, intTLVDataBaseLen, j);
-        intTLVDataBaseLen += j;
-
-        System.arraycopy(tlv.value, 0, TLVDataBase, intTLVDataBaseLen, tlv.len);
-        intTLVDataBaseLen += tlv.len;
-
-        return 0;
-    }
-
-    public void TLVDataRemove(int tag) {
-        TlvData temptlvData = new TlvData();
-        int[] lens = new int[3];
-        int i = 0;
-        int nextTag_i = 0;
-        int curTagLen = 0;
-        int curLenLen = 0;
-        int curValueLen = 0;
-        int intRtn;
-
-        temptlvData.value = new byte[1024];
-
-        while (i < intTLVDataBaseLen) {
-            lens[0] = lens[1] = lens[2] = 0;
-
-            intRtn = getTLV(TLVDataBase, i, temptlvData, lens, false);
-            if (intRtn != 0) {
-                return;
-            }
-
-            curTagLen = lens[0];
-            curLenLen = lens[1];
-            curValueLen = lens[2];
-
-            nextTag_i = (i + curTagLen + curLenLen + curValueLen);
-
-            if (tag == temptlvData.tag) {
-                System.arraycopy(TLVDataBase, nextTag_i, TLVDataBase, i, (intTLVDataBaseLen - nextTag_i));
-                intTLVDataBaseLen -= (curTagLen + curLenLen + curValueLen);
-                break;
-            }
-
-            i = nextTag_i;
-        }
-    }
-
-
-    public void TLVDataClear() {
-        intTLVDataBaseLen = 0;
-        Arrays.fill(TLVDataBase, (byte) 0x00);
-    }
-}
-
-//Override some TLV functions to handle the tags which do not follow standard TLV rule in CtEMV
-class TLVUtility_CT extends TLVUtility {
-    String TAG = "TLVUtility_CT";
-
-    @Override
-    public int getTLV(byte[] buffer, int index, TlvData tlv, int[] lens, boolean isShowlog) {
-        int tagLen = 0;
-        int lengthLen = 0;
-
-        if ((buffer[index] & 0x0000001F) == 0x0000001F) {
-            //2 bytes tag
-            tlv.tag = ((buffer[index] & 0x000000FF) << 8) | ((buffer[index + 1] & 0x000000FF));
-            tagLen = 2;
-        } else {
-            //1 byte tag
-            tlv.tag = (buffer[index] & 0x000000FF);
-            tagLen = 1;
-        }
-        if (isShowlog == true) {
-            Log.d(TAG, "Tag : " + String.format("0x%08X", tlv.tag));
-        }
-        index += tagLen;
-        lens[0] = tagLen;
-
-        lengthLen = 1;
-        if ((buffer[index] & 0x00000080) == 0x00000080) {
-            lengthLen += (buffer[index] & 0x0000007F);
-
-            if (lengthLen == 2) {
-                tlv.len = (buffer[index + 1] & 0x000000FF);
-            } else if (lengthLen == 3) {
-                tlv.len = ((buffer[index + 1] & 0x000000FF) << 8) | ((buffer[index + 2] & 0x000000FF));
-            } else {
-                //4-byte length not support
-                Debugger.addHEX("TLVUtility_CT", "4-byte len not support3 : ", buffer, index, 4);
-                return 1;
-            }
-        } else {
-            tlv.len = (buffer[index] & 0x000000FF);
-        }
-        if (isShowlog == true) {
-            Debugger.addHEX(TAG, String.format("Len(Dec) : %d, Len(TLV) : ", tlv.len), buffer, index, lengthLen);
-        }
-        index += lengthLen;
-        lens[1] = lengthLen;
-
-        System.arraycopy(buffer, index, tlv.value, 0, tlv.len);
-        lens[2] = tlv.len;
-
-        return 0;
-    }
-
-    @Override
-    public int TLVDataAdd(TlvData tlv) {
-        TlvData tempTlvData = new TlvData();
-        int[] lens = new int[3];
-        int curTagLen = 0;
-        int curLenLen = 0;
-        int curValueLen = 0;
-        int nextTag_i = 0;
-        byte temp[] = new byte[10];
-        int i = 0;
-        int j = 0;
-        int intRtn;
-
-        tempTlvData.value = new byte[1024];
-
-        while (i < intTLVDataBaseLen) {
-            lens[0] = lens[1] = lens[2] = 0;
-
-            intRtn = getTLV(TLVDataBase, i, tempTlvData, lens, false);
-            if (intRtn != 0) {
-                return 1;
-            }
-
-            curTagLen = lens[0];
-            curLenLen = lens[1];
-            curValueLen = lens[2];
-
-            nextTag_i = (i + curTagLen + curLenLen + curValueLen);
-
-            if (tlv.tag == tempTlvData.tag) {
-                System.arraycopy(TLVDataBase, nextTag_i, TLVDataBase, i, (intTLVDataBaseLen - nextTag_i));
-                intTLVDataBaseLen -= (curTagLen + curLenLen + curValueLen);
-                break;
-            }
-
-            i = nextTag_i;
-        }
-        //TLVDataRemove(tlv.tag);
-
-        //tag
-        if ((tlv.tag & 0xFF000000) != 0) {
-            //4-byte tag not support
-            Log.d(TAG, "4-byte tag not support3 : " + String.format("0x%08X", tlv.tag));
-            return 1;
-        } else {
-            if ((tlv.tag & 0x00FF0000) != 0) {
-                //temp[j++] = (byte)((tlv.tag & 0x00FF0000) >> 16);
-
-                //3-byte tag not support
-                Log.d(TAG, "3-byte tag not support4 : " + String.format("0x%08X", tlv.tag));
-                return 1;
-            }
-
-            if ((tlv.tag & 0x0000FF00) != 0) {
-                temp[j++] = (byte) ((tlv.tag & 0x0000FF00) >> 8);
-            }
-
-            temp[j++] = (byte) (tlv.tag & 0x000000FF);
-        }
-
-        //len
-        //temp[j++] = (byte)tlv.len;
-        if (tlv.len < 0) {
-            //length < 0
-            Log.d(TAG, "len < 0 : " + String.format("0x%d", tlv.len));
-            return 1;
-        } else if (tlv.len > 0x0000FFFF) {
-            //4-byte length not support
-            Log.d(TAG, "4-byte len not support4 : " + String.format("0x%d", tlv.len));
-            return 1;
-        } else if (tlv.len > 0x000000FF) {
-            temp[j++] = (byte) 0x82;
-            temp[j++] = (byte) ((tlv.len & 0x0000FF00) >> 8);
-            temp[j++] = (byte) ((tlv.len & 0x000000FF));
-        } else if (tlv.len > 0x0000007F) {
-            temp[j++] = (byte) 0x81;
-            temp[j++] = (byte) ((tlv.len & 0x000000FF));
-        } else {
-            temp[j++] = (byte) ((tlv.len & 0x000000FF));
-        }
-
-        System.arraycopy(temp, 0, TLVDataBase, intTLVDataBaseLen, j);
-        intTLVDataBaseLen += j;
-
-        System.arraycopy(tlv.value, 0, TLVDataBase, intTLVDataBaseLen, tlv.len);
-        intTLVDataBaseLen += tlv.len;
-
-        return 0;
-    }
-}
-
-
-class MyEMVEvent extends EMVEvent {
-    private Converter convert = new Converter();
-    private byte pinType;
-    //private int remainingCounter;
-    private MainActivity mainActivity;
-    private CtEMV emv;
-
-    private static ViewPager mViewPager;
-
-
-    public int setUIComponent(ViewPager mViewPager) {
-        this.mViewPager = mViewPager;
-
-        return 0;
-    }
-
-    MyEMVEvent(MainActivity InContext) {
-        this.mainActivity = InContext;
-    }
-
-    MyEMVEvent(MainActivity InContext, CtEMV emv) {
-        this.mainActivity = InContext;
-        this.emv = emv;
-        if (CtEMV.d_EMVAPLIB_ERR_ONLY_1_AP_NO_FALLBACK == 9) {
-            int x = 1;
-        }
-    }
-
-    //Out	EMVTxnData
-    @Override
-    public int onTxnDataGet(EMVTxnData txnData) {
-        final String TAG = GlobalPara.tag;
-
-        Log.d(TAG, "onTxnDataGet trigger-->");
-
-        byte[] amount;
-        byte[] amountOther;
-        String strDate;
-        String strTime;
-        SimpleDateFormat sdf;
-        Date dt = new Date();
-
-        sdf = new SimpleDateFormat("yyMMdd");
-        strDate = sdf.format(dt);
-        sdf = new SimpleDateFormat("HHmmss");
-        strTime = sdf.format(dt);
-
-        txnData.version = 3;    //version should be set to 3
-
-        EditText edt = (EditText) this.mainActivity.findViewById(R.id.edtAmt);
-        String strAmt = edt.getText().toString();
-
-        if (GlobalPara.isQuickChipTransaction == true) {
-            if (strAmt.isEmpty() == true) {
-                Debugger.addSTR(TAG, "amount is not yet known, using pre-determined amount");
-                strAmt = "200";
-            }
-        }
-
-        strAmt = convert.amtPadding(strAmt);
-        amount = convert.hexString2ByteArray(strAmt);
-        System.arraycopy(amount, 0, txnData.amount, 0, 6);                //amount is 6-byte array
-
-        Debugger.addHEX(TAG, "Input amount", txnData.amount, 0, 6);
-
-        txnData.posEntryMode = 0x00;
-        txnData.txnType = 0x00;
-
-        Log.d(TAG, "Date" + strDate);
-        Log.d(TAG, "Time" + strTime);
-
-        System.arraycopy(strDate.getBytes(Charset.forName("UTF-8")), 0, txnData.txnDate, 0, 6);
-        System.arraycopy(strTime.getBytes(Charset.forName("UTF-8")), 0, txnData.txnTime, 0, 6);
-
-        return 0;
-    }
-
-    //In	appListExData.appNum;
-    //In	appListExData.appInfo[];
-    //Out	appListExData.appSelectedIndex;
-    @Override
-    public int onAppListEx(EMVAppListExData appListExData) {
-        final String TAG;
-
-        TAG = GlobalPara.tag;
-        GlobalPara.appListOK = false;
-        GlobalPara.appSelectedIndex = 0;
-
-        Log.d(TAG, "onAppListEx trigger-->");
-
-        ClsListViewAdapter myAdapter = new ClsListViewAdapter(this.mainActivity);
-        for (int i = 0; i < appListExData.appNum; i++) {
-            String appLabel = new String(appListExData.appInfo[i].appLabel);
-            myAdapter.addItem(appLabel, String.format("App %d\n", i + 1));
-            Log.d(TAG, appLabel);
-        }
-
-        View view = this.mainActivity.getLayoutInflater().inflate(R.layout.list_view_layout, null);
-        ListView lv = (ListView) view.findViewById(R.id.id_ListView);
-        lv.setAdapter(myAdapter.getAdapter());
-        lv.setOnItemClickListener(new AdapterView.OnItemClickListener() {
-            @Override
-            public void onItemClick(final AdapterView<?> adapterView, View view, final int pos, long id) {
-                Log.d(TAG, "onAppListEx onItemClick : " + String.format("%d", pos));
-                GlobalPara.appSelectedIndex = (byte) (pos);
-                GlobalPara.appListOK = true;
-                GlobalPara.alertDialog.dismiss();
-            }
-        });
-
-
-        final AlertDialog.Builder builder;
-        builder = new AlertDialog.Builder(this.mainActivity);
-        builder.setTitle("Please Select One App to Execute");
-        builder.setIcon(R.drawable.arrow);
-        builder.setView(view);
-        this.mainActivity.runOnUiThread(new Runnable() {
-            @Override
-            public void run() {
-                AlertDialog ad = builder.create();
-                ad.getWindow().setBackgroundDrawableResource(R.drawable.alert_dialog_shape);
-                ad.setCancelable(false);
-                ad.setCanceledOnTouchOutside(false);
-                ad.show();
-                GlobalPara.alertDialog = ad;
-            }
-        });
-
-        do {
-            MyUtility.sleep(500);
-        } while (GlobalPara.appListOK == false);
-
-        //Range of appListExData.appSelectedIndex value is 0 to (appListExData.appNum -1)
-        appListExData.appSelectedIndex = GlobalPara.appSelectedIndex;
-
-        return 0;
-    }
-
-    //In	isRequiredByCard
-    //In	appLabel
-    //In	appLabelLen
-    @Override
-    public int onAppSelectedConfirm(boolean isRequiredByCard, byte[] appLabel, byte appLabelLen) {
-        short shRtn = (short) 0xFFFF;
-        final String TAG;
-
-        TAG = GlobalPara.tag;
-        GlobalPara.appSelectedConfirmOK = 0;
-
-        Log.d(TAG, "onAppSelectedConfirm trigger-->");
-        Log.d(TAG, "isRequiredByCard" + String.valueOf(isRequiredByCard));
-
-
-        final AlertDialog.Builder builder = new AlertDialog.Builder(this.mainActivity);
-        builder.setTitle("Please Confirm to Execute Following App");
-        builder.setIcon(R.drawable.arrow);
-        builder.setMessage(new String(appLabel));
-
-        builder.setPositiveButton("Yes", new DialogInterface.OnClickListener() {
-            @Override
-            public void onClick(DialogInterface arg0, int arg1) {
-                GlobalPara.appSelectedConfirmOK = 1;
-            }
-
-        });
-        builder.setNegativeButton("No", new DialogInterface.OnClickListener() {
-            @Override
-            public void onClick(DialogInterface arg0, int arg1) {
-                GlobalPara.appSelectedConfirmOK = 2;
-            }
-
-        });
-
-
-        this.mainActivity.runOnUiThread(new Runnable() {
-            @Override
-            public void run() {
-                AlertDialog ad;
-                ad = builder.create();
-                ad.setCancelable(false);
-                ad.setCanceledOnTouchOutside(false);
-                ad.show();
-            }
-        });
-
-        do {
-            MyUtility.sleep(500);
-        } while (GlobalPara.appSelectedConfirmOK == 0);
-
-
-        if (GlobalPara.appSelectedConfirmOK == 1) {
-            return 0;
-        }
-
-        return 1;
-    }
-
-    //IN	type
-    //IN	remainingCounter
-    //OUT	onlinePinPara
-    @Override
-    public int onGetPINNotify(byte type, final int remainingCounter, EMVGetPINFuncPara getPinPara) {
-        short shRtn = (short) 0xFFFF;
-        final String TAG;
-
-        TAG = GlobalPara.tag;
-
-        Log.d(TAG, "onGetPinNotify trigger--> type=" + type + ", remainingCounter=" + remainingCounter);
-
-        getPinPara.version = 1;
-        getPinPara.timeout = 60;
-        getPinPara.maxPINDigitLength = 8;
-        getPinPara.minPINDigitLength = 4;
-
-        // ORIGINAL CASTLE SAMPLE PATTERN:
-        // - Offline PIN (type=1): internal PIN pad (isInternalPINPad=1)
-        // - Online PIN (type=0): external PIN pad (isInternalPINPad=0)
-        //   -> SDK will call eventOnlinePinBlockGet callback
-        // - Key location is NOT SET here (original has it commented out)
-        //   -> eventOnlinePinBlockGet uses GlobalPara.onlinePinKeySet/Index
-
-        if (type == 1) {
-            // Offline PIN - use internal PIN pad
-            getPinPara.isInternalPINPad = 1;
-            Log.d(TAG, "onGetPINNotify: Offline PIN (type=1), internal PIN pad");
-        } else {
-            // Online PIN - use EXTERNAL PIN pad -> triggers eventOnlinePinBlockGet
-            getPinPara.isInternalPINPad = 0;
-            Log.d(TAG, "onGetPINNotify: Online PIN (type=0), EXTERNAL -> eventOnlinePinBlockGet");
-        }
-
-        // Set PIN encryption key to C000/0000 where our DUKPT key is injected
-        // Castle support: "modify the source code for of the places you injected (C000, 0000)"
-        getPinPara.onlinePINCipherKeySet = GlobalPara.onlinePinKeySet;    // 0xC000
-        getPinPara.onlinePINCipherKeyIndex = GlobalPara.onlinePinKeyIndex; // 0x0000
-        Log.d(TAG, "onGetPINNotify: Key set to C000/0000 (our DUKPT key location)");
-
-        this.pinType = type;
-        GlobalPara.remainingCounter = remainingCounter;
-
-        // MUST return 0 - returning 1 causes SDK error 0x1003
-        return 0;
-    }
-
-    //IN	digitsNum
-    @Override
-    public void onShowPINDigit(byte digitsNum) {
-        final String TAG;
-        final int page;
-
-        TAG = GlobalPara.tag;
-        Log.d(TAG, "onShowPINDigit trigger-->");
-
-        page = GlobalDef.d_PAGE_PINPAD_EX;
-
-        if (mViewPager.getCurrentItem() != page) {
-            MyUtility.switchPage(page, 300);
-        }
-
-        byte[] pinMaskStr = new byte[32];
-        Arrays.fill(pinMaskStr, 0, digitsNum, (byte) '*');
-        final String str = new String(pinMaskStr);
-
-        this.mainActivity.runOnUiThread(new Runnable() {
-            @Override
-            public void run() {
-                TextView textView;
-                textView = (TextView) mainActivity.findViewById(R.id.textViewPinDigitEx);
-
-                if (pinType == 0) {
-                    textView.setText("1 Enter Online Pin(" + String.valueOf(GlobalPara.remainingCounter) + ") :\n" + str + "\n");
-                } else {
-                    textView.setText("Enter Offline Pin(" + String.valueOf(GlobalPara.remainingCounter) + ") :\n" + str + "\n");
-                }
-
-            }
-        });
-        Log.d(TAG, "onShowPINDigit returning Num Digits = " + digitsNum);
-        return;
-    }
-
-    public void onShowPINBypass() {
-        final String TAG;
-        final int page;
-
-        TAG = GlobalPara.tag;
-        Log.d(TAG, "onShowPINBypass trigger-->");
-
-        page = GlobalDef.d_PAGE_TRANSACTION;
-
-        if (mViewPager.getCurrentItem() != page) {
-            MyUtility.switchPage(page, 500);
-        }
-
-        this.mainActivity.runOnUiThread(new Runnable() {
-            @Override
-            public void run() {
-                mainActivity.ui_ShowLog("Pin Bypass !");
-            }
-        });
-
-
-        return;
-    }
-
-
-    //In	txnResult
-    //In	isSignatureRequired
-    @Override
-    public void onTxnResult(byte txnResult, boolean isSignatureRequired) {
-        final String TAG;
-
-        TAG = GlobalPara.tag;
-        Log.d(TAG, "onTxnResult trigger-->");
-
-        GlobalPara.isNeedSignature = isSignatureRequired;
-
-        switch (txnResult) {
-            case (byte) 0x01:
-                GlobalPara.transactionResult = 0x0002;
-                break;
-            case (byte) 0x02:
-                GlobalPara.transactionResult = 0x0003;
-                break;
-            case (byte) 0x03:
-                GlobalPara.transactionResult = 0x0004;
-                break;
-
-            default:
-                GlobalPara.transactionResult = 0x00FF;
-                break;
-        }
-    }
-
-}
-
-class MyEMVSPEvent implements CtEMV.IEventShowVirtualPINEx, CtEMV.IEventGetPINDone, CtEMV.IEventOnlinePinBlockGet, CtEMV.IEventPINBypass, CtEMV.IEventAppListEx, CtEMV.IEventCAPKGet {
-    private static Activity activity;
-    private static ViewPager mViewPager;
-    private static CtEMV emv;
-    private final String TAG = GlobalPara.tag;
-    private MainActivity mainActivity;
-
-    public int setVirtualPINUIComponent(Activity activity, ViewPager mViewPager) {
-        this.activity = activity;
-        //this.layout = layout;
-        this.mViewPager = mViewPager;
-
-        return 0;
-    }
-
-
-    //for Virtual PIN EX (customize Virtual PIN)
-    //return a fixed int[16][5] buffer as keyboard attribute
-    public int[][] eventShowVirtualPINEx() {
-        Log.d(TAG, "eventShowVirtualPINEx trigger-->");
-
-        final int page = GlobalDef.d_PAGE_PINPAD_EX;
-
-        //Switch Page
-        MyUtility.switchPage(page, 500);
-
-        //keyboard attribute is a fixed int[16][5] buffer !!
-        int[][] KBDAttribute = new int[16][5];
-        TextView[] tv = new TextView[16];
-        int[] XY = new int[2];
-        int x;
-        int y;
-        int w;
-        int h;
-
-
-        for (int i = 0; i < 16; i++) {
-            switch (i) {
-                //set key value for key borad 0 ~ 9, enter, cancel, clear(backspace)
-                case 0:
-                    tv[i] = (TextView) this.activity.findViewById(R.id.KBD0);
-                    KBDAttribute[i][4] = '0';
-                    break;
-                case 1:
-                    tv[i] = (TextView) this.activity.findViewById(R.id.KBD1);
-                    KBDAttribute[i][4] = '1';
-                    break;
-                case 2:
-                    tv[i] = (TextView) this.activity.findViewById(R.id.KBD2);
-                    KBDAttribute[i][4] = '2';
-                    break;
-                case 3:
-                    tv[i] = (TextView) this.activity.findViewById(R.id.KBD3);
-                    KBDAttribute[i][4] = '3';
-                    break;
-                case 4:
-                    tv[i] = (TextView) this.activity.findViewById(R.id.KBD4);
-                    KBDAttribute[i][4] = '4';
-                    break;
-                case 5:
-                    tv[i] = (TextView) this.activity.findViewById(R.id.KBD5);
-                    KBDAttribute[i][4] = '5';
-                    break;
-                case 6:
-                    tv[i] = (TextView) this.activity.findViewById(R.id.KBD6);
-                    KBDAttribute[i][4] = '6';
-                    break;
-                case 7:
-                    tv[i] = (TextView) this.activity.findViewById(R.id.KBD7);
-                    KBDAttribute[i][4] = '7';
-                    break;
-                case 8:
-                    tv[i] = (TextView) this.activity.findViewById(R.id.KBD8);
-                    KBDAttribute[i][4] = '8';
-                    break;
-                case 9:
-                    tv[i] = (TextView) this.activity.findViewById(R.id.KBD9);
-                    KBDAttribute[i][4] = '9';
-                    break;
-                case 10:
-                    tv[i] = (TextView) this.activity.findViewById(R.id.KBD_Cancel);
-                    KBDAttribute[i][4] = 'C';
-                    break;
-                case 11:
-                    tv[i] = (TextView) this.activity.findViewById(R.id.KBD_Clear);
-                    KBDAttribute[i][4] = 'R';
-                    break;
-                case 12:
-                    tv[i] = (TextView) this.activity.findViewById(R.id.KBD_Enter);
-                    KBDAttribute[i][4] = 'A';
-                    break;
-
-                //set the key value to 'S' for key board not in above(key borad 0 ~ 9, enter, cancel, clear)
-                default:
-                    KBDAttribute[i][4] = 'S';
-                    break;
-            }
-
-            if (i > 12 || tv[i] == null) {
-                // Use default values if view doesn't exist (ATM mode) or for unused keys
-                x = 10;
-                y = 10;
-                w = 1;
-                h = 1;
-            } else {
-                tv[i].getLocationOnScreen(XY);
-                x = XY[0];
-                y = XY[1];
-                w = tv[i].getWidth();
-                h = tv[i].getHeight();
-            }
-
-
-            KBDAttribute[i][0] = x;
-            KBDAttribute[i][1] = y;
-            KBDAttribute[i][2] = x + w;
-            KBDAttribute[i][3] = y + h;
-
-            Log.d("KeyValue = ", String.valueOf(KBDAttribute[i][4]));
-            Log.d("location x = ", String.valueOf(x));
-            Log.d("location y = ", String.valueOf(y));
-            Log.d("location x + width = ", String.valueOf(KBDAttribute[i][2]));
-            Log.d("location y + height = ", String.valueOf(KBDAttribute[i][3]));
-        }
-
-        if (GlobalPara.scrnBrdcstRecver != null) {
-            GlobalPara.scrnBrdcstRecver.setVirtualPINStatus(ClsScreenBroadcastReceiver.d_VPIN_IS_PERFORMING);
-        }
-        return KBDAttribute;
-    }
-
-
-    public int eventGetPINDone() {
-        Log.d(TAG, "eventGetPINDone trigger-->");
-
-        final int page = GlobalDef.d_PAGE_TRANSACTION;
-
-        MyUtility.switchPage(page, 500);
-
-        if (GlobalPara.scrnBrdcstRecver != null) {
-            GlobalPara.scrnBrdcstRecver.setVirtualPINStatus(ClsScreenBroadcastReceiver.d_VPIN_IS_NOT_PERFORMING);
-        }
-        return 0;
-    }
-
-    public byte eventPINBypass() {
-        Log.d(TAG, "eventPINBypass trigger-->");
-
-        final String TAG;
-
-        TAG = GlobalPara.tag;
-
-        // ATM MODE: Don't bypass - let user enter PIN through internal PIN pad
-        // The PIN block will be created by the SDK using our DUKPT key
-        if (GlobalPara.atmMode) {
-            Log.d(TAG, "eventPINBypass: ATM MODE - NOT bypassing, user must enter PIN");
-            return 0x01;  // 0x01 = Don't bypass, continue with PIN entry
-        }
-
-        GlobalPara.pinBypassActionOK = false;
-        GlobalPara.pinBypassActionIndex = 0;
-
-        ClsListViewAdapter myAdapter = new ClsListViewAdapter(this.activity);
-        myAdapter.addItem("Option 1", "Bypass PIN\n");
-        myAdapter.addItem("Option 2", "Don't bypass PIN, back to get PIN process\n");
-        myAdapter.addItem("Option 3", "Don't bypass PIN, trigger eventShowVirtualPINEx() again \nthen back to get PIN process\n");
-
-        View view = this.activity.getLayoutInflater().inflate(R.layout.list_view_layout, null);
-        ListView lv = (ListView) view.findViewById(R.id.id_ListView);
-        lv.setAdapter(myAdapter.getAdapter());
-        lv.setOnItemClickListener(new AdapterView.OnItemClickListener() {
-            @Override
-            public void onItemClick(final AdapterView<?> adapterView, View view, final int pos, long id) {
-                Log.d(TAG, "eventPINBypass onItemClick : " + String.format("%d", pos));
-                GlobalPara.pinBypassActionIndex = (byte) (pos);
-                GlobalPara.pinBypassActionOK = true;
-                GlobalPara.alertDialog.dismiss();
-            }
-        });
-
-        final AlertDialog.Builder builder;
-        builder = new AlertDialog.Builder(this.activity);
-        builder.setTitle("PIN Bypass ?");
-        builder.setIcon(R.drawable.arrow);
-        builder.setView(view);
-        this.activity.runOnUiThread(new Runnable() {
-            @Override
-            public void run() {
-                AlertDialog ad = builder.create();
-                ad.getWindow().setBackgroundDrawableResource(R.drawable.alert_dialog_shape);
-                ad.setCancelable(false);
-                ad.setCanceledOnTouchOutside(false);
-                ad.show();
-                GlobalPara.alertDialog = ad;
-            }
-        });
-
-        do {
-            MyUtility.sleep(500);
-        } while (GlobalPara.pinBypassActionOK == false);
-
-        //Return value :
-        //0x00 - Bypass PIN
-        //0x01 - Don't bypass PIN, back to get PIN process
-        //0x02 - Don't bypass PIN, trigger eventShowVirtualPINEx() again then back to get PIN process
-        return GlobalPara.pinBypassActionIndex;
-    }
-
-    public int eventOnlinePinBlockGet(EMVOnlinePinData onlinePinData) {
-        Log.d(TAG, "eventOnlinePinBlockGet() ***");
-
-        // Check if we're in ATM mode
-        boolean isATMMode = (GlobalPara.atmSelectedAmount != null && !"0.00".equals(GlobalPara.atmSelectedAmount))
-                || GlobalPara.atmBalanceInquiryMode;
-
-        // v6.0-PERF: In ATM mode, SKIP the SDK PIN flow to avoid 30s timeout
-        // The SDK PIN flow fails with 0x1003 (wrong key attribute), but only AFTER
-        // startVirtualPin() times out waiting for PIN entry. This causes a 20-30 second delay.
-        // Instead, return immediately and let post-transaction MVP PIN collection handle it.
-        if (isATMMode && GlobalPara.atmDukptEnabled) {
-            Log.d(TAG, ">>> v6.0-PERF: ATM DUKPT mode - SKIPPING SDK PIN callback (avoids 30s timeout)");
-            Log.d(TAG, ">>> PIN will be collected post-transaction via MVP DUKPT approach");
-            onlinePinData.isOnlinePinRquired = false;  // Signal that PIN wasn't collected here
-            return -1;  // Return non-zero to indicate PIN was not collected
-        }
-
-        final int page = GlobalDef.d_PAGE_PINPAD_EX;
-
-        // ALWAYS switch to PIN pad page - VirtualPINPad needs real button coordinates
-        // The PIN pad page has the KBD0-KBD9 buttons that VirtualPINPad intercepts
-        MyUtility.switchPage(page, 500);
-        Log.d(TAG, "Switched to PIN pad page (ATM mode=" + isATMMode + ")");
-
-        //Get PIN
-        final TextView textView;
-        final TextView textView2;
-        textView = (TextView) this.activity.findViewById(R.id.textViewPinDigitEx);
-        textView2 = (TextView) this.activity.findViewById(R.id.textViewKeyInfo);
-
-        // Only update UI if the view exists (not in ATM mode)
-        if (textView != null) {
-            this.activity.runOnUiThread(new Runnable() {
-                @Override
-                public void run() {
-                    textView.setText("2 Enter Online Pin(" + String.valueOf(GlobalPara.remainingCounter) + ") :\n");
-                }
-            });
-        } else {
-            Log.d(TAG, "ATM Mode: PIN pad view not available, using KMS2 secure PIN overlay");
-        }
-
-        Log.d(TAG, "Start Get PIN");
-
-        IKMS2Callback.Stub callback = new IKMS2Callback.Stub() {
-            StringBuffer sb = new StringBuffer();
-            byte recv;
-
-            @Override
-            public int testCancel() {
-                return 0;
-            }
-
-            @Override
-            public void onGetDigit(byte Digit) {
-                Log.d(TAG, String.format("NoDigits = %d, OnGetPINDigit.", Digit));
-
-                recv = Digit;
-                sb.setLength(0);
-                for (int i = 0; i < recv; i++)
-                    sb.append("*");
-
-                if (textView != null) {
-                    activity.runOnUiThread(new Runnable() {
-                        @Override
-                        public void run() {
-                            textView.setText("3 Enter Online Pin(" + String.valueOf(GlobalPara.remainingCounter) + ") :\n" + sb);
-                        }
-                    });
-                }
-            }
-
-            @Override
-            public void onGetFunctionKey(byte FunctionKey) {
-                Log.d(TAG, String.format("FunctionKey = %d, OnGetPINOtherKeys.", FunctionKey));
-
-                recv = FunctionKey;
-                sb.setLength(0);
-                sb.append(recv);
-                if (textView != null) {
-                    activity.runOnUiThread(new Runnable() {
-                        @Override
-                        public void run() {
-                            textView.setText("4 Enter Online Pin(" + String.valueOf(GlobalPara.remainingCounter) + ") :\n" + sb);
-                        }
-                    });
-                }
-            }
-        };
-
-        //byte CipherMethod = 0x00;	//PIN_CIPHER_METHOD_ECB
-        byte Null_PIN = 0;
-        int Timeout = 60;
-        int First_timeout = 20;
-        int MaxDigit = 12, MinDigit = 4;
-        byte PinBlockType = (byte) 0x00;
-        byte outblocklen = 8;
-
-        //Show Key Info
-        CTOS.CtKMS2Key key = new CTOS.CtKMS2Key();
-        try {
-            key.selectKey(GlobalPara.onlinePinKeySet, GlobalPara.onlinePinKeyIndex);
-
-            String sKeySet = "KeySet = " + String.format("%04X", key.getKeySet());
-            String sKeyIndex = "KeyIndex = " + String.format("%04X", key.getKeyIndex());
-            String sKeyType = "KeyType = " + String.format("0x%02X", key.getKeyType());
-            String sKeyAttribute = "KeyAttribute = " + String.format("%08X", key.getKeyAttribute());
-
-            Log.d("get key info", sKeySet);
-            Log.d("get key info", sKeyIndex);
-            Log.d("get key info", sKeyType);
-            Log.d("get key info", sKeyAttribute);
-
-            GlobalPara.mainActivity.ui_ShowLog(sKeySet);
-            GlobalPara.mainActivity.ui_ShowLog(sKeyIndex);
-            GlobalPara.mainActivity.ui_ShowLog(sKeyType);
-            GlobalPara.mainActivity.ui_ShowLog(sKeyAttribute);
-
-            final String str;
-            str = sKeySet + ", " + sKeyIndex + "\n" + sKeyType + ", " + sKeyAttribute;
-
-            if (textView2 != null) {
-                this.activity.runOnUiThread(new Runnable() {
-                    @Override
-                    public void run() {
-                        textView2.setText("Key Info\n" + str);
-                    }
-                });
-            }
-        } catch (CTOS.CtKMS2Exception e) {
-            Log.e(TAG, "DUKPT Key startVirtualPin Fail");
-            e.showStatus();
-            Log.e(TAG, String.format("0x%X", e.getError()));
-        }
-
-
-        // ATM Mode with DUKPT: Use DUKPT key at C001/001A
-        // Legacy Mode: Use FixedKey (static key) at C001/00A1
-        CtKMS2VirtualPINPad VirtualPINPad = new CtKMS2VirtualPINPad();
-        CtKMS2Dukpt dukptKey = null;
-        CtKMS2FixedKey fixedKey = null;
-
-        boolean useATMDukpt = isATMMode && GlobalPara.atmDukptEnabled;
-
-        MainActivity mainAct = GlobalPara.mainActivity;
-
-        // ========================================================================
-        // ATM MODE with DUKPT: DISABLED - Use standard VirtualPINPad instead
-        // The MVP approach with dataEncrypt() bypasses SDK's PIN flow and causes
-        // cryptogram tags (9F26, 9F27, 9F36, 9F10) to not be generated
-        // ========================================================================
-        if (false && useATMDukpt && mainAct != null) {  // DISABLED - use standard VirtualPINPad below
-            Log.d(TAG, "========== ATM DUKPT PIN CALLBACK (MVP approach) ==========");
-            Log.d(TAG, "Using software PIN pad + CtKMS2Dukpt.getEncryptData()");
-
-            // STEP 1: Read PAN from EMV kernel
-            String clearPan = GlobalPara.atmClearPan;
-            Log.d(TAG, "  Existing atmClearPan: " + (clearPan != null ? clearPan.length() + " chars" : "null"));
-
-            if (clearPan == null || clearPan.length() < 13) {
-                Log.d(TAG, "STEP 1: Reading PAN from EMV kernel (Tag 57/5A)...");
-
-                // Try Tag 57 (Track 2 Equivalent Data) first
-                TlvData tag57 = new TlvData();
-                tag57.tag = (short) 0x57;
-                tag57.len = 40;
-                tag57.value = new byte[40];
-                int tag57Rtn = mainAct.emv.dataGet(tag57);
-                if (tag57Rtn == 0 && tag57.len > 0) {
-                    String track2Hex = Converter.byteArray2HexString(tag57.value, tag57.len);
-                    Log.d(TAG, "  Tag 57 raw: " + track2Hex);
-                    int sepIdx = track2Hex.toUpperCase().indexOf("D");
-                    if (sepIdx > 0) {
-                        String panFromTrack2 = track2Hex.substring(0, sepIdx);
-                        if (panFromTrack2.length() >= 13 && !panFromTrack2.contains("*")) {
-                            clearPan = panFromTrack2;
-                            GlobalPara.atmClearPan = clearPan;
-                            Log.d(TAG, "  Clear PAN from Tag 57: " + clearPan.substring(0, 6) + "****");
-                        }
-                    }
-                }
-
-                // Fallback to Tag 5A (PAN)
-                if (clearPan == null || clearPan.length() < 13) {
-                    TlvData tag5a = new TlvData();
-                    tag5a.tag = (short) 0x5A;
-                    tag5a.len = 20;
-                    tag5a.value = new byte[20];
-                    int tag5aRtn = mainAct.emv.dataGet(tag5a);
-                    if (tag5aRtn == 0 && tag5a.len > 0) {
-                        String panHex = Converter.byteArray2HexString(tag5a.value, tag5a.len);
-                        panHex = panHex.toUpperCase().replaceAll("F+$", "");
-                        if (panHex.length() >= 13 && !panHex.contains("*")) {
-                            clearPan = panHex;
-                            GlobalPara.atmClearPan = clearPan;
-                            Log.d(TAG, "  Clear PAN from Tag 5A: " + clearPan.substring(0, 6) + "****");
-                        }
-                    }
-                }
-            }
-
-            if (clearPan == null || clearPan.length() < 13) {
-                Log.e(TAG, "STEP 1 FAILED: Could not read PAN from EMV kernel");
-                onlinePinData.isOnlinePinRquired = false;
-                MyUtility.switchPage(GlobalDef.d_PAGE_TRANSACTION, 500);
-                return -1;
-            }
-
-            // STEP 2: Show software PIN dialog and collect PIN
-            Log.d(TAG, "STEP 2: Showing software PIN dialog...");
-            try {
-                String clearPin = mainAct.collectPinForCallback();
-
-                if (clearPin == null || clearPin.length() < 4) {
-                    Log.e(TAG, "STEP 2 FAILED: PIN cancelled or too short");
-                    onlinePinData.isOnlinePinRquired = false;
-                    MyUtility.switchPage(GlobalDef.d_PAGE_TRANSACTION, 500);
-                    return -1;
-                }
-                Log.d(TAG, "  PIN collected, length=" + clearPin.length());
-
-                // STEP 3: Build Format 0 (ISO 9564-1) clear PIN block
-                Log.d(TAG, "STEP 3: Building Format 0 PIN block...");
-
-                // PIN block = 0 | PIN_length | PIN_digits | F_padding
-                StringBuilder pinPart = new StringBuilder();
-                pinPart.append("0");
-                pinPart.append(clearPin.length());
-                pinPart.append(clearPin);
-                while (pinPart.length() < 16) {
-                    pinPart.append("F");
-                }
-
-                // PAN block = 0000 | rightmost 12 PAN digits (excluding check digit)
-                String panRight12 = clearPan.substring(clearPan.length() - 13, clearPan.length() - 1);
-                String panBlock = "0000" + panRight12;
-
-                // XOR PIN part with PAN part
-                byte[] pinBytes = Converter.hexString2ByteArray(pinPart.toString());
-                byte[] panBytes = Converter.hexString2ByteArray(panBlock);
-                byte[] clearPinBlock = new byte[8];
-                for (int i = 0; i < 8; i++) {
-                    clearPinBlock[i] = (byte) (pinBytes[i] ^ panBytes[i]);
-                }
-                String clearPinBlockHex = Converter.byteArray2HexString(clearPinBlock, 8);
-                Log.d(TAG, "  Clear PIN block (Format 0): " + clearPinBlockHex.substring(0, 4) + "****");
-
-                // STEP 4: Encrypt with DUKPT
-                Log.d(TAG, "STEP 4: Encrypting with DUKPT at " +
-                      String.format("0x%04X/0x%04X", GlobalPara.atmDukptKeySet, GlobalPara.atmDukptKeyIndex));
-
-                CtKMS2Dukpt dukpt = new CtKMS2Dukpt();
-                dukpt.selectKey(GlobalPara.atmDukptKeySet, GlobalPara.atmDukptKeyIndex);
-                dukpt.setCipherMethod(CtKMS2Dukpt.DATA_ENCRYPT_METHOD_ECB);  // ECB for PIN blocks
-                dukpt.setInputData(clearPinBlock, 0, clearPinBlock.length);
-                dukpt.isUseCurrentKey(false);  // Get new derived key
-
-                // Perform encryption
-                dukpt.dataEncrypt();
-
-                // Get results
-                byte[] encryptedPinBlock = dukpt.getOutpuData();
-                byte[] ksn = dukpt.getKSN();
-                String encryptedPinHex = Converter.byteArray2HexString(encryptedPinBlock, 8);
-                String ksnHex = Converter.byteArray2HexString(ksn, ksn.length);
-
-                Log.d(TAG, "  Encrypted PIN block: " + encryptedPinHex);
-                Log.d(TAG, "  KSN: " + ksnHex);
-
-                // STEP 5: Return to EMV kernel
-                Log.d(TAG, "STEP 5: Returning encrypted PIN to EMV kernel...");
-
-                onlinePinData.pin = encryptedPinBlock;
-                onlinePinData.pinLen = 8;
-                onlinePinData.version = 1;
-                onlinePinData.isOnlinePinRquired = true;
-
-                // Store for ATM host communication
-                GlobalPara.atmEncryptedPinBlock = encryptedPinHex;
-                GlobalPara.atmDukptKsn = ksnHex;
-                GlobalPara.atmPinCollectedPostTransaction = false;  // PIN collected during EMV flow
-
-                Log.d(TAG, "========== ATM DUKPT PIN SUCCESS ==========");
-                MyUtility.switchPage(GlobalDef.d_PAGE_TRANSACTION, 500);
-                return 0;  // Success - EMV kernel will continue with CVM complete
-
-            } catch (Exception e) {
-                Log.e(TAG, "ATM DUKPT PIN FAILED: " + e.getMessage());
-                e.printStackTrace();
-                onlinePinData.isOnlinePinRquired = false;
-                MyUtility.switchPage(GlobalDef.d_PAGE_TRANSACTION, 500);
-                return -1;
-            }
-        }
-
-        // ATM MODE: Use MKSK hardware key at C000/0010 (FutureX slot 10)
-        // v5.6: MKSK key provides proper encryption attribute, avoiding SDK error 0x1003
-
-        // Check if ATM mode - we use MKSK encryption
-        if (isATMMode && !useATMDukpt) {
-            Log.d(TAG, "========== ATM PIN CALLBACK ENTRY (v5.6 MKSK) ==========");
-            Log.d(TAG, "Checking MKSK PIN prerequisites...");
-
-            boolean hasMainAct = mainAct != null;
-            boolean hasHostService = hasMainAct && mainAct.atmHostService != null;
-            boolean hasKeyManager = hasHostService && mainAct.atmHostService.getKeyManager() != null;
-            boolean hasMkskKey = hasKeyManager && mainAct.atmHostService.getKeyManager().isMkskAtC001Available();
-            boolean hasWorkingKey = hasKeyManager && mainAct.atmHostService.getKeyManager().isWorkingKeyLoaded();
-
-            Log.d(TAG, "  hasMainAct=" + hasMainAct);
-            Log.d(TAG, "  hasHostService=" + hasHostService);
-            Log.d(TAG, "  hasKeyManager=" + hasKeyManager);
-            Log.d(TAG, "  hasMkskKey=" + hasMkskKey);
-            Log.d(TAG, "  hasWorkingKey=" + hasWorkingKey);
-
-            if (hasKeyManager) {
-                String kcv = mainAct.atmHostService.getKeyManager().getWorkingKeyCheckValue();
-                Log.d(TAG, "  workingKeyKCV=" + (kcv != null ? kcv : "null"));
-            }
-
-            // v5.6: Allow if MKSK key exists OR software key loaded
-            if (!hasMkskKey && !hasWorkingKey) {
-                Log.e(TAG, "ATM MODE: Cannot encrypt PIN - no MKSK key and no software key!");
-                Log.e(TAG, "ATM MODE: Inject key via FutureX tab in Key Injection Tool");
-                onlinePinData.isOnlinePinRquired = false;
-                MyUtility.switchPage(GlobalDef.d_PAGE_TRANSACTION, 500);
-                return -1;
-            }
-
-            Log.d(TAG, "Prerequisites met - proceeding with MKSK/software PIN");
-        }
-
-        // v5.6: Check for MKSK OR software key availability
-        if (isATMMode && !useATMDukpt && mainAct != null && mainAct.atmHostService != null &&
-            mainAct.atmHostService.getKeyManager() != null &&
-            (mainAct.atmHostService.getKeyManager().isMkskAtC001Available() ||
-             mainAct.atmHostService.getKeyManager().isWorkingKeyLoaded())) {
-
-            Log.d(TAG, "=== ATM MODE: Using MKSK PIN encryption (v5.6) ===");
-            Log.d(TAG, "STEP 1: Reading PAN from EMV kernel...");
-
-            // CRITICAL: Read PAN from EMV kernel FIRST (before PIN collection)
-            // The PAN must be available before we can create Format 0 PIN block
-            String clearPan = GlobalPara.atmClearPan;
-            Log.d(TAG, "  Existing atmClearPan: " + (clearPan != null ? clearPan.length() + " chars" : "null"));
-            if (clearPan == null || clearPan.length() < 13) {
-                Log.d(TAG, "ATM PIN: Reading PAN from EMV kernel (Tag 57/5A)...");
-
-                // Try Tag 57 (Track 2 Equivalent Data) first
-                TlvData tag57 = new TlvData();
-                tag57.tag = (short) 0x57;
-                tag57.len = 40;
-                tag57.value = new byte[40];
-                int tag57Rtn = mainAct.emv.dataGet(tag57);
-                if (tag57Rtn == 0 && tag57.len > 0) {
-                    String track2Hex = Converter.byteArray2HexString(tag57.value, tag57.len);
-                    Log.d(TAG, "ATM PIN: Tag 57 raw: " + track2Hex);
-                    int sepIdx = track2Hex.toUpperCase().indexOf("D");
-                    if (sepIdx > 0) {
-                        String panFromTrack2 = track2Hex.substring(0, sepIdx);
-                        if (panFromTrack2.length() >= 13 && !panFromTrack2.contains("*")) {
-                            clearPan = panFromTrack2;
-                            GlobalPara.atmClearPan = clearPan;
-                            Log.d(TAG, "ATM PIN: Got PAN from Tag 57: " + clearPan.substring(0, 6) + "****");
-                        }
-                    }
-                }
-
-                // If Tag 57 didn't work, try Tag 5A (PAN)
-                if (clearPan == null || clearPan.length() < 13) {
-                    TlvData tag5a = new TlvData();
-                    tag5a.tag = (short) 0x5A;
-                    tag5a.len = 20;
-                    tag5a.value = new byte[20];
-                    int tag5aRtn = mainAct.emv.dataGet(tag5a);
-                    if (tag5aRtn == 0 && tag5a.len > 0) {
-                        String panHex = Converter.byteArray2HexString(tag5a.value, tag5a.len);
-                        panHex = panHex.toUpperCase().replaceAll("F+$", "");
-                        if (panHex.length() >= 13 && !panHex.contains("*")) {
-                            clearPan = panHex;
-                            GlobalPara.atmClearPan = clearPan;
-                            Log.d(TAG, "ATM PIN: Got PAN from Tag 5A: " + clearPan.substring(0, 6) + "****");
-                        }
-                    }
-                }
-
-                if (clearPan == null || clearPan.length() < 13) {
-                    Log.e(TAG, "ATM PIN: CRITICAL - Could not read PAN from EMV kernel!");
-                }
-            } else {
-                Log.d(TAG, "ATM PIN: Using existing PAN: " + clearPan.substring(0, 6) + "****");
-            }
-
-            Log.d(TAG, "STEP 2: Collecting PIN via software PIN pad...");
-            Log.d(TAG, "  clearPan length: " + (clearPan != null ? clearPan.length() : 0));
-
-            // Collect PIN using software PIN pad
-            String pin = mainAct.collectPinForCallback();
-            Log.d(TAG, "STEP 3: PIN collection result: " + (pin != null ? pin.length() + " digits" : "null/cancelled"));
-
-            if (pin != null && pin.length() >= 4) {
-                if (clearPan != null && clearPan.length() >= 13) {
-                    try {
-                        Log.d(TAG, "STEP 4: Creating Format 0 PIN block...");
-                        // Create Format 0 PIN block
-                        String clearPinBlock = PinBlockFormatter.createFormat0PinBlock(pin, clearPan);
-                        Log.d(TAG, "  PIN block created: " + (clearPinBlock != null ? clearPinBlock.length() + " chars" : "null"));
-
-                        Log.d(TAG, "STEP 5: Encrypting PIN with MKSK at C000/0010...");
-                        // v5.6: Use MKSK hardware key at C000/0010 (FutureX slot 10)
-                        String encryptedPinHex = mainAct.atmHostService.getKeyManager().encryptPinWithMkskAtC001(clearPinBlock);
-                        Log.d(TAG, "  MKSK encrypted result: " + (encryptedPinHex != null ? encryptedPinHex.length() + " chars" : "null"));
-
-                        // Fallback to software if MKSK fails
-                        if (encryptedPinHex == null) {
-                            Log.w(TAG, "STEP 5b: MKSK failed, trying software encryption...");
-                            encryptedPinHex = mainAct.atmHostService.getKeyManager().encryptPinBlock(clearPinBlock);
-                            Log.d(TAG, "  Software encrypted result: " + (encryptedPinHex != null ? encryptedPinHex.length() + " chars" : "null"));
-                        }
-
-                        if (encryptedPinHex != null && encryptedPinHex.length() == 16) {
-                            byte[] encryptedPin = Converter.hexString2ByteArray(encryptedPinHex);
-
-                            onlinePinData.pin = encryptedPin;
-                            onlinePinData.pinLen = 8;
-                            onlinePinData.version = 1;
-                            onlinePinData.isOnlinePinRquired = true;
-
-                            // Store for transaction
-                            GlobalPara.atmEncryptedPinBlock = encryptedPinHex;
-                            GlobalPara.atmPinCollectedPostTransaction = false;
-
-                            Log.d(TAG, "========== ATM PIN SUCCESS ==========");
-                            Log.d(TAG, "  Encrypted PIN block: " + encryptedPinHex);
-                            Log.d(TAG, "  Returning 0 to EMV kernel");
-
-                            // Switch back and return - EMV kernel will continue with valid PIN
-                            MyUtility.switchPage(GlobalDef.d_PAGE_TRANSACTION, 500);
-                            return 0;
-                        } else {
-                            Log.e(TAG, "STEP 5 FAILED: Encryption returned invalid result");
-                        }
-                    } catch (Exception e) {
-                        Log.e(TAG, "STEP 4/5 FAILED: Exception: " + e.getMessage());
-                        e.printStackTrace();
-                    }
-                } else {
-                    Log.e(TAG, "STEP 3 FAILED: No valid PAN (length=" + (clearPan != null ? clearPan.length() : 0) + ")");
-                }
-            } else {
-                Log.e(TAG, "STEP 2 FAILED: PIN null or too short");
-            }
-
-            // ATM MODE: Software PIN path failed - DON'T fall through to KMS2
-            Log.e(TAG, "========== ATM PIN FAILED ==========");
-            Log.e(TAG, "Returning -1 to EMV kernel (no KMS2 fallback)");
-            onlinePinData.isOnlinePinRquired = false;
-            MyUtility.switchPage(GlobalDef.d_PAGE_TRANSACTION, 500);
-            return -1;
-        }
-
-        //Set Pin control and callback
-        try {
-            if (useATMDukpt) {
-                // ATM Mode: Use DUKPT for PIN encryption (Format 0 with DUKPT PIN key variant)
-                Log.d(TAG, "ATM Mode: Using DUKPT for PIN encryption at " +
-                      String.format("0x%04X/0x%04X", GlobalPara.atmDukptKeySet, GlobalPara.atmDukptKeyIndex));
-
-                dukptKey = new CtKMS2Dukpt();
-                dukptKey.selectKey(GlobalPara.atmDukptKeySet, GlobalPara.atmDukptKeyIndex);
-                dukptKey.setCipherMethod(CtKMS2Dukpt.PIN_CIPHER_METHOD_ECB);
-                dukptKey.isUseCurrentKey(false);  // Get new derived key
-
-                // PinBlockType 0x00 = ISO-0 (Format 0) - requires PAN for XOR
-                dukptKey.setPinInfo(PinBlockType, (byte) MaxDigit, (byte) MinDigit, outblocklen);
-                dukptKey.setPinControl(CtKMS2Dukpt.PIN_BLOCKTYPE_ANSI_X9_8_ISO_4, Timeout, First_timeout);
-                dukptKey.setCallback(callback);
-
-            } else {
-                // Legacy Mode: Use FixedKey (static key)
-                Log.d(TAG, "Legacy Mode: Using FixedKey for PIN encryption at " +
-                      String.format("0x%04X/0x%04X", GlobalPara.onlinePinKeySet, GlobalPara.onlinePinKeyIndex));
-
-                fixedKey = new CtKMS2FixedKey();
-                fixedKey.selectKey(GlobalPara.onlinePinKeySet, GlobalPara.onlinePinKeyIndex);
-                fixedKey.setCipherMethod(CtKMS2FixedKey.PIN_CIPHER_METHOD_ECB);
-
-                // PinBlockType 0x00 = ISO-0 (Format 0) - requires PAN for XOR
-                // SDK automatically uses card's internal clear PAN
-                fixedKey.setPinInfo(PinBlockType, (byte) MaxDigit, (byte) MinDigit, outblocklen);
-                fixedKey.setPinControl(Null_PIN, Timeout, First_timeout);
-                fixedKey.setCallback(callback);
-            }
-
-        } catch (Exception e) {
-            Log.e(TAG, "PIN key setup failed: " + e.toString());
-        }
-
-        int[][] KBDAttribute = new int[16][5];
-
-        TextView[] tv = new TextView[16];
-        int[] XY = new int[2];
-        int x;
-        int y;
-        int w;
-        int h;
-
-        for (int i = 0; i < 16; i++) {
-            switch (i) {
-                //set key value for key borad 0 ~ 9, enter, cancel, clear(backspace)
-                case 0:
-                    tv[i] = (TextView) this.activity.findViewById(R.id.KBD0);
-                    KBDAttribute[i][4] = '0';
-                    break;
-                case 1:
-                    tv[i] = (TextView) this.activity.findViewById(R.id.KBD1);
-                    KBDAttribute[i][4] = '1';
-                    break;
-                case 2:
-                    tv[i] = (TextView) this.activity.findViewById(R.id.KBD2);
-                    KBDAttribute[i][4] = '2';
-                    break;
-                case 3:
-                    tv[i] = (TextView) this.activity.findViewById(R.id.KBD3);
-                    KBDAttribute[i][4] = '3';
-                    break;
-                case 4:
-                    tv[i] = (TextView) this.activity.findViewById(R.id.KBD4);
-                    KBDAttribute[i][4] = '4';
-                    break;
-                case 5:
-                    tv[i] = (TextView) this.activity.findViewById(R.id.KBD5);
-                    KBDAttribute[i][4] = '5';
-                    break;
-                case 6:
-                    tv[i] = (TextView) this.activity.findViewById(R.id.KBD6);
-                    KBDAttribute[i][4] = '6';
-                    break;
-                case 7:
-                    tv[i] = (TextView) this.activity.findViewById(R.id.KBD7);
-                    KBDAttribute[i][4] = '7';
-                    break;
-                case 8:
-                    tv[i] = (TextView) this.activity.findViewById(R.id.KBD8);
-                    KBDAttribute[i][4] = '8';
-                    break;
-                case 9:
-                    tv[i] = (TextView) this.activity.findViewById(R.id.KBD9);
-                    KBDAttribute[i][4] = '9';
-                    break;
-                case 10:
-                    tv[i] = (TextView) this.activity.findViewById(R.id.KBD_Enter);
-                    KBDAttribute[i][4] = 'A';
-                    break;
-                case 11:
-                    tv[i] = (TextView) this.activity.findViewById(R.id.KBD_Clear);
-                    KBDAttribute[i][4] = 'R';
-                    break;
-                case 12:
-                    tv[i] = (TextView) this.activity.findViewById(R.id.KBD_Cancel);
-                    KBDAttribute[i][4] = 'C';
-                    break;
-                //set the key value to 'S' for key board not in above(key borad 0 ~ 9, enter, cancel, clear)
-                default:
-                    KBDAttribute[i][4] = 'S';
-                    break;
-            }
-
-            if (i > 12 || tv[i] == null) {
-                // Use default values if view doesn't exist (ATM mode) or for unused keys
-                x = 10;
-                y = 10;
-                w = 1;
-                h = 1;
-            } else {
-                tv[i].getLocationOnScreen(XY);
-                x = XY[0];
-                y = XY[1];
-                w = tv[i].getWidth();
-                h = tv[i].getHeight();
-            }
-
-            KBDAttribute[i][0] = x;
-            KBDAttribute[i][1] = y;
-            KBDAttribute[i][2] = w;
-            KBDAttribute[i][3] = h;
-
-            Log.d("KeyValue = ", String.valueOf(KBDAttribute[i][4]));
-            Log.d("location x = ", String.valueOf(x));
-            Log.d("location y = ", String.valueOf(y));
-            Log.d("location width = ", String.valueOf(KBDAttribute[i][2]));
-            Log.d("location height = ", String.valueOf(KBDAttribute[i][3]));
-
-            switch (i) {
-                //set key value for key borad 0 ~ 9, enter, cancel, clear(backspace)
-                case 0:
-                    VirtualPINPad.VKBD_0.x = KBDAttribute[i][0];
-                    VirtualPINPad.VKBD_0.y = KBDAttribute[i][1];
-                    VirtualPINPad.VKBD_0.width = KBDAttribute[i][2];
-                    VirtualPINPad.VKBD_0.height = KBDAttribute[i][3];
-                    VirtualPINPad.VKBD_0.value = (byte) '0';
-                    break;
-                case 1:
-                    VirtualPINPad.VKBD_1.x = KBDAttribute[i][0];
-                    VirtualPINPad.VKBD_1.y = KBDAttribute[i][1];
-                    VirtualPINPad.VKBD_1.width = KBDAttribute[i][2];
-                    VirtualPINPad.VKBD_1.height = KBDAttribute[i][3];
-                    VirtualPINPad.VKBD_1.value = (byte) '1';
-                    break;
-                case 2:
-                    VirtualPINPad.VKBD_2.x = KBDAttribute[i][0];
-                    VirtualPINPad.VKBD_2.y = KBDAttribute[i][1];
-                    VirtualPINPad.VKBD_2.width = KBDAttribute[i][2];
-                    VirtualPINPad.VKBD_2.height = KBDAttribute[i][3];
-                    VirtualPINPad.VKBD_2.value = (byte) '2';
-                    break;
-                case 3:
-                    VirtualPINPad.VKBD_3.x = KBDAttribute[i][0];
-                    VirtualPINPad.VKBD_3.y = KBDAttribute[i][1];
-                    VirtualPINPad.VKBD_3.width = KBDAttribute[i][2];
-                    VirtualPINPad.VKBD_3.height = KBDAttribute[i][3];
-                    VirtualPINPad.VKBD_3.value = (byte) '3';
-                    break;
-                case 4:
-                    VirtualPINPad.VKBD_4.x = KBDAttribute[i][0];
-                    VirtualPINPad.VKBD_4.y = KBDAttribute[i][1];
-                    VirtualPINPad.VKBD_4.width = KBDAttribute[i][2];
-                    VirtualPINPad.VKBD_4.height = KBDAttribute[i][3];
-                    VirtualPINPad.VKBD_4.value = (byte) '4';
-                    break;
-                case 5:
-                    VirtualPINPad.VKBD_5.x = KBDAttribute[i][0];
-                    VirtualPINPad.VKBD_5.y = KBDAttribute[i][1];
-                    VirtualPINPad.VKBD_5.width = KBDAttribute[i][2];
-                    VirtualPINPad.VKBD_5.height = KBDAttribute[i][3];
-                    VirtualPINPad.VKBD_5.value = (byte) '5';
-                    break;
-                case 6:
-                    VirtualPINPad.VKBD_6.x = KBDAttribute[i][0];
-                    VirtualPINPad.VKBD_6.y = KBDAttribute[i][1];
-                    VirtualPINPad.VKBD_6.width = KBDAttribute[i][2];
-                    VirtualPINPad.VKBD_6.height = KBDAttribute[i][3];
-                    VirtualPINPad.VKBD_6.value = (byte) '6';
-                    break;
-                case 7:
-                    VirtualPINPad.VKBD_7.x = KBDAttribute[i][0];
-                    VirtualPINPad.VKBD_7.y = KBDAttribute[i][1];
-                    VirtualPINPad.VKBD_7.width = KBDAttribute[i][2];
-                    VirtualPINPad.VKBD_7.height = KBDAttribute[i][3];
-                    VirtualPINPad.VKBD_7.value = (byte) '7';
-                    break;
-                case 8:
-                    VirtualPINPad.VKBD_8.x = KBDAttribute[i][0];
-                    VirtualPINPad.VKBD_8.y = KBDAttribute[i][1];
-                    VirtualPINPad.VKBD_8.width = KBDAttribute[i][2];
-                    VirtualPINPad.VKBD_8.height = KBDAttribute[i][3];
-                    VirtualPINPad.VKBD_8.value = (byte) '8';
-                    break;
-                case 9:
-                    VirtualPINPad.VKBD_9.x = KBDAttribute[i][0];
-                    VirtualPINPad.VKBD_9.y = KBDAttribute[i][1];
-                    VirtualPINPad.VKBD_9.width = KBDAttribute[i][2];
-                    VirtualPINPad.VKBD_9.height = KBDAttribute[i][3];
-                    VirtualPINPad.VKBD_9.value = (byte) '9';
-                    break;
-                case 10://enter
-                    VirtualPINPad.VKBD_10.x = KBDAttribute[i][0];
-                    VirtualPINPad.VKBD_10.y = KBDAttribute[i][1];
-                    VirtualPINPad.VKBD_10.width = KBDAttribute[i][2];
-                    VirtualPINPad.VKBD_10.height = KBDAttribute[i][3];
-                    VirtualPINPad.VKBD_10.value = (byte) 'A';
-                    break;
-                case 11://clear
-                    VirtualPINPad.VKBD_11.x = KBDAttribute[i][0];
-                    VirtualPINPad.VKBD_11.y = KBDAttribute[i][1];
-                    VirtualPINPad.VKBD_11.width = KBDAttribute[i][2];
-                    VirtualPINPad.VKBD_11.height = KBDAttribute[i][3];
-                    VirtualPINPad.VKBD_11.value = (byte) 'R';
-                    break;
-                case 12://cancel
-                    VirtualPINPad.VKBD_12.x = KBDAttribute[i][0];
-                    VirtualPINPad.VKBD_12.y = KBDAttribute[i][1];
-                    VirtualPINPad.VKBD_12.width = KBDAttribute[i][2];
-                    VirtualPINPad.VKBD_12.height = KBDAttribute[i][3];
-                    VirtualPINPad.VKBD_12.value = (byte) 'C';
-                    break;
-                case 13:
-                    VirtualPINPad.VKBD_13.x = 0;
-                    VirtualPINPad.VKBD_13.y = 0;
-                    VirtualPINPad.VKBD_13.value = (byte) 0x53;
-                    break;
-                case 14:
-                    VirtualPINPad.VKBD_14.x = 0;
-                    VirtualPINPad.VKBD_14.y = 0;
-                    VirtualPINPad.VKBD_14.value = (byte) 0x53;
-                    break;
-                case 15:
-                    VirtualPINPad.VKBD_15.x = 0;
-                    VirtualPINPad.VKBD_15.y = 0;
-                    VirtualPINPad.VKBD_15.value = (byte) 0x53;
-                    break;
-
-                //set the key value to 'S' for key board not in above(key borad 0 ~ 9, enter, cancel, clear)
-                default:
-                    break;
-            }
-        }
-
-
-        try {
-            if (useATMDukpt && dukptKey != null) {
-                // ATM Mode: Use DUKPT
-                dukptKey.startVirtualPin(VirtualPINPad);
-                byte[] pinBlock = dukptKey.getOutpuData();
-                byte[] ksn = dukptKey.getKSN();
-
-                Log.d(TAG, "ATM DUKPT PIN block (hex): " + Converter.byteArray2HexString(pinBlock, outblocklen));
-                Log.d(TAG, "ATM DUKPT KSN (hex): " + Converter.byteArray2HexString(ksn, ksn.length));
-
-                onlinePinData.pin = pinBlock;
-                onlinePinData.pinLen = outblocklen;
-                onlinePinData.version = 1;
-                onlinePinData.isOnlinePinRquired = true;
-
-                // Store for ATM host communication
-                GlobalPara.atmEncryptedPinBlock = Converter.byteArray2HexString(pinBlock, outblocklen);
-                GlobalPara.atmDukptKsn = Converter.byteArray2HexString(ksn, ksn.length);
-
-                GlobalPara.mainActivity.ui_ShowLog("DUKPT PIN block: " + GlobalPara.atmEncryptedPinBlock);
-                GlobalPara.mainActivity.ui_ShowLog("DUKPT KSN: " + GlobalPara.atmDukptKsn);
-
-            } else if (fixedKey != null) {
-                // Legacy Mode: Use FixedKey
-                fixedKey.startVirtualPin(VirtualPINPad);
-                Log.d(TAG, "FixedKey ISO-0 PIN block (hex): " + Converter.byteArray2HexString(fixedKey.getOutpuData(), outblocklen));
-
-                onlinePinData.pin = fixedKey.getOutpuData();
-                onlinePinData.pinLen = outblocklen;
-                onlinePinData.version = 1;
-                onlinePinData.isOnlinePinRquired = true;
-
-                // No KSN for FixedKey (static key, not DUKPT)
-                GlobalPara.mainActivity.ui_ShowLog("ISO-0 Pin block (FixedKey): " + Converter.byteArray2HexString(fixedKey.getOutpuData(), outblocklen));
-
-                // Store encrypted PIN block for ATM host communication
-                GlobalPara.atmEncryptedPinBlock = Converter.byteArray2HexString(fixedKey.getOutpuData(), outblocklen);
-                Log.d(TAG, "ATM: Stored ISO-0 PIN block (FixedKey): " + GlobalPara.atmEncryptedPinBlock);
-            }
-        } catch (CTOS.CtKMS2Exception e) {
-            Log.e(TAG, "startVirtualPin Fail: " + String.format("0x%X", e.getError()));
-            e.showStatus();
-            GlobalPara.mainActivity.ui_ShowLog("startVirtualPin Rtn : " + String.format("0x%X", e.getError()));
-
-            // ATM MODE: KMS2 failed (likely 0x1003 - no key at slot)
-            // With software PIN fix (reading PAN directly), we should NOT reach here in ATM mode
-            // If we do reach here, return error to cancel transaction properly
-            if (GlobalPara.atmMode) {
-                Log.e(TAG, "ATM MODE: KMS2 fallback reached - software PIN path should have handled this!");
-                Log.e(TAG, "ATM MODE: Returning PIN bypass to avoid placeholder PIN issue");
-                onlinePinData.isOnlinePinRquired = false;
-                MyUtility.switchPage(GlobalDef.d_PAGE_TRANSACTION, 500);
-                return -1;  // Return error - don't fall through to return 0
-            }
-        } catch (Exception e) {
-            Log.e(TAG, "startVirtualPin Fail: " + e.toString());
-
-            // ATM MODE: Same handling - don't provide placeholder PIN
-            if (GlobalPara.atmMode) {
-                Log.e(TAG, "ATM MODE: PIN exception in KMS2 fallback");
-                onlinePinData.isOnlinePinRquired = false;
-                MyUtility.switchPage(GlobalDef.d_PAGE_TRANSACTION, 500);
-                return -1;  // Return error - don't fall through to return 0
-            }
-        }
-
-        GlobalPara.mainActivity.runOnUiThread(new Runnable() {
-            @Override
-            public void run() {
-                textView.setText(" ");
-                textView2.setText(" ");
-            }
-        });
-
-
-        //Switch back
-        MyUtility.switchPage(GlobalDef.d_PAGE_TRANSACTION, 500);
-
-
-        return 0;
-    }
-
-    public int eventAppListEx(EMVAppListExData appListExData) {
-        final String TAG;
-
-        TAG = GlobalPara.tag;
-        GlobalPara.appListOK = false;
-        GlobalPara.appSelectedIndex = 0;
-
-        Log.d(TAG, "eventAppListEx trigger-->");
-
-        ClsListViewAdapter myAdapter = new ClsListViewAdapter(this.mainActivity);
-        for (int i = 0; i < appListExData.appNum; i++) {
-            String appLabel = new String(appListExData.appInfo[i].appLabel);
-            myAdapter.addItem(appLabel, String.format("App %d\n", i + 1));
-            Log.d(TAG, "appLabel: " + appLabel);
-            Log.d(TAG, "aid: " + Converter.byteArray2HexString(appListExData.appInfo[i].aid, appListExData.appInfo[i].aidLen));
-        }
-
-        //Range of appListExData.appSelectedIndex value is 0 to (appListExData.appNum -1)
-        appListExData.appSelectedIndex = 0;
-        //appListExData.appSelectedIndex = GlobalPara.appSelectedIndex;
-
-        return 0;
-    }
-
-    /**
-     * IEventCAPKGet callback - SDK calls this to request CAPK during chip transaction
-     * Returns true if CAPK found and populated, false otherwise
-     */
-    @Override
-    public boolean eventCapkGet(byte[] rid, CAPublicKey capk) {
-        String ridHex = Converter.byteArray2HexString(rid, 5);
-        Log.d(TAG, ">>> eventCapkGet called for RID: " + ridHex + ", index: " + String.format("0x%02X", capk.index));
-
-        // Check if this is US Common Debit (A000000098) or VISA (A000000003)
-        if (!ridHex.equalsIgnoreCase("A000000098") && !ridHex.equalsIgnoreCase("A000000003")) {
-            Log.w(TAG, ">>> eventCapkGet: Unknown RID " + ridHex);
-            return false;
-        }
-
-        // Populate CAPK based on index requested
-        switch (capk.index) {
-            case 0x05:
-                // VISA test key (1152-bit)
-                capk.modulusLen = 144;
-                capk.modulus = Converter.hexString2ByteArray("BE9E1FA5E9A803852999C4AB432DB28600DCD9DAB76DFAAA47355A0FE37B1508AC6BF38860D3C6C2E5B12A3CAAF2A7005A7241EBAA7771112C74CF9A0634652FBCA0E5980C54A64761EA101A114E0F0B5572ADD57D010B7C9C887E104CA4EE1272DA66D997B9A90B5A6D624AB6C57E73C8F919000EB5F684898EF8C3DBEFB330C62660BED88EA78E909AFF05F6DA627B");
-                capk.exponentLen = 1;
-                capk.exponent = Converter.hexString2ByteArray("03");
-                capk.hash = Converter.hexString2ByteArray("EE1511CEC71020A9B90443B37B1D5F6E703030F6");
-                Log.d(TAG, ">>> eventCapkGet: Returning CAPK 05 (test key, 1152-bit)");
-                return true;
-
-            case 0x07:
-                // VISA production key (1152-bit)
-                capk.modulusLen = 144;
-                capk.modulus = Converter.hexString2ByteArray("A89F25A56FA6DA258C8CA8B40427D927B4A1EB4D7EA326BBB12F97DED70AE5E4480FC9C5E8A972177110A1CC318D06D2F8F5C4844AC5FA79A4DC470BB11ED635699C17081B90F1B984F12E92C1C529276D8AF8EC7F28492097D8CD5BECEA16FE4088F6CFAB4A1B42328A1B996F9278B0B7E3311CA5EF856C2F888474B83612A82E4E00D0CD4069A6783140433D50725F");
-                capk.exponentLen = 1;
-                capk.exponent = Converter.hexString2ByteArray("03");
-                capk.hash = Converter.hexString2ByteArray("B4BC56CC4E88324932CBC643D6898F6FE593B172");
-                Log.d(TAG, ">>> eventCapkGet: Returning CAPK 07 (production, 1152-bit)");
-                return true;
-
-            case 0x08:
-                // VISA production key (1408-bit)
-                capk.modulusLen = 176;
-                capk.modulus = Converter.hexString2ByteArray("D9FD6ED75D51D0E30664BD157023EAA1FFA871E4DA65672B863D255E81E137A51DE4F72BCC9E44ACE12127F87E263D3AF9DD9CF35CA4A7B01E907000BA85D24954C2FCA3074825DDD4C0C8F186CB020F683E02F2DEAD3969133F06F7845166ACEB57CA0FC2603445469811D293BFEFBAFAB57631B3DD91E796BF850A25012F1AE38F05AA5C4D6D03B1DC2E568612785938BBC9B3CD3A910C1DA55A5A9218ACE0F7A21287752682F15832A678D6E1ED0B");
-                capk.exponentLen = 1;
-                capk.exponent = Converter.hexString2ByteArray("03");
-                capk.hash = Converter.hexString2ByteArray("20D213126955DE205ADC2FD2822BD22DE21CF9A8");
-                Log.d(TAG, ">>> eventCapkGet: Returning CAPK 08 (production, 1408-bit)");
-                return true;
-
-            case 0x09:
-                // VISA production key (1984-bit) - most commonly used
-                capk.modulusLen = 248;
-                capk.modulus = Converter.hexString2ByteArray("9D912248DE0A4E39C1A7DDE3F6D2588992C1A4095AFBD1824D1BA74847F2BC4926D2EFD904B4B54954CD189A54C5D1179654F8F9B0D2AB5F0357EB642FEDA95D3912C6576945FAB897E7062CAA44A4AA06B8FE6E3DBA18AF6AE3738E30429EE9BE03427C9D64F695FA8CAB4BFE376853EA34AD1D76BFCAD15908C077FFE6DC5521ECEF5D278A96E26F57359FFAEDA19434B937F1AD999DC5C41EB11935B44C18100E857F431A4A5A6BB65114F174C2D7B59FDF237D6BB1DD0916E644D709DED56481477C75D95CDD68254615F7740EC07F330AC5D67BCD75BF23D28A140826C026DBDE971A37CD3EF9B8DF644AC385010501EFC6509D7A41");
-                capk.exponentLen = 1;
-                capk.exponent = Converter.hexString2ByteArray("03");
-                capk.hash = Converter.hexString2ByteArray("1FF80A40173F52D7D27E0F26A146A1C8CCB29046");
-                Log.d(TAG, ">>> eventCapkGet: Returning CAPK 09 (production, 1984-bit)");
-                return true;
-
-            case (byte)0x92:
-                // VISA production key (1408-bit)
-                capk.modulusLen = 176;
-                capk.modulus = Converter.hexString2ByteArray("996AF56F569187D09293C14810450ED8EE3357397B18A2458EFAA92DA3B6DF6514EC060195318FD43BE9B8F0CC669E3F844057CBDDF8BDA191BB64473BC8DC9A730DB8F6B4EDE3924186FFD9B8C7735789C23A36BA0B8AF65372EB57EA5D89E7D14E9C7B6B557460F10885DA16AC923F15AF3758F0F03EBD3C5C2C949CBA306DB44E6A2C076C5F67E281D7EF56785DC4D75945E491F01918800A9E2DC66F60080566CE0DAF8D17EAD46AD8E30A247C9F");
-                capk.exponentLen = 1;
-                capk.exponent = Converter.hexString2ByteArray("03");
-                capk.hash = Converter.hexString2ByteArray("429C954A3859CEF91295F663C963E582ED6EB253");
-                Log.d(TAG, ">>> eventCapkGet: Returning CAPK 92 (production, 1408-bit)");
-                return true;
-
-            default:
-                Log.w(TAG, ">>> eventCapkGet: Unknown CAPK index " + String.format("0x%02X", capk.index) + " for RID " + ridHex);
-                return false;
-        }
-    }
-
-}
-
-class MyEMVCLSPEvent implements CtEMVCL.IEventEMVCLLEDPicShow, CtEMVCL.IEventEMVCLAudioIndication, CtEMVCL.IEventEMVCLShowMessage {
-    public int eventEMVCLLEDPicShow(byte bIndex, byte bOnOff) {
-        if (GlobalPara.clLED != null) {
-            GlobalPara.clLED.eventEMVCLLEDPicShow(bIndex, bOnOff);
-        }
-        return 0;
-    }
-
-    public int eventEMVCLAudioIndication(short tone) {
-        if (GlobalPara.audio != null) {
-            if (tone == 0x01) {
-                GlobalPara.audio.playOKSound();
-            } else {
-                GlobalPara.audio.playAlertSound();
-            }
-        }
-        Log.d("text", "tone value:=" + String.valueOf(tone));
-        return 0;
-    }
-
-    public int eventEMVCLShowMessage(byte[] KernelId, byte KernelIdLen, final EMVCLUIReqData UIReqData) {
-        Thread th;
-
-        th = new Thread(new Runnable() {
-            @Override
-            public void run() {
-                switch (UIReqData.messageIdentifier) {
-                    case (byte) 0x03:
-                        GlobalPara.mainActivity.ui_ShowMsg("Transaction Approved");
-                        break;
-
-                    case (byte) 0x07:
-                        GlobalPara.mainActivity.ui_ShowMsg("Transaction Declined");
-                        break;
-
-                    case (byte) 0x09:
-                        GlobalPara.mainActivity.ui_ShowMsg("Please Enter PIN:");
-                        break;
-
-                    case (byte) 0x0F:
-                        GlobalPara.mainActivity.ui_ShowMsg("Processing Error");
-                        break;
-
-                    case (byte) 0x10:
-                        GlobalPara.mainActivity.ui_ShowMsg("Please Remove Card");
-                        break;
-
-                    case (byte) 0x14:
-                        GlobalPara.mainActivity.ui_ShowMsg("Welcome");
-                        break;
-
-                    case (byte) 0x15:
-                        GlobalPara.mainActivity.ui_ShowMsg("Please Present card");
-                        break;
-
-                    case (byte) 0x16:
-                        GlobalPara.mainActivity.ui_ShowMsg("Processing ...");
-                        break;
-
-                    case (byte) 0x17:
-                        GlobalPara.mainActivity.ui_ShowMsg("Card read OK");
-                        break;
-
-                    case (byte) 0x18:
-                        GlobalPara.mainActivity.ui_ShowMsg("Please Insert or swipe card");
-                        break;
-
-                    case (byte) 0x19:
-                        GlobalPara.mainActivity.ui_ShowMsg("Please Present One card only");
-                        break;
-
-                    case (byte) 0x1A:
-                        GlobalPara.mainActivity.ui_ShowMsg("Transaction Approved, please sign");
-                        break;
-
-                    case (byte) 0x1B:
-                        GlobalPara.mainActivity.ui_ShowMsg("Authorising, please wait");
-                        break;
-
-                    case (byte) 0x1C:
-                        GlobalPara.mainActivity.ui_ShowMsg("Error, Please try other card");
-                        break;
-
-                    case (byte) 0x1D:
-                        GlobalPara.mainActivity.ui_ShowMsg("Please Insert Card");
-                        break;
-
-                    case (byte) 0x1E:
-                        //message clear command
-                        GlobalPara.mainActivity.ui_ShowMsg("                                        ");
-                        break;
-
-                    case (byte) 0x20:
-                        GlobalPara.mainActivity.ui_ShowMsg("Please refer to device for Instruction");
-                        break;
-
-                    case (byte) 0x21:
-                        GlobalPara.mainActivity.ui_ShowMsg("Please Try again");
-                        break;
-
-                    case (byte) 0xA0:
-                        GlobalPara.mainActivity.ui_ShowMsg("No card present");
-                        break;
-
-                    case (byte) 0xA1:
-                        GlobalPara.mainActivity.ui_ShowMsg("Card read Failure");
-                        break;
-
-                    case (byte) 0xA2:
-                        GlobalPara.mainActivity.ui_ShowMsg("Application Not Supported");
-                        break;
-
-                    default:
-                        GlobalPara.mainActivity.ui_ShowMsg("None define Message");
-                        break;
-                }
-            }
-        });
-
-        th.start();
-
-        if (UIReqData.messageIdentifier == (byte) 0x15 || UIReqData.messageIdentifier == (byte) 0x16)    //"present card", "processing" do not delay
-        {
-
-        } else if (UIReqData.messageIdentifier == (byte) 0x17)        //"Read Card OK"
-        {
-            MyUtility.sleep(800);
-        } else {
-            MyUtility.sleep(700);
-        }
-
-        Log.d("text", "eventEMVCLShowMessage AP");
-        return 0;
-    }
-}
-
-class MyManualEntryEvent extends EMVManualEntryEvent {
-    private MainActivity mainActivity;
-    private static ViewPager mViewPager;
-
-
-    public int setUIComponent(ViewPager mViewPager) {
-        this.mViewPager = mViewPager;
-
-        return 0;
-    }
-
-    public MyManualEntryEvent(MainActivity InContext) {
-        this.mainActivity = InContext;
-    }
-
-    private String maskedPAN = "PAN : ";
-    private String maskedEXP = "EXP : ";
-    private String maskedCSC = "CSC : ";
-    //private String maskedADR = "ADR : ";
-    private String maskedZIP = "ZIP : ";
-
-    public void clearMaskedPANStr() {
-        maskedPAN = "PAN : ";
-    }
-
-    public void clearMaskedEXPStr() {
-        maskedEXP = "EXP : ";
-    }
-
-    public void clearMaskedCSCStr() {
-        maskedCSC = "CSC : ";
-    }
-
-    //public void clearMaskedADRStr(){maskedADR = "ADR : ";}
-    public void clearMaskedZIPStr() {
-        maskedZIP = "ZIP : ";
-    }
-
-
-    public void onShowPAN(byte digitChar) {  //Jorge
-        Log.d("EMV_AP Event", "onShowPAN trigger-->");
-
-        if (Thread.interrupted() || digitChar == 'C') {
-            // We've been interrupted!!
-            int page = GlobalDef.d_PAGE_TRANSACTION;
-            MyUtility.switchPage(page, 0); //Do some clean up of screen.
-            return;
-        }
-        final int page;
-        page = GlobalDef.d_PAGE_MANUAL_ENTRY;
-
-
-        if (mViewPager.getCurrentItem() != page) {
-            MyUtility.switchPage(page, 0);
-        }
-
-        byte[] temp = new byte[2];
-        temp[0] = digitChar;
-
-        if (digitChar == (byte) 0x08)    //if digitChar equals to 0x08, means clear all input(in this case is PAN)
-        {
-            clearMaskedPANStr();
-        } else {
-            maskedPAN = maskedPAN + new String(temp, 0, 1);
-        }
-
-
-        final String str = maskedPAN;
-        this.mainActivity.runOnUiThread(new Runnable() {
-                                            @Override
-                                            public void run() {
-                                                TextView textView;
-                                                textView = (TextView) mainActivity.findViewById(R.id.textViewME_PAN);
-
-                                                textView.setText(str);
-
-
-                                            }
-                                        }
-        );
-
-
-        return;
-
-    }
-
-    public void onShowEXP(byte digitChar) {
-        Log.d("EMV_AP Event", "onShowEXP trigger-->");
-
-        final int page;
-        page = GlobalDef.d_PAGE_MANUAL_ENTRY;
-
-
-        if (mViewPager.getCurrentItem() != page) {
-            MyUtility.switchPage(page, 0);
-        }
-
-        byte[] temp = new byte[2];
-        temp[0] = digitChar;
-
-        if (digitChar == (byte) 0x08)    //if digitChar equals to 0x08, means clear all input(in this case is EXP)
-        {
-            clearMaskedEXPStr();
-        } else {
-            maskedEXP = maskedEXP + new String(temp, 0, 1);
-        }
-
-
-        final String str = maskedEXP;
-        this.mainActivity.runOnUiThread(new Runnable() {
-                                            @Override
-                                            public void run() {
-                                                TextView textView;
-                                                textView = (TextView) mainActivity.findViewById(R.id.textViewME_EXP);
-
-                                                textView.setText(str);
-
-
-                                            }
-                                        }
-        );
-
-        return;
-    }
-
-    public void onShowCSC(byte digitChar) {
-        Log.d("EMV_AP Event", "onShowCSC trigger-->");
-
-        final int page = GlobalDef.d_PAGE_MANUAL_ENTRY;
-
-
-        if (mViewPager.getCurrentItem() != page) {
-            MyUtility.switchPage(page, 0);
-        }
-
-        byte[] temp = new byte[2];
-        temp[0] = digitChar;
-
-        if (digitChar == (byte) 0x08)//if digitChar equals to 0x08, means clear all input(in this case is CSC)
-        {
-            clearMaskedCSCStr();
-        } else {
-            maskedCSC = maskedCSC + new String(temp, 0, 1);
-        }
-
-
-        final String str = maskedCSC;
-        this.mainActivity.runOnUiThread(new Runnable() {
-                                            @Override
-                                            public void run() {
-                                                TextView textView;
-                                                textView = (TextView) mainActivity.findViewById(R.id.textViewME_CSC);
-
-                                                textView.setText(str);
-
-
-                                            }
-                                        }
-        );
-
-        return;
-
-    }
-
-    public void onShowADR(byte digitChar) {
-        Log.d("EMV_AP Event", "onShowADR trigger-->");
-/*
-		final int page = GlobalDef.d_PAGE_MANUAL_ENTRY;
-
-		if(mViewPager.getCurrentItem() != page)
-		{
-			MyUtility.switchPage(page, 1500);
-		}
-
-		byte[] temp = new byte[2];
-		temp[0] = digitChar;
-
-		if(digitChar == (byte)0x08)//if digitChar equals to 0x08, means clear all input(in this case is CSC)
-		{
-			clearMaskedCSCStr();
-		}
-		else
-		{
-			maskedCSC = maskedCSC + new String(temp, 0, 1);
-		}
-
-
-		final String str = maskedCSC;
-		this.mainActivity.runOnUiThread(new Runnable()
-										{
-											@Override
-											public void run()
-											{
-												TextView textView;
-												textView = (TextView) mainActivity.findViewById(R.id.textViewME_CSC);
-
-												textView.setText(str);
-
-
-											}
-										}
-		);
-*/
-        return;
-
-    }
-
-    public void onShowZIP(byte digitChar) {
-        Log.d("EMV_AP Event", "onShowZIP trigger-->");
-
-        final int page = GlobalDef.d_PAGE_MANUAL_ENTRY;
-
-        if (mViewPager.getCurrentItem() != page) {
-            MyUtility.switchPage(page, 0);
-        }
-
-        byte[] temp = new byte[2];
-        temp[0] = digitChar;
-
-        if (digitChar == (byte) 0x08)//if digitChar equals to 0x08, means clear all input(in this case is CSC)
-        {
-            clearMaskedZIPStr();
-        } else {
-            maskedZIP = maskedZIP + new String(temp, 0, 1);
-        }
-
-
-        final String str = maskedZIP;
-        this.mainActivity.runOnUiThread(new Runnable() {
-                                            @Override
-                                            public void run() {
-                                                TextView textView;
-                                                textView = (TextView) mainActivity.findViewById(R.id.textViewME_ZIP);
-
-                                                textView.setText(str);
-
-
-                                            }
-                                        }
-        );
-
-        return;
-
-    }
-}
+import castech.emvtxn.util.Converter;
+import castech.emvtxn.util.TLVUtility;
+import castech.emvtxn.util.TLVUtility_CT;
+import castech.emvtxn.callback.MyEMVEvent;
+import castech.emvtxn.callback.MyEMVSPEvent;
+import castech.emvtxn.callback.MyEMVCLSPEvent;
+import castech.emvtxn.callback.MyManualEntryEvent;
 
 public class MainActivity extends AppCompatActivity {
     public static String TAG = "EMV_AP";
     public static String APP_TITLE = "MyView";
-    public static String APP_VERSION = "6.1-ATM";  // DUKPT support with Format 1 fallback
+    // Single source of truth: gradle versionName (see app/build.gradle). Shown in
+    // the title bar, receipts, and admin — always matches the APK filename version.
+    public static String APP_VERSION = BuildConfig.VERSION_NAME;
     public static String DATE_STR = "20200812";
     public static String BUILD_NUM = "0001";
 
@@ -2528,8 +152,7 @@ public class MainActivity extends AppCompatActivity {
     ViewPager mViewPager;
 
     // Castle SDK - lazy initialized to avoid ANR on emulator
-    // Package-private for access from MyEMVSPEvent callback
-    CtEMV emv = null;
+    public CtEMV emv = null;
     private CtEMVCL emvcl = null;
     private MyEMVEvent emvEvent = null;
     private MyEMVSPEvent myEMVSpEvent = null;
@@ -2553,8 +176,28 @@ public class MainActivity extends AppCompatActivity {
 
     // ATM Host Service
     // Package-private for access from MyEMVSPEvent callback
-    AtmHostService atmHostService = null;
+    public AtmHostService atmHostService = null;
     private final Object atmHostLock = new Object();
+
+    /**
+     * Config the running ATM host service was built with. Guarded by atmHostLock.
+     * Used to make initializeAtmHostService() idempotent: identical config keeps
+     * the running service (and its key state) instead of tearing it down.
+     */
+    private String atmHostServiceConfigSignature = null;
+
+    // Key-renewal retry chain (boot/network race): see onRenewalFailed.
+    private static final long KEY_RENEWAL_RETRY_INITIAL_MS = 15_000L;
+    private static final long KEY_RENEWAL_RETRY_MAX_MS = 300_000L;
+    private volatile long keyRenewalRetryDelayMs = KEY_RENEWAL_RETRY_INITIAL_MS;
+    private volatile boolean keyRenewalRetryScheduled = false;
+
+    /** Signature of the host settings that matter for service construction. */
+    private String currentHostConfigSignature() {
+        return GlobalPara.atmProcessorType + "|" + GlobalPara.atmHostAddress + "|"
+                + GlobalPara.atmHostPort + "|" + GlobalPara.atmTerminalId + "|"
+                + GlobalPara.atmUseTls + "|" + GlobalPara.atmProtocolType;
+    }
     private volatile java.util.concurrent.CountDownLatch atmTransactionLatch = null;
 
     // ATM Transaction Event Listener - stored so we can re-set before each transaction
@@ -2563,6 +206,11 @@ public class MainActivity extends AppCompatActivity {
 
     // ATM Settings Manager
     private AtmSettingsManager atmSettingsManager = null;
+
+    // POS-mode integration (proxy connection for semi-integrated POS).
+    // Started lazily in initializeAtmHostService() if PosConfig.isEnabled().
+    // See castech.emvtxn.pos.* for the wire protocol and component design.
+    private castech.emvtxn.pos.PosOrchestrator posOrchestrator = null;
 
     // Transaction Log Manager - DISABLED FOR TESTING
     // private TransactionLogManager transactionLogManager = null;
@@ -2575,6 +223,9 @@ public class MainActivity extends AppCompatActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
+        // Keep screen on while plugged in (ATM should never sleep)
+        getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+
         // Detect emulator FIRST before any SDK initialization
         isRunningOnEmulator = checkIsEmulator();
         Log.d(TAG, "Running on emulator: " + isRunningOnEmulator);
@@ -2584,6 +235,7 @@ public class MainActivity extends AppCompatActivity {
 
         Toolbar toolbar = (Toolbar) findViewById(R.id.toolbar);
         setSupportActionBar(toolbar);
+        initStatusBar();
 
         mSectionsPagerAdapter = new SectionsPagerAdapter(getSupportFragmentManager(), this);
 
@@ -2637,6 +289,9 @@ public class MainActivity extends AppCompatActivity {
             if (!isRunningOnEmulator) {
                 Printer = new CTOS_Printer();
                 Printer.Init();
+                // NOTE: no background paper poll here — see refreshPaperStateSafely().
+                // The banner is driven from idle screens + the receipt print thread,
+                // never a timer (a concurrent poll crashed the CTOS service).
             }
         } catch (Exception e) {
             Log.e(TAG, "Error initializing printer: " + e.getMessage());
@@ -2644,10 +299,35 @@ public class MainActivity extends AppCompatActivity {
 
         GlobalPara.tag = TAG;
 
-        // Run EMV Cryptogram Diagnostic Test on startup (logs results)
+        // Key-slot KCV diagnostic at EVERY startup, independent of host config.
+        // (Previously it only ran inside AtmHostService init, so a freshly-reset
+        // terminal with no host configured never printed it.) Background thread +
+        // delay so the KMS2 service is up; read-only, never touches key material.
         if (!isRunningOnEmulator) {
-            runEmvDiagnosticTest();
+            new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        Thread.sleep(4000);  // let KMS2/secure service come up
+                        castech.emvtxn.atm.host.CastleKeyManager km =
+                                new castech.emvtxn.atm.host.CastleKeyManager(MainActivity.this);
+                        km.logKeySlotKcvs();
+                        // Central config from CasHUB is applied at startup by
+                        // AtmSettingsManager.loadSettings(). Here we only register the
+                        // live-update receiver: if CasHUB pushes a new parameter while
+                        // the app is running, re-apply it without waiting for a reboot.
+                        CasHubParams.registerParameterReceiver(MainActivity.this);
+                    } catch (Throwable t) {
+                        Log.w(TAG, "Startup KCV diagnostic failed: " + t.getMessage());
+                    }
+                }
+            }).start();
         }
+
+        // EMV Cryptogram Diagnostic Test DISABLED — causes ANR/crash on some terminals
+        // if (!isRunningOnEmulator) {
+        //     runEmvDiagnosticTest();
+        // }
 
         //Cless LED
         try {
@@ -2696,6 +376,324 @@ public class MainActivity extends AppCompatActivity {
         }
 
         Log.d(TAG, "MainActivity onCreate()-->");
+    }
+
+    @Override
+    protected void onDestroy() {
+        if (posOrchestrator != null) {
+            Log.d(TAG, "onDestroy: stopping POS orchestrator");
+            try { posOrchestrator.stop(); } catch (Exception e) {
+                Log.w(TAG, "Error stopping POS orchestrator: " + e.getMessage());
+            }
+            posOrchestrator = null;
+        }
+        teardownStatusBar();
+        super.onDestroy();
+    }
+
+    // ── Receipt paper awareness ───────────────────────────────────────────────
+    // Transactions are NEVER blocked by paper state (Hyosung/BlueVerse behaviour:
+    // RECEIPTONSCREEN / SELECTRECEIPT). A persistent banner is shown while out of
+    // paper, and receipts fall back to on-screen.
+    //
+    // IMPORTANT: the Castle SDK is single-threaded — every SDK call must happen on
+    // the one transaction thread, never concurrently. An earlier version polled
+    // Print.status() on a 15s background timer; a poll landing DURING a transaction
+    // crashed the whole CTOS service (DeadObjectException across all services,
+    // 2026-08-09). So there is NO timer. Paper is read only at points guaranteed
+    // not to overlap a transaction: idle/main-menu and the receipt print thread
+    // (which is already sequential with the transaction). Never call this while a
+    // transaction is in progress.
+
+    /**
+     * Reads paper state from the printer and updates the banner. MUST be called
+     * only when no transaction is running (idle screens / print thread). Returns
+     * false (paper OK) on any error, and refuses to touch the SDK if a transaction
+     * is in progress — so it can never race the EMV thread.
+     */
+    public boolean refreshPaperStateSafely() {
+        if (GlobalPara.atmTransactionInProgress) {
+            // Never touch the SDK concurrently with a live transaction.
+            return GlobalPara.atmPrinterOutOfPaper;
+        }
+        boolean outOfPaper = GlobalPara.atmPrinterOutOfPaper;
+        try {
+            CTOS_Printer printer = getPrinter();
+            if (printer != null) {
+                int status = printer.getStatus();
+                if (status >= 0) {
+                    outOfPaper = (status == CtPrint.STATUS_NOPAPPER_ERR);
+                }
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "Paper state read failed (assuming OK): " + t.getMessage());
+            outOfPaper = false;
+        }
+        if (outOfPaper != GlobalPara.atmPrinterOutOfPaper) {
+            Log.w(TAG, "Printer paper state changed: " + (outOfPaper ? "OUT OF PAPER" : "paper OK"));
+        }
+        GlobalPara.atmPrinterOutOfPaper = outOfPaper;
+        final boolean show = outOfPaper;
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                updatePaperBanner(show);
+            }
+        });
+        return outOfPaper;
+    }
+
+    /** Paper half of the service banner (see {@link #updateServiceBanner()}). */
+    private boolean paperBannerShown = false;
+    /** Reversal half of the service banner; null = nothing to show. */
+    private String reversalBannerText = null;
+
+    /**
+     * Shows/hides the out-of-paper notice on the persistent bottom service banner. UI thread only.
+     */
+    public void updatePaperBanner(boolean outOfPaper) {
+        paperBannerShown = outOfPaper;
+        updateServiceBanner();
+    }
+
+    /**
+     * Reversal state on the service banner (6.2.7 reversal policy). A FAILED record
+     * shows a service-required notice while the terminal keeps transacting; the
+     * safety stop (2+ FAILED) shows the out-of-service notice. UI thread only.
+     */
+    public void updateReversalBanner(int activeCount, int failedCount, boolean outOfService) {
+        if (outOfService) {
+            reversalBannerText = getString(R.string.banner_out_of_service);
+        } else if (failedCount > 0) {
+            reversalBannerText = getString(R.string.banner_reversal_pending);
+        } else {
+            reversalBannerText = null;
+        }
+        updateServiceBanner();
+    }
+
+    /** Composes paper + reversal notices onto the one banner view. UI thread only. */
+    private void updateServiceBanner() {
+        try {
+            android.widget.TextView banner = findViewById(R.id.txvServiceBanner);
+            if (banner == null) return;
+            StringBuilder sb = new StringBuilder();
+            if (paperBannerShown) sb.append(getString(R.string.banner_out_of_paper));
+            if (reversalBannerText != null) {
+                if (sb.length() > 0) sb.append("\n");
+                sb.append(reversalBannerText);
+            }
+            banner.setText(sb.toString());
+            banner.setVisibility(sb.length() > 0 ? View.VISIBLE : View.GONE);
+        } catch (Throwable t) {
+            Log.w(TAG, "Banner update failed: " + t.getMessage());
+        }
+    }
+
+    /**
+     * Applies a record-level reversal message to the receipt of the transaction on
+     * screen. Only called for the current transaction's own record.
+     */
+    private void applyReversalStatusToReceipt(String body) {
+        GlobalPara.atmReversalStatus = body;
+        String lower = body == null ? "" : body.toLowerCase();
+        if (lower.contains("in progress")) {
+            GlobalPara.atmReversalInProgress = true;
+        } else {
+            GlobalPara.atmReversalInProgress = false;
+            if (lower.contains("approved") || lower.contains("complete")) {
+                GlobalPara.atmReversalSent = true;
+            }
+        }
+        // Refresh so the customer sees the status update without waiting for a tap.
+        runOnUiThread(() -> {
+            SectionsPagerAdapter adapter = mSectionsPagerAdapter;
+            if (adapter != null) {
+                Fragment_page_receipt receipt = adapter.getReceiptFragment();
+                if (receipt != null) receipt.refreshDisplay();
+            }
+        });
+    }
+
+    // ── Toolbar status: WiFi signal + battery level/charging ──────────────────
+    // Uses ONLY Android system APIs (BatteryManager / WifiManager /
+    // ConnectivityManager) — never the CTOS SDK, which is single-threaded and
+    // must not be touched off the transaction thread.
+    private android.content.BroadcastReceiver batteryReceiver;
+    private android.net.ConnectivityManager.NetworkCallback wifiNetworkCallback;
+    private final android.os.Handler statusHandler =
+            new android.os.Handler(android.os.Looper.getMainLooper());
+    private final Runnable wifiRefreshTask = new Runnable() {
+        @Override public void run() {
+            updateSignalIcon();
+            statusHandler.postDelayed(this, 20000); // periodic safety refresh (RSSI changes aren't always broadcast)
+        }
+    };
+
+    private void initStatusBar() {
+        try {
+            batteryReceiver = new android.content.BroadcastReceiver() {
+                @Override public void onReceive(android.content.Context c, Intent i) { updateBatteryIcon(i); }
+            };
+            Intent sticky = registerReceiver(batteryReceiver, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
+            updateBatteryIcon(sticky); // initial paint from the sticky broadcast
+
+            android.net.ConnectivityManager cm =
+                    (android.net.ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+            if (cm != null) {
+                wifiNetworkCallback = new android.net.ConnectivityManager.NetworkCallback() {
+                    @Override public void onAvailable(android.net.Network n) {
+                        runOnUiThread(() -> updateSignalIcon());
+                        // Network recovery is the moment a stuck reversal is most likely to
+                        // go through — retry FAILED records shortly (never on a customer's txn).
+                        AtmHostService svc = atmHostService;
+                        if (svc != null) {
+                            try { svc.onNetworkAvailable(); } catch (Throwable t) { Log.w(TAG, "onNetworkAvailable: " + t.getMessage()); }
+                        }
+                    }
+                    @Override public void onLost(android.net.Network n) { runOnUiThread(() -> updateSignalIcon()); }
+                    @Override public void onCapabilitiesChanged(android.net.Network n,
+                            android.net.NetworkCapabilities caps) { runOnUiThread(() -> updateSignalIcon()); }
+                };
+                try { cm.registerDefaultNetworkCallback(wifiNetworkCallback); }
+                catch (Throwable t) { Log.w(TAG, "wifi callback register failed: " + t.getMessage()); }
+            }
+            statusHandler.post(wifiRefreshTask);
+        } catch (Throwable t) {
+            Log.w(TAG, "initStatusBar failed: " + t.getMessage());
+        }
+    }
+
+    /** Battery level → 5-step icon + exact %, with a charging bolt when plugged in. */
+    private void updateBatteryIcon(Intent batteryIntent) {
+        try {
+            ImageView img = findViewById(R.id.imgBatteryStatus);
+            ImageView bolt = findViewById(R.id.imgCharging);
+            TextView pctText = findViewById(R.id.txvBatteryPct);
+            if (img == null || batteryIntent == null) return;
+            int level = batteryIntent.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1);
+            int scale = batteryIntent.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, -1);
+            int pct = (level >= 0 && scale > 0) ? Math.round(level * 100f / scale) : -1;
+            int status = batteryIntent.getIntExtra(android.os.BatteryManager.EXTRA_STATUS, -1);
+            boolean charging = status == android.os.BatteryManager.BATTERY_STATUS_CHARGING
+                    || status == android.os.BatteryManager.BATTERY_STATUS_FULL;
+            int lvlIdx;
+            if (pct < 0) lvlIdx = 0;
+            else if (pct >= 88) lvlIdx = 4;
+            else if (pct >= 63) lvlIdx = 3;
+            else if (pct >= 38) lvlIdx = 2;
+            else if (pct >= 13) lvlIdx = 1;
+            else lvlIdx = 0;
+            img.setImageLevel(lvlIdx);
+            if (bolt != null) bolt.setVisibility(charging ? View.VISIBLE : View.GONE);
+            if (pctText != null) pctText.setText(pct < 0 ? "--%" : pct + "%");
+        } catch (Throwable t) {
+            Log.w(TAG, "battery update failed: " + t.getMessage());
+        }
+    }
+
+    /** Tracks which glyph set (wifi fan vs cell bars) is currently shown, so the
+     *  drawable is only swapped when the active transport changes. */
+    private int currentSignalRes = 0;
+
+    /**
+     * Adaptive network indicator: shows the WiFi fan when connected over WiFi and
+     * the cell bars when connected over cellular (whichever transport is active),
+     * with its signal level. When nothing is connected it shows an empty glyph for
+     * the transport the unit has (cellular if a SIM is present, else WiFi).
+     */
+    private void updateSignalIcon() {
+        try {
+            ImageView img = findViewById(R.id.imgSignalStatus);
+            if (img == null) return;
+
+            boolean wifi = false, cell = false;
+            android.net.ConnectivityManager cm =
+                    (android.net.ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+            if (cm != null) {
+                android.net.Network n = cm.getActiveNetwork();
+                android.net.NetworkCapabilities caps = (n != null) ? cm.getNetworkCapabilities(n) : null;
+                if (caps != null) {
+                    wifi = caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI);
+                    cell = caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR);
+                }
+            }
+
+            int res, level;
+            if (wifi) {
+                res = R.drawable.ic_wifi_level; level = wifiSignalLevel();
+            } else if (cell) {
+                res = R.drawable.ic_cell_level; level = cellSignalLevel();
+            } else {
+                res = hasSim() ? R.drawable.ic_cell_level : R.drawable.ic_wifi_level; level = 0;
+            }
+            if (res != currentSignalRes) {   // only reload the drawable on a transport change
+                img.setImageResource(res);
+                currentSignalRes = res;
+            }
+            img.setImageLevel(level);
+        } catch (Throwable t) {
+            Log.w(TAG, "signal update failed: " + t.getMessage());
+        }
+    }
+
+    /** WiFi RSSI → 0-4 bars (0 when off/disconnected). */
+    private int wifiSignalLevel() {
+        try {
+            android.net.wifi.WifiManager wm = (android.net.wifi.WifiManager)
+                    getApplicationContext().getSystemService(WIFI_SERVICE);
+            if (wm != null && wm.isWifiEnabled()) {
+                android.net.wifi.WifiInfo info = wm.getConnectionInfo();
+                if (info != null && info.getNetworkId() != -1) {
+                    return Math.max(0, Math.min(4,
+                            android.net.wifi.WifiManager.calculateSignalLevel(info.getRssi(), 5)));
+                }
+            }
+        } catch (Throwable ignore) {}
+        return 0;
+    }
+
+    /** Cellular signal → 0-4 (SignalStrength.getLevel, API 28+); a healthy default
+     *  when connected but the exact level isn't readable. */
+    private int cellSignalLevel() {
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+                android.telephony.TelephonyManager tm =
+                        (android.telephony.TelephonyManager) getSystemService(TELEPHONY_SERVICE);
+                if (tm != null) {
+                    android.telephony.SignalStrength ss = tm.getSignalStrength();
+                    if (ss != null) return Math.max(0, Math.min(4, ss.getLevel()));
+                }
+            }
+        } catch (Throwable ignore) {}
+        return 3; // connected, level unknown → show a healthy default
+    }
+
+    /** True if a SIM is present and ready (drives the empty-state glyph choice). */
+    private boolean hasSim() {
+        try {
+            android.telephony.TelephonyManager tm =
+                    (android.telephony.TelephonyManager) getSystemService(TELEPHONY_SERVICE);
+            return tm != null && tm.getSimState() == android.telephony.TelephonyManager.SIM_STATE_READY;
+        } catch (Throwable ignore) {
+            return false;
+        }
+    }
+
+    private void teardownStatusBar() {
+        try { statusHandler.removeCallbacks(wifiRefreshTask); } catch (Throwable ignore) {}
+        if (batteryReceiver != null) {
+            try { unregisterReceiver(batteryReceiver); } catch (Throwable ignore) {}
+            batteryReceiver = null;
+        }
+        if (wifiNetworkCallback != null) {
+            try {
+                android.net.ConnectivityManager cm =
+                        (android.net.ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+                if (cm != null) cm.unregisterNetworkCallback(wifiNetworkCallback);
+            } catch (Throwable ignore) {}
+            wifiNetworkCallback = null;
+        }
     }
 
     /**
@@ -2762,10 +760,29 @@ public class MainActivity extends AppCompatActivity {
                 Log.d(TAG, "Kiosk: Set default app to " + getPackageName());
             }
 
-            // Disable Home, Back, Search navigation buttons
+            // Disable Home, Back, Search navigation buttons.
+            //
+            // Toggle ENABLE then DISABLE rather than a plain disable: applying
+            // "disable" alone at boot (a no-op when nav was already disabled from
+            // the previous session) left the window with stale nav-bar insets and
+            // clipped the bottom row of the on-screen keyboard. Cycling the state
+            // — exactly what fixing it manually via admin kiosk off/on does —
+            // forces the system to re-layout. Off the UI thread (binder calls).
             if (GlobalPara.atmDisableNavButtons) {
-                ctSettings.setNavigation(false, false, false);
-                Log.d(TAG, "Kiosk: Navigation buttons disabled");
+                new Thread(new Runnable() {
+                    @Override
+                    public void run() {
+                        try {
+                            CtSettings s = new CtSettings();
+                            s.setNavigation(true, true, true);
+                            Thread.sleep(500);
+                            s.setNavigation(false, false, false);
+                            Log.d(TAG, "Kiosk: Navigation buttons disabled (enable→disable toggle)");
+                        } catch (Throwable t) {
+                            Log.e(TAG, "Kiosk nav toggle failed: " + t.getMessage());
+                        }
+                    }
+                }).start();
             }
 
             // Keep screen always on (no timeout)
@@ -2867,9 +884,39 @@ public class MainActivity extends AppCompatActivity {
         }
 
         synchronized (atmHostLock) {
+            // IDEMPOTENT: if a service is already running with the SAME config,
+            // keep it. Every caller of this method (startup sequencing, Admin
+            // screen re-apply, CasHUB parameter apply, host-totals fallback) used
+            // to tear the service down and rebuild it — each rebuild constructed a
+            // fresh manager/key-manager and kicked a startup key renewal, i.e. a
+            // redundant Type 88 that also made the host rotate the working key.
+            // Rebuild only when the host config actually changed.
+            if (atmHostService != null && atmHostService.isInitialized()
+                    && atmHostServiceConfigSignature != null
+                    && atmHostServiceConfigSignature.equals(currentHostConfigSignature())) {
+                Log.d(TAG, "ATM Host Service already running with identical config — keeping it");
+                return;
+            }
+
             // Shutdown existing service if any
             if (atmHostService != null) {
-                Log.d(TAG, "Shutting down existing ATM Host Service");
+                Log.d(TAG, "Shutting down existing ATM Host Service (config changed)");
+                // The POS stack holds a final reference to THIS service instance
+                // (AtmHostServiceGateway.hostService). After shutdown() that instance
+                // reports initialized=false forever, so every POS sale / balance /
+                // settlement answered host_unreachable until an app restart — an
+                // admin Save, Test Connection or Request New Key was enough to kill
+                // POS mode. Stop the orchestrator here; startPosModeIfEnabled() at
+                // the end of this method rebuilds it bound to the new service.
+                if (posOrchestrator != null) {
+                    Log.d(TAG, "Stopping POS orchestrator — host service is being rebuilt");
+                    try {
+                        posOrchestrator.stop();
+                    } catch (Exception e) {
+                        Log.w(TAG, "POS orchestrator stop failed: " + e.getMessage());
+                    }
+                    posOrchestrator = null;
+                }
                 atmHostService.shutdown();
                 atmHostService = null;
             }
@@ -2930,6 +977,7 @@ public class MainActivity extends AppCompatActivity {
                 atmHostService = new AtmHostService(this);
                 if (atmHostService.initialize(config)) {
                     Log.d(TAG, "ATM Host Service initialized successfully");
+                    atmHostServiceConfigSignature = currentHostConfigSignature();
 
                     // Set up event listener to receive transaction results
                     // Store in member variable so we can re-set it before each transaction
@@ -2938,6 +986,38 @@ public class MainActivity extends AppCompatActivity {
                         @Override
                         public void onProgress(String message) {
                             Log.d(TAG, "ATM Host Progress: " + message);
+                            // Reversal progress is scoped: [REVERSAL:<id>] is about ONE record
+                            // and reaches the receipt only when that record belongs to the
+                            // transaction on screen. [DRAIN] is terminal-wide state — the
+                            // banner and Admin screen get it via onReversalBacklog, never the
+                            // receipt. (A field terminal printed "REVERSAL IN PROGRESS" on
+                            // every customer's receipt for weeks because the drain's messages
+                            // for an old stuck record were treated as the current receipt's.)
+                            castech.emvtxn.atm.host.ReversalProgress rp =
+                                    castech.emvtxn.atm.host.ReversalProgress.parse(message);
+                            if (rp.kind == castech.emvtxn.atm.host.ReversalProgress.Kind.RECORD) {
+                                if (rp.appliesToReceipt(GlobalPara.atmCurrentReversalId)) {
+                                    applyReversalStatusToReceipt(rp.body);
+                                } else {
+                                    Log.d(TAG, "Reversal progress for another transaction ("
+                                            + rp.transactionId + ") — not shown on this receipt");
+                                }
+                            }
+                        }
+
+                        @Override
+                        public void onReversalBacklog(int activeCount, int failedCount, boolean outOfService) {
+                            Log.w(TAG, "Reversal backlog: active=" + activeCount + " failed=" + failedCount
+                                    + (outOfService ? " OUT OF SERVICE" : ""));
+                            runOnUiThread(() -> updateReversalBanner(activeCount, failedCount, outOfService));
+                        }
+
+                        @Override
+                        public void onOperatorAlert(String message) {
+                            // Operator condition, not a transaction error: must NOT reach
+                            // onError (which fails the current transaction, counts down the
+                            // latch and can answer the POS). The banner carries it.
+                            Log.w(TAG, "ATM Host OPERATOR ALERT: " + message);
                         }
 
                         @Override
@@ -2948,6 +1028,8 @@ public class MainActivity extends AppCompatActivity {
                             if (atmTransactionLatch != null) {
                                 atmTransactionLatch.countDown();
                             }
+                            // POS hook (no-op if no POS callback is armed)
+                            castech.emvtxn.pos.PosTransactionObserver.notifyError(error);
                         }
 
                         @Override
@@ -2967,6 +1049,10 @@ public class MainActivity extends AppCompatActivity {
                             if (atmTransactionLatch != null) {
                                 atmTransactionLatch.countDown();
                             }
+                            // POS hook (no-op if no POS callback is armed)
+                            castech.emvtxn.pos.PosTransactionObserver.notifyApproved(
+                                    responseCode, referenceNumber, authDate, authTime,
+                                    accountBalanceCents, availableBalanceCents, displayMessage);
                         }
 
                         @Override
@@ -2983,6 +1069,9 @@ public class MainActivity extends AppCompatActivity {
                             } else {
                                 Log.e(TAG, ">>> CALLBACK onTransactionDeclined: LATCH IS NULL - cannot signal!");
                             }
+                            // POS hook (no-op if no POS callback is armed)
+                            castech.emvtxn.pos.PosTransactionObserver.notifyDeclined(
+                                    responseCode, responseMessage, retainCard);
                         }
 
                         @Override
@@ -2998,6 +1087,10 @@ public class MainActivity extends AppCompatActivity {
                             if (atmTransactionLatch != null) {
                                 atmTransactionLatch.countDown();
                             }
+                            // POS hook — balance inquiry flows here, not onTransactionApproved
+                            castech.emvtxn.pos.PosTransactionObserver.notifyApproved(
+                                    responseCode, "", "", "",
+                                    accountBalanceCents, availableBalanceCents, "APPROVED");
                         }
 
                         @Override
@@ -3022,12 +1115,22 @@ public class MainActivity extends AppCompatActivity {
                     };
                     atmHostService.setEventListener(atmTransactionEventListener);
                     Log.d(TAG, "ATM Host Service event listener set");
+                    // Banner reflects records left over from before this boot right away
+                    // (the boot drain below refreshes it again when it finishes).
+                    atmHostService.publishReversalBacklog();
 
                     // Process any pending reversals from previous sessions
                     processPendingReversalsOnStartup();
 
                     // Check and renew working key if needed
                     performStartupKeyRenewal();
+
+                    // POS-mode boot — runs alongside the customer-driven flow.
+                    // When PosConfig.isEnabled() the orchestrator opens a persistent
+                    // WebSocket to the proxy and handles inbound POS commands.
+                    // Reversal + settlement work end-to-end today; sale + balance_inquiry
+                    // return not_supported until Phase 7b (card-read trigger integration).
+                    startPosModeIfEnabled();
                 } else {
                     Log.e(TAG, "ATM Host Service initialization failed");
                     atmHostService = null;
@@ -3038,6 +1141,172 @@ public class MainActivity extends AppCompatActivity {
                 atmHostService = null;
             }
         }
+    }
+
+    /**
+     * Returns the POS orchestrator's current state for admin UI display.
+     * Returns null when POS mode is off / not started.
+     */
+    public String getPosOrchestratorState() {
+        return posOrchestrator == null ? null : posOrchestrator.getState();
+    }
+
+    /**
+     * Boots the POS-mode orchestrator when {@code PosConfig.isEnabled()}.
+     * Idempotent — calling twice is a no-op.
+     *
+     * <p>This is the single integration point between the existing customer-driven
+     * Cashless ATM app and the new POS proxy client. All POS-specific code lives
+     * in {@code castech.emvtxn.pos.*}.
+     */
+    /** Cached hardware serial — the CtSystem binder read is done once. */
+    private String cachedHardwareSerial = null;
+
+    /**
+     * Reads the Castle hardware serial number via the CTOS SDK (CtSystem).
+     * This is the label / CasHUB "hardware SN" (e.g. 000195250201680) — NOT
+     * Android's Build serial, which is a different value on these terminals.
+     * Returns "" on any failure (emulator, binder not ready, SDK error).
+     */
+    public String getHardwareSerialNumber() {
+        if (cachedHardwareSerial != null) return cachedHardwareSerial;
+        try {
+            CTOS.CtSystem sys = new CTOS.CtSystem();
+            if (!sys.isReady()) {
+                sys.init();
+            }
+            // The FACTORY serial is the label / CasHUB "hardware SN"
+            // (e.g. 000195250201680). NOTE: getSerialNumber() returns a
+            // different value (a 16-hex chip id) — not what fleet tooling uses.
+            String sn = "";
+            try {
+                sn = sys.getFactorySNEx();
+            } catch (Throwable ignored) { /* fall through to byte variant */ }
+            if (sn == null || sn.trim().isEmpty()) {
+                byte[] raw = sys.getFactorySN();
+                if (raw != null) {
+                    int len = 0;
+                    while (len < raw.length && raw[len] != 0) len++;
+                    sn = new String(raw, 0, len, java.nio.charset.StandardCharsets.US_ASCII);
+                }
+            }
+            sn = sn == null ? "" : sn.trim();
+            if (!sn.isEmpty()) {
+                cachedHardwareSerial = sn;
+                Log.d(TAG, "Hardware (factory) serial: " + sn);
+            } else {
+                Log.w(TAG, "CtSystem factory SN empty");
+            }
+            return sn;
+        } catch (Throwable t) {
+            Log.w(TAG, "CtSystem serial read unavailable: " + t.getMessage());
+            return "";
+        }
+    }
+
+    private void startPosModeIfEnabled() {
+        castech.emvtxn.pos.PosConfig posConfig = new castech.emvtxn.pos.PosConfig(this);
+        if (!posConfig.isEnabled()) {
+            Log.d(TAG, "POS mode disabled — skipping orchestrator boot");
+            return;
+        }
+        if (posOrchestrator != null) {
+            Log.w(TAG, "POS orchestrator already running");
+            return;
+        }
+        if (atmHostService == null) {
+            Log.w(TAG, "POS mode enabled but AtmHostService unavailable — cannot start");
+            return;
+        }
+
+        // TSN = the Castle HARDWARE serial (the label / CasHUB "hardware SN",
+        // e.g. 000195250201680) — the terminal's permanent identity on the POS
+        // proxy. Decided 2026-08-30: the proxy has a separate field for the
+        // processor TID, so tsn must not carry it. Falls back to the TID only
+        // if the SDK serial read fails, so registration still works.
+        String terminalSerial = getHardwareSerialNumber();
+        if (terminalSerial.isEmpty()) {
+            terminalSerial = atmSettingsManager == null ? "" : GlobalPara.atmTerminalId;
+            Log.w(TAG, "Hardware serial unavailable — registering with TID fallback: " + terminalSerial);
+        }
+        String appVersion = BuildConfig.VERSION_NAME;
+        String deviceModel = android.os.Build.MODEL;
+
+        // UI bridge — lets the gateway navigate to the transaction page so the
+        // existing card-detection loop runs for POS-initiated sale / balance_inquiry.
+        final MainActivity self = this;
+        castech.emvtxn.pos.AtmHostServiceGateway.UiBridge uiBridge =
+            new castech.emvtxn.pos.AtmHostServiceGateway.UiBridge() {
+                @Override public void runOnUi(Runnable r) {
+                    self.runOnUiThread(r);
+                }
+                @Override public void navigateToTransactionPage() {
+                    self.navigateToPage(GlobalDef.d_PAGE_TRANSACTION);
+                }
+            };
+
+        posOrchestrator = new castech.emvtxn.pos.PosOrchestrator(
+                this, posConfig, atmHostService, uiBridge,
+                terminalSerial, appVersion, deviceModel);
+        posOrchestrator.start();
+        Log.d(TAG, "POS orchestrator started — state=" + posOrchestrator.getState());
+    }
+
+    /**
+     * CasHUB pushed a change to the POS-mode settings (see CasHubParams). Apply it
+     * live: restart the POS stack so the lane picks up the new proxy URL / access
+     * key / on-off state without waiting for the nightly reboot. Safe to call from
+     * any thread.
+     */
+    public void onPosParamsChanged(final castech.emvtxn.pos.PosParams.Diff diff) {
+        if (diff == null || !diff.any()) return;
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                restartPosMode(diff.credentialsChanged, 0);
+            }
+        });
+    }
+
+    /** 20 × 3 s: how long a live POS-settings change waits for an in-flight register transaction. */
+    private static final int POS_RESTART_MAX_DEFERRALS = 20;
+
+    /**
+     * Stops the running POS stack (if any) and starts it again from the current
+     * PosConfig. Main thread only. A restart while a register transaction is in
+     * flight would drop that transaction's reply, so it is deferred in 3 s steps
+     * until the POS slot is free (bounded — after 60 s it proceeds regardless).
+     */
+    private void restartPosMode(final boolean credentialsChanged, final int deferrals) {
+        if (castech.emvtxn.pos.PosTransactionObserver.isArmed() && deferrals < POS_RESTART_MAX_DEFERRALS) {
+            Log.w(TAG, "POS settings changed while a POS transaction is in flight — deferring restart ("
+                    + (deferrals + 1) + "/" + POS_RESTART_MAX_DEFERRALS + ")");
+            new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    restartPosMode(credentialsChanged, deferrals + 1);
+                }
+            }, 3000);
+            return;
+        }
+        if (posOrchestrator != null) {
+            Log.w(TAG, "Stopping POS orchestrator — POS settings changed via CasHUB");
+            try {
+                posOrchestrator.stop();
+            } catch (Exception e) {
+                Log.w(TAG, "POS orchestrator stop failed: " + e.getMessage());
+            }
+            posOrchestrator = null;
+        }
+        castech.emvtxn.pos.PosConfig cfg = new castech.emvtxn.pos.PosConfig(this);
+        if (credentialsChanged) {
+            // The cached JWT was issued against the old proxy / access key; force a
+            // fresh registration rather than presenting it to the new endpoint.
+            cfg.clearJwt();
+        }
+        startPosModeIfEnabled();
+        Log.w(TAG, "POS mode re-applied from CasHUB: enabled=" + cfg.isEnabled()
+                + " running=" + (posOrchestrator != null));
     }
 
     /**
@@ -3056,6 +1325,7 @@ public class MainActivity extends AppCompatActivity {
             @Override
             public void onRenewalSuccess(final String keyStatus) {
                 Log.d(TAG, "Startup key renewal success: " + keyStatus);
+                keyRenewalRetryDelayMs = KEY_RENEWAL_RETRY_INITIAL_MS;  // reset backoff
                 runOnUiThread(new Runnable() {
                     @Override
                     public void run() {
@@ -3068,15 +1338,52 @@ public class MainActivity extends AppCompatActivity {
             @Override
             public void onRenewalFailed(final String error) {
                 Log.w(TAG, "Startup key renewal failed: " + error);
-                runOnUiThread(new Runnable() {
+
+                // KEEP TRYING — like a deployed ATM. On a normal (e.g. midnight)
+                // reboot the app comes up BEFORE WiFi has associated, so the boot
+                // download fails in seconds with ENETUNREACH... and previously
+                // nothing ever retried: the terminal sat keyless until someone
+                // restarted the app, and every customer hit "Terminal starting
+                // up" -> "Not started, try again later". Exponential backoff,
+                // 15s -> 5min cap, unbounded; the download choke point coalesces
+                // any overlap with gate-triggered kicks.
+                if (!keyRenewalRetryScheduled) {
+                    keyRenewalRetryScheduled = true;
+                    final long delay = keyRenewalRetryDelayMs;
+                    keyRenewalRetryDelayMs = Math.min(keyRenewalRetryDelayMs * 2,
+                            KEY_RENEWAL_RETRY_MAX_MS);
+                    Log.w(TAG, "Scheduling key renewal retry in " + (delay / 1000) + "s");
+                    new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(
+                            new Runnable() {
+                                @Override
+                                public void run() {
+                                    keyRenewalRetryScheduled = false;
+                                    if (atmHostService != null
+                                            && atmHostService.hasValidWorkingKey()) {
+                                        Log.d(TAG, "Key renewal retry: key already present — done");
+                                        keyRenewalRetryDelayMs = KEY_RENEWAL_RETRY_INITIAL_MS;
+                                        return;
+                                    }
+                                    performStartupKeyRenewal();
+                                }
+                            }, delay);
+                }
+                // The key usually arrives moments later via the normal init/open
+                // path — a warning here was flashing a raw exception at the customer
+                // even though the terminal ended up with a valid working key.
+                // Re-check after a grace period and only warn if it's STILL missing.
+                new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(new Runnable() {
                     @Override
                     public void run() {
-                        // Warn user - transactions may fail without working key
+                        if (atmHostService != null && atmHostService.hasValidWorkingKey()) {
+                            Log.d(TAG, "Working key arrived after startup-renewal failure — no warning shown");
+                            return;
+                        }
                         android.widget.Toast.makeText(MainActivity.this,
-                            "Warning: Working key not available - " + error,
+                            "Warning: Working key not available — transactions may fail",
                             android.widget.Toast.LENGTH_LONG).show();
                     }
-                });
+                }, 10000);
             }
         });
     }
@@ -3286,59 +1593,78 @@ public class MainActivity extends AppCompatActivity {
     }
 
     /**
-     * Prints a batch close receipt with host totals summary.
-     * @param response The HostTotalsResponse containing batch totals
+     * Prints a host-totals receipt. Builds ONE page and prints it via a single
+     * printf() on a background thread — NOT per-line printf() + goprintf(), which
+     * printed ~20 separate pages plus the legacy SAMPLE RECEIPT. Runs off the UI
+     * thread to avoid ANR; host totals is an admin action (never during a txn), so
+     * there is no SDK-thread contention.
+     *
+     * @param response    the host totals
+     * @param batchClosed true for the Close-Batch (reset) receipt, false for a query
      */
-    private void printBatchCloseReceipt(castech.emvtxn.atm.host.HostTotalsResponse response) {
+    private void printHostTotalsReceipt(final castech.emvtxn.atm.host.HostTotalsResponse response,
+            final boolean batchClosed) {
         if (Printer == null) {
-            Log.e(TAG, "Printer not available for batch close receipt");
+            Log.e(TAG, "Printer not available for host totals receipt");
+            return;
+        }
+        if (response == null) {
+            Log.e(TAG, "No host totals to print");
             return;
         }
 
-        try {
-            // Print header
-            Printer.printf("================================\n");
-            Printer.printf("      BATCH CLOSE REPORT\n");
-            Printer.printf("================================\n\n");
+        StringBuilder r = new StringBuilder();
+        r.append("================================\n");
+        r.append(batchClosed ? "      BATCH CLOSE REPORT\n" : "         HOST TOTALS\n");
+        r.append("================================\n");
+        r.append("\n");
 
-            // Print date/time
-            java.text.SimpleDateFormat sdf = new java.text.SimpleDateFormat("MM/dd/yyyy HH:mm:ss", java.util.Locale.US);
-            String dateTime = sdf.format(new java.util.Date());
-            Printer.printf("Date: " + dateTime + "\n\n");
-
-            // Print terminal ID
-            String terminalId = response.getTerminalId();
-            if (terminalId != null && !terminalId.isEmpty()) {
-                Printer.printf("Terminal: " + terminalId + "\n\n");
-            }
-
-            // Print transaction counts
-            Printer.printf("--- TRANSACTION COUNTS ---\n");
-            Printer.printf("Withdrawals:       " + String.format("%4d", response.getWithdrawalCount()) + "\n");
-            Printer.printf("Balance Inquiries: " + String.format("%4d", response.getBalanceInquiryCount()) + "\n");
-            Printer.printf("Transfers:         " + String.format("%4d", response.getTransferCount()) + "\n");
-            Printer.printf("Non-Cash:          " + String.format("%4d", response.getNonCashCount()) + "\n");
-            Printer.printf("                   ----\n");
-            Printer.printf("TOTAL:             " + String.format("%4d", response.getTotalTransactionCount()) + "\n\n");
-
-            // Print amounts
-            Printer.printf("--- AMOUNTS ---\n");
-            Printer.printf("Cash Dispensed: " + response.getTotalCashDispensedFormatted() + "\n");
-            Printer.printf("Non-Cash:       " + response.getTotalNonCashFormatted() + "\n");
-            Printer.printf("Surcharges:     " + response.getTotalSurchargesFormatted() + "\n\n");
-
-            // Print footer
-            Printer.printf("--------------------------------\n");
-            Printer.printf("     BATCH CLOSED SUCCESSFULLY\n");
-            Printer.printf("--------------------------------\n\n\n\n");
-
-            // Execute print
-            Printer.goprintf();
-
-            Log.d(TAG, "Batch close receipt printed successfully");
-        } catch (Exception e) {
-            Log.e(TAG, "Error printing batch close receipt: " + e.getMessage());
+        java.text.SimpleDateFormat sdf =
+                new java.text.SimpleDateFormat("MM/dd/yyyy HH:mm:ss", java.util.Locale.US);
+        r.append("Date: ").append(sdf.format(new java.util.Date())).append("\n");
+        String terminalId = response.getTerminalId();
+        if (terminalId != null && !terminalId.isEmpty()) {
+            r.append("Terminal: ").append(terminalId).append("\n");
         }
+        r.append("\n");
+
+        r.append("--------------------------------\n");
+        r.append("COUNTS\n");
+        r.append("--------------------------------\n");
+        r.append("Withdrawals: ").append(String.format("%6d", response.getWithdrawalCount())).append("\n");
+        r.append("Bal Inquiry: ").append(String.format("%6d", response.getBalanceInquiryCount())).append("\n");
+        r.append("Transfers:   ").append(String.format("%6d", response.getTransferCount())).append("\n");
+        r.append("Non-Cash:    ").append(String.format("%6d", response.getNonCashCount())).append("\n");
+        r.append("TOTAL:       ").append(String.format("%6d", response.getTotalTransactionCount())).append("\n");
+        r.append("\n");
+
+        r.append("--------------------------------\n");
+        r.append("AMOUNTS\n");
+        r.append("--------------------------------\n");
+        r.append("Cash Disp:  ").append(response.getTotalCashDispensedFormatted()).append("\n");
+        r.append("Non-Cash:   ").append(response.getTotalNonCashFormatted()).append("\n");
+        r.append("Surcharges: ").append(response.getTotalSurchargesFormatted()).append("\n");
+        r.append("\n");
+
+        r.append("================================\n");
+        if (batchClosed) {
+            r.append("   BATCH CLOSED SUCCESSFULLY\n");
+            r.append("================================\n");
+        }
+        r.append("\n\n\n");
+
+        final String receipt = r.toString();
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    Printer.printf(receipt);   // self-contained: initPage + drawText + printPage
+                    Log.d(TAG, "Host totals receipt printed" + (batchClosed ? " (batch closed)" : ""));
+                } catch (Exception e) {
+                    Log.e(TAG, "Error printing host totals receipt: " + e.getMessage());
+                }
+            }
+        }).start();
     }
 
     // =========================================================================
@@ -3974,12 +2300,16 @@ public class MainActivity extends AppCompatActivity {
                     progressDialog.dismiss();
 
                     if (response.isSuccess()) {
-                        // Show totals in dialog
+                        // Print the totals, then show them in a dialog.
+                        printHostTotalsReceipt(response, false);
                         new AlertDialog.Builder(MainActivity.this)
                             .setTitle("Host Totals")
                             .setMessage(response.getSummary())
                             .setPositiveButton("OK", null)
-                            .setNeutralButton("Close Batch", (dialog, which) -> {
+                            .setNeutralButton("Reprint", (dialog, which) -> {
+                                printHostTotalsReceipt(response, false);
+                            })
+                            .setNegativeButton("Close Batch", (dialog, which) -> {
                                 // Request totals with reset flag (closes batch on processor)
                                 requestHostTotalsWithReset();
                             })
@@ -4031,7 +2361,7 @@ public class MainActivity extends AppCompatActivity {
                             if (response.isSuccess()) {
                                 // Print batch close receipt on background thread to avoid ANR
                                 new Thread(() -> {
-                                    printBatchCloseReceipt(response);
+                                    printHostTotalsReceipt(response, true);
                                     runOnUiThread(() -> {
                                         new AlertDialog.Builder(MainActivity.this)
                                             .setTitle("Batch Closed")
@@ -4088,12 +2418,42 @@ public class MainActivity extends AppCompatActivity {
      * Abort any in-progress transaction.
      * Sets the abort flag and tries to interrupt the transaction thread.
      */
-    public void abortTransaction() {
+    /**
+     * Abort any in-progress transaction.
+     *
+     * @return {@code true} when the terminal is idle on return — no transaction
+     *         thread alive — so the caller may reset ATM state and leave the page.
+     *         {@code false} when it is NOT: either the request has already gone to
+     *         the host, or the transaction thread did not exit within the grace
+     *         period. In that case the caller must leave GlobalPara alone and stay
+     *         on the transaction page; the thread owns the outcome and clears
+     *         {@code atmTransactionInProgress} / navigates itself when it finishes.
+     *
+     * <p>Why the contract: the previous version cleared {@code atmTransactionInProgress}
+     * and nulled {@code threadTxn} unconditionally after a 4 s wait, although
+     * {@code Thread.interrupt()} cannot unblock a native CTOS call or a socket read.
+     * The UI went idle while the old thread was still inside the SDK, so the next
+     * customer started a second thread issuing CTOS calls concurrently with the
+     * first (the DeadObjectException / CTOS-service-crash class), or the "cancelled"
+     * host call simply completed and moved money after Cancel.</p>
+     */
+    public boolean abortTransaction() {
         Log.d(TAG, "abortTransaction() called");
+
+        // Once the request is on its way to the host the outcome is the host's to
+        // decide and this thread must run to completion to show/print it. Cancelling
+        // here would only hide an approval that has already moved money.
+        if (GlobalPara.atmHostCallInProgress) {
+            Log.w(TAG, "abortTransaction: host request in flight — cannot cancel, letting it complete");
+            return false;
+        }
+
         txnAborted = true;
         needsSdkReinit = true;  // Force full SDK re-init on next transaction
 
-        // Cancel both EMVCL and EMV transactions to unblock any waiting SDK calls
+        // Cancel the contactless kernel to unblock a waiting performTransactionEx().
+        // cancelTransaction() is the one SDK call that is safe cross-thread; nothing
+        // else below may touch the SDK while the transaction thread might be in it.
         try {
             if (emvcl != null) {
                 Log.d(TAG, "Calling emvcl.cancelTransaction() to unblock...");
@@ -4107,22 +2467,31 @@ public class MainActivity extends AppCompatActivity {
         // Full SDK re-init on next transaction (needsSdkReinit=true) will reset state
 
         // Wait for thread to exit
-        if (threadTxn != null && threadTxn.isAlive()) {
+        Thread t = threadTxn;
+        if (t != null && t.isAlive()) {
             try {
                 Log.d(TAG, "Waiting for transaction thread to exit...");
-                threadTxn.join(3000);  // Wait up to 3 seconds
-                if (threadTxn.isAlive()) {
+                t.join(3000);  // Wait up to 3 seconds
+                if (t.isAlive()) {
                     Log.w(TAG, "Thread still alive after 3 seconds, interrupting");
-                    threadTxn.interrupt();
+                    t.interrupt();
                     // Give it one more second after interrupt
-                    threadTxn.join(1000);
+                    t.join(1000);
                 }
             } catch (Exception e) {
                 Log.e(TAG, "Error waiting for thread: " + e.getMessage());
             }
+            if (t.isAlive()) {
+                // Do NOT declare the terminal idle. The thread is still inside the SDK
+                // or a blocking call; it tests txnAborted at its next phase boundary
+                // and clears atmTransactionInProgress itself on exit. Clearing it here
+                // is exactly what let a second thread start CTOS calls alongside this one.
+                Log.w(TAG, "abortTransaction: transaction thread still running — terminal stays busy until it exits");
+                return false;
+            }
         }
 
-        // Flush MSR buffer
+        // Thread is gone (or never existed): the SDK is ours to touch again.
         try {
             if (msr != null) {
                 Log.d(TAG, "Flushing MSR tracks buffer");
@@ -4148,6 +2517,7 @@ public class MainActivity extends AppCompatActivity {
         }
 
         Log.d(TAG, "abortTransaction() complete - SDK will re-init on next transaction");
+        return true;
     }
 
     /**
@@ -4252,6 +2622,16 @@ public class MainActivity extends AppCompatActivity {
                     return "Admin";
             }
             return null;
+        }
+
+        /**
+         * Returns the cached receipt fragment (or null if it hasn't been created yet).
+         * Used by the host event listener to push reversal-progress updates into the
+         * already-visible receipt page without making the user tap anything.
+         */
+        public Fragment_page_receipt getReceiptFragment() {
+            Fragment f = map.get(GlobalDef.d_PAGE_RECEIPT);
+            return (f instanceof Fragment_page_receipt) ? (Fragment_page_receipt) f : null;
         }
     }
 
@@ -4376,15 +2756,71 @@ public class MainActivity extends AppCompatActivity {
             return 0;
         }
 
+        // Readiness gate: don't begin card processing until the host service is up
+        // and a working key is loaded. Starting a transaction too soon after boot
+        // (before the async Type 88 key download finishes) reached PIN encryption
+        // with no key and abended. Applies to the MKSK build only — a DUKPT build
+        // has its PIN key injected in hardware and needs no working-key download.
+        //
+        // The transaction page auto-starts in kiosk mode, so rather than dead-end on
+        // "please wait", poll until ready and then proceed automatically (bounded).
+        if (!isTransactionReady()) {
+            if (txnReadyRetryCount < TXN_READY_MAX_RETRIES) {
+                txnReadyRetryCount++;
+                Log.w(TAG, "Transaction not ready — waiting for key download (attempt "
+                        + txnReadyRetryCount + "/" + TXN_READY_MAX_RETRIES
+                        + ", hostReady=" + isAtmHostServiceReady()
+                        + ", workingKey=" + (atmHostService != null && atmHostService.hasWorkingKeys()) + ")");
+
+                // ACTIVELY kick the key download rather than only polling for it.
+                // After a midnight reboot the boot-time download fails (WiFi not up
+                // yet) and, without this, the gate polled for a key NOBODY was
+                // fetching and dead-ended at "not ready, try again". Kicking here
+                // means a customer's button press starts the fetch the moment it's
+                // possible; guarded so a 120s in-flight download isn't piled on,
+                // and the service-level skip/coalesce dedupes everything else.
+                if (atmHostService != null && atmHostService.isInitialized()
+                        && !atmHostService.hasValidWorkingKey()
+                        && !atmHostService.isKeyDownloadInProgress()) {
+                    Log.w(TAG, "Readiness gate: no working key and no download running — kicking renewal");
+                    performStartupKeyRenewal();
+                }
+
+                ui_ShowMsg("Terminal starting up —\nplease wait...");
+                new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(new Runnable() {
+                    @Override
+                    public void run() {
+                        btnTransaction_Click(view);
+                    }
+                }, TXN_READY_RETRY_INTERVAL_MS);
+                return 0;
+            }
+            // Gave up after the retry window — surface a clear message, don't proceed.
+            Log.e(TAG, "Transaction blocked — terminal still not ready after "
+                    + TXN_READY_MAX_RETRIES + " retries");
+            txnReadyRetryCount = 0;
+            ui_ShowMsg("Terminal not ready —\nplease try again shortly");
+            return 0;
+        }
+        txnReadyRetryCount = 0;  // ready — reset for next time
+
         ui_ShowMsg("Starting transaction...\n");
 
         // NOTE: SDK re-initialization is done INSIDE the thread (more thorough)
         // Removed duplicate pre-thread initialization to reduce delay
 
-        // Simple cleanup - just clear old thread reference (NO SDK calls)
-        if (threadTxn != null) {
-            threadTxn = null;
+        // A previous transaction thread that is still running owns the SDK. Never start
+        // a second one beside it — concurrent CTOS calls crash the CTOS service. The
+        // atmTransactionInProgress gate above normally catches this; this is the
+        // backstop for the flag and the thread ever disagreeing.
+        if (threadTxn != null && threadTxn.isAlive()) {
+            Log.w(TAG, "Previous transaction thread still running — refusing to start another");
+            ui_ShowMsg("Please wait —\nfinishing previous transaction\n");
+            return 0;
         }
+
+        // Simple cleanup - just clear old thread reference (NO SDK calls)
+        threadTxn = null;
 
         // Reset flags and mark transaction as in progress
         resetAbortFlag();
@@ -4734,7 +3170,12 @@ public class MainActivity extends AppCompatActivity {
                     if (entryMode == 0) {
                         Log.d(TAG, "No card detected - exiting");
                         ui_ShowMsg("Cancelled\n");
-                        // cancelTransaction was already called by abortTransaction()
+                        // cancelTransaction was already called by abortTransaction().
+                        // Release a POS-armed slot too (exactly-once; no-op when this
+                        // wasn't POS-driven or the Cancel handler already answered) —
+                        // the handler only answers when abortTransaction() reported idle.
+                        castech.emvtxn.pos.PosTransactionObserver.notifyDeclined(
+                                "user_cancelled", "cancelled at terminal", false);
                         GlobalPara.atmTransactionInProgress = false;
                         ui_EnableAllButton();
                         return;
@@ -4931,8 +3372,8 @@ public class MainActivity extends AppCompatActivity {
 
                             tlvUtility_ct.TLVDataClear();
                             tlvUtility_ct.TLVDataParse(reqData.tlvBuf, reqData.tlvLen);
-                            Log.d(TAG, "TLVData(UtilityDB) : " + Converter.byteArray2HexString(tlvUtility_ct.TLVDataBase, tlvUtility_ct.intTLVDataBaseLen));
-                            Log.d(TAG, "reqData.tlvBuf     : " + Converter.byteArray2HexString(reqData.tlvBuf, reqData.tlvLen));
+                            Log.d(TAG, "TLVData(UtilityDB) : " + LogMask.tlv(Converter.byteArray2HexString(tlvUtility_ct.TLVDataBase, tlvUtility_ct.intTLVDataBaseLen)));
+                            Log.d(TAG, "reqData.tlvBuf     : " + LogMask.tlv(Converter.byteArray2HexString(reqData.tlvBuf, reqData.tlvLen)));
 
                             //Version
                             TLVData.tag = 0x9F09;
@@ -4952,7 +3393,7 @@ public class MainActivity extends AppCompatActivity {
                             intRtn = tlvUtility_ct.TLVDataGet(TLVData);
                             if (intRtn == 0) {
                                 String tag5aHex = Converter.byteArray2HexString(TLVData.value, TLVData.len);
-                                Log.d(TAG, "TagData(5A):" + tag5aHex);
+                                Log.d(TAG, "TagData(5A):" + castech.emvtxn.util.PanMasker.maskHex(tag5aHex));
                                 // ATM MODE: Store CLEAR PAN from Tag 5A for PIN block Format 0
                                 // Tag 5A is BCD-encoded PAN, may have trailing F padding
                                 if (GlobalPara.atmMode) {
@@ -4975,7 +3416,7 @@ public class MainActivity extends AppCompatActivity {
 
                                 Log.d(TAG, "tag :" + "0xDF32 (PAN mask)");
                                 Log.d(TAG, "value :" + Converter.byteArray2HexString(TLVData.value, TLVData.len));
-                                Log.d(TAG, "ASCII :" + GlobalPara.asciiPAN);
+                                Log.d(TAG, "ASCII :" + LogMask.pan(GlobalPara.asciiPAN));
                                 ui_ShowMsg("PAN :" + GlobalPara.asciiPAN);
                                 // Removed 1.3s sleep - PAN visible during PIN entry
                             } else {
@@ -4999,7 +3440,7 @@ public class MainActivity extends AppCompatActivity {
                             intRtn = tlvUtility_ct.TLVDataGet(TLVData);
                             if (intRtn == 0) {
                                 Log.d(TAG, "tag :" + "0xDF30 (PAN encrypt)");
-                                Log.d(TAG, "TagData(DF30):" + Converter.byteArray2HexString(TLVData.value, TLVData.len));
+                                Log.d(TAG, "TagData(DF30): [" + TLVData.len + " bytes encrypted PAN]");
                             } else {
                                 Log.d(TAG, "NoTag(DF30)");
                             }
@@ -5009,7 +3450,7 @@ public class MainActivity extends AppCompatActivity {
                             TLVData.len = 256;
                             intRtn = tlvUtility_ct.TLVDataGet(TLVData);
                             if (intRtn == 0) {
-                                Log.d(TAG, "TagData(57):" + Converter.byteArray2HexString(TLVData.value, TLVData.len));
+                                Log.d(TAG, "TagData(57): [masked]");
                             } else {
                                 Log.d(TAG, "NoTag(57)");
                             }
@@ -5038,18 +3479,18 @@ public class MainActivity extends AppCompatActivity {
                                     // Convert BCD-encoded Track 2 to ASCII string
                                     // Format: BCD bytes where D=separator, F=padding
                                     String hexTrack2 = Converter.byteArray2HexString(df35Data.value, df35Data.len);
-                                    Log.d(TAG, "ATM: DF35 raw hex: " + hexTrack2);
+                                    Log.d(TAG, "ATM: DF35 raw hex: [masked]");
                                     // Convert to ISO 7813 format: ;PAN=YYMM...?
                                     String clearTrack2 = ";" + hexTrack2.toUpperCase()
                                             .replace("D", "=")
                                             .replaceAll("F+$", "") + "?";
-                                    Log.d(TAG, "ATM: CLEAR Track2 from DF35: " + clearTrack2);
+                                    Log.d(TAG, "ATM: Track2 from DF35: [masked]");
                                     GlobalPara.atmTrack2Data = clearTrack2;
                                     // Extract clear PAN for PIN translation
                                     if (clearTrack2.contains("=")) {
                                         String clearPan = clearTrack2.replace(";", "").split("=")[0];
                                         GlobalPara.atmClearPan = clearPan;
-                                        Log.d(TAG, "ATM: CLEAR PAN extracted: " + clearPan);
+                                        Log.d(TAG, "ATM: PAN extracted: " + castech.emvtxn.util.PanMasker.maskPan(clearPan));
                                     }
                                 } else {
                                     Log.w(TAG, "ATM: DF35 not available via direct dataGet, falling back to DF33/DF32");
@@ -5062,11 +3503,11 @@ public class MainActivity extends AppCompatActivity {
                             intRtn = tlvUtility_ct.TLVDataGet(TLVData);
                             if (intRtn == 0 && TLVData.len > 0) {
                                 Log.d(TAG, "tag :" + "0xDF33 (Track2 encrypt)");
-                                Log.d(TAG, "TagData(DF33):" + Converter.byteArray2HexString(TLVData.value, TLVData.len));
+                                Log.d(TAG, "TagData(DF33): [" + TLVData.len + " bytes encrypted Track 2]");
                                 // Store encrypted Track 2 for ATM host transactions (chip cards)
                                 if (GlobalPara.atmTrack2Data == null || GlobalPara.atmTrack2Data.isEmpty() || GlobalPara.atmTrack2Data.contains("*")) {
                                     GlobalPara.atmTrack2Data = "E:" + Converter.byteArray2HexString(TLVData.value, TLVData.len);
-                                    Log.d(TAG, "Stored ATM Track2 Data (CT encrypted): " + GlobalPara.atmTrack2Data);
+                                    Log.d(TAG, "Stored ATM Track2 Data (CT encrypted): " + LogMask.len(GlobalPara.atmTrack2Data));
                                 }
                             } else {
                                 Log.d(TAG, "NoTag(DF33) or empty, trying DF32 (masked)");
@@ -5114,7 +3555,7 @@ public class MainActivity extends AppCompatActivity {
                                     // Build Track 2 in ISO format: ;PAN=YYMMsss?
                                     // Server expects this format and strips ; and ?
                                     GlobalPara.atmTrack2Data = ";" + maskedPan + "=" + expiry + serviceCode + "?";
-                                    Log.d(TAG, "Stored ATM Track2 Data (CT masked ISO format): " + GlobalPara.atmTrack2Data);
+                                    Log.d(TAG, "Stored ATM Track2 Data (CT masked ISO format): " + LogMask.track2(GlobalPara.atmTrack2Data));
                                 } else {
                                     Log.d(TAG, "NoTag(DF32) - no Track2 available");
                                 }
@@ -5134,16 +3575,10 @@ public class MainActivity extends AppCompatActivity {
                             Log.d(TAG, "AID contact value :" + Converter.byteArray2HexString(tlvData.value, tlvData.len));
                         }
 
-                        String strAID = Converter.byteArray2HexString(tlvData.value, 5);
-                        Log.d(TAG, strAID);
-
-                        if (strAID.equals("A000000003")) {
-                            GlobalPara.cardType = "VISA";
-                        } else if (strAID.equals("A000000004")) {
-                            GlobalPara.cardType = "MASTERCARD";
-                        } else {
-                            GlobalPara.cardType = "UNKNOWN CARD";
-                        }
+                        String strAID = Converter.byteArray2HexString(tlvData.value, 5);   // RID
+                        String fullAID = Converter.byteArray2HexString(tlvData.value, tlvData.len);
+                        Log.d(TAG, "AID=" + fullAID + " (RID=" + strAID + ")");
+                        GlobalPara.cardType = cardBrandFromAid(fullAID);
 
                         if (GlobalPara.isQuickChipTransaction == true) {
                             //Set Floor limit to 0
@@ -5261,7 +3696,7 @@ public class MainActivity extends AppCompatActivity {
                                 Log.d(TAG, "ATM MODE (CT): Tag 57 dataGet returned: " + String.format("0x%08X", tag57Rtn) + ", len=" + tag57.len);
                                 if (tag57Rtn == 0 && tag57.len > 0) {
                                     String track2Hex = Converter.byteArray2HexString(tag57.value, tag57.len);
-                                    Log.d(TAG, "ATM MODE (CT): Tag 57 raw: " + track2Hex);
+                                    Log.d(TAG, "ATM MODE (CT): Tag 57 raw: " + LogMask.track2(track2Hex));
                                     // BCD encoded - PAN is before 'D' separator
                                     int sepIdx = track2Hex.toUpperCase().indexOf("D");
                                     if (sepIdx > 0) {
@@ -5317,7 +3752,7 @@ public class MainActivity extends AppCompatActivity {
                             Log.d(TAG, "ATM PIN: PIN entry successful (POST-TRANSACTION, No-CVM approach)");
                             GlobalPara.atmPinCollectedPostTransaction = true;  // Mark as post-cryptogram PIN
                         } else if (GlobalPara.atmMode) {
-                            Log.d(TAG, "ATM MODE (CT): PIN collected via EMV callback (ISO-0): " + GlobalPara.atmEncryptedPinBlock);
+                            Log.d(TAG, "ATM MODE (CT): PIN collected via EMV callback (ISO-0): " + LogMask.pinBlock(GlobalPara.atmEncryptedPinBlock));
                             GlobalPara.atmPinCollectedPostTransaction = false;  // PIN was collected during EMV flow
                         }
                         if (GlobalPara.scrnBrdcstRecver != null) {
@@ -5333,7 +3768,7 @@ public class MainActivity extends AppCompatActivity {
                             // BUT if we collected PIN manually via DUKPT, we can continue!
                             if (GlobalPara.atmEncryptedPinBlock != null && !GlobalPara.atmEncryptedPinBlock.isEmpty()) {
                                 Log.w(TAG, ">>> ATM: SDK PIN failed (0x1003) but manual DUKPT PIN collected - CONTINUING");
-                                Log.d(TAG, ">>> ATM: PIN block = " + GlobalPara.atmEncryptedPinBlock);
+                                Log.d(TAG, ">>> ATM: PIN block = " + LogMask.pinBlock(GlobalPara.atmEncryptedPinBlock));
                                 Log.d(TAG, ">>> ATM: KSN = " + GlobalPara.atmDukptKsn);
                                 // CRITICAL: Set transaction result to "Go Online" so host authorization proceeds
                                 GlobalPara.transactionResult = 0x0004;  // Go Online
@@ -5382,7 +3817,7 @@ public class MainActivity extends AppCompatActivity {
                             // Store EMV data for ATM host transaction (includes 5A for PIN translation)
                             if (GlobalPara.atmMode && authRequestData.tlvLen > 0) {
                                 GlobalPara.atmEmvData = Converter.byteArray2HexString(authRequestData.tlvBuf, authRequestData.tlvLen);
-                                Log.d(TAG, "Stored ATM EMV Data (CT): " + GlobalPara.atmEmvData);
+                                Log.d(TAG, "Stored ATM EMV Data (CT): " + LogMask.tlv(GlobalPara.atmEmvData));
                             }
 
                             TLVData.tag = 0x95;
@@ -5444,7 +3879,7 @@ public class MainActivity extends AppCompatActivity {
                             Log.d(TAG, "ATM: Sensitive data request (5A,57) rtn=" + String.format("0x%08X", sensRtn) + ", len=" + sensitiveData.tlvLen);
                             if (sensRtn == 0 && sensitiveData.tlvLen > 0) {
                                 String sensitiveHex = Converter.byteArray2HexString(sensitiveData.tlvBuf, sensitiveData.tlvLen);
-                                Log.d(TAG, "ATM: Sensitive EMV data (5A,57): " + sensitiveHex);
+                                Log.d(TAG, "ATM: Sensitive EMV data (5A,57): " + LogMask.tlv(sensitiveHex));
                                 // Store the clear PAN for PIN translation
                                 GlobalPara.atmSensitiveEmvData = sensitiveHex;
                             } else {
@@ -5553,13 +3988,7 @@ public class MainActivity extends AppCompatActivity {
                                 Log.d(TAG, "ATM PIN (MSR): PIN entry successful");
                             }
 
-                            if (new String(maskedPAN).indexOf('4') == 0) {
-                                GlobalPara.cardType = "VISA";
-                            } else if (new String(maskedPAN).indexOf('5') == 0) {
-                                GlobalPara.cardType = "MASTERCARD";
-                            } else {
-                                GlobalPara.cardType = "UNKNOWN CARD";
-                            }
+                            GlobalPara.cardType = cardBrandFromPan(new String(maskedPAN));
 
 
                             Log.d(TAG, "getMaskedTracks***********************************************");
@@ -5609,13 +4038,13 @@ public class MainActivity extends AppCompatActivity {
                                 Log.d(TAG, "KSN Track1 : " + Converter.byteArray2HexString(encryptedTracks.track1KSN, encryptedTracks.track1KSNLen));
                             }
                             if (encryptedTracks.track2EncryptedDataLen > 0) {
-                                Log.d(TAG, "Encrypted Track2 : " + Converter.byteArray2HexString(encryptedTracks.track2EncryptedData, encryptedTracks.track2EncryptedDataLen));
+                                Log.d(TAG, "Encrypted Track2 : [" + encryptedTracks.track2EncryptedDataLen + " bytes]");
                                 Log.d(TAG, "Checksum Track2 : " + Converter.byteArray2HexString(encryptedTracks.track2Checksum, encryptedTracks.track2ChecksumLen));
                                 Log.d(TAG, "KSN Track2 : " + Converter.byteArray2HexString(encryptedTracks.track2KSN, encryptedTracks.track2KSNLen));
 
                                 // Store encrypted track 2 for ATM transactions
                                 GlobalPara.atmTrack2Data = Converter.byteArray2HexString(encryptedTracks.track2EncryptedData, encryptedTracks.track2EncryptedDataLen);
-                                Log.d(TAG, "Stored ATM Track2 Data: " + GlobalPara.atmTrack2Data);
+                                Log.d(TAG, "Stored ATM Track2 Data: " + LogMask.track2(GlobalPara.atmTrack2Data));
                             }
                             if (encryptedTracks.track3EncryptedDataLen > 0) {
                                 Log.d(TAG, "Encrypted Track3 : " + Converter.byteArray2HexString(encryptedTracks.track3EncryptedData, encryptedTracks.track3EncryptedDataLen));
@@ -5793,8 +4222,10 @@ public class MainActivity extends AppCompatActivity {
                                 cardType = "CardType No Def.";
                                 break;
                         }
-                        Log.d(TAG, "cardType:" + cardType);
-                        GlobalPara.cardType = cardType;
+                        Log.d(TAG, "CL kernel type: " + cardType);
+                        // GlobalPara.cardType (printed on the receipt) is set from the
+                        // card BRAND (AID tag 4F) below via cardBrandFromAid, so it reads
+                        // VISA/MC/DEBIT rather than the verbose contactless kernel type.
 
                         TLVData.version = 1;
                         TLVData.value = new byte[256];
@@ -5803,16 +4234,28 @@ public class MainActivity extends AppCompatActivity {
                         tlvUtility.TLVDataClear();
                         tlvUtility.TLVDataParse(rcData.chipData, rcData.chipDataLen);
                         tlvUtility.TLVDataParse(rcData.additionalData, rcData.additionalDataLen);
-                        Log.d(TAG, "TLVData(UtilityDB) : " + Converter.byteArray2HexString(tlvUtility.TLVDataBase, tlvUtility.intTLVDataBaseLen));
+                        Log.d(TAG, "TLVData(UtilityDB) : " + LogMask.tlv(Converter.byteArray2HexString(tlvUtility.TLVDataBase, tlvUtility.intTLVDataBaseLen)));
                         Log.d(TAG, "rcData.track1Data  : " + Converter.byteArray2HexString(rcData.track1Data, rcData.track1Len));
-                        Log.d(TAG, "rcData.track2Data  : " + Converter.byteArray2HexString(rcData.track2Data, rcData.track2Len));
+                        Log.d(TAG, "rcData.track2Data  : [" + rcData.track2Len + " bytes]");
                         Log.d(TAG, "rcData.chipData    : " + Converter.byteArray2HexString(rcData.chipData, rcData.chipDataLen));
                         Log.d(TAG, "rcData.addData     : " + Converter.byteArray2HexString(rcData.additionalData, rcData.additionalDataLen));
+
+                        // Card brand (abbreviated) for the receipt, from AID tag 4F.
+                        TLVData.tag = 0x4F;
+                        TLVData.len = 256;
+                        TLVData.value = new byte[256];
+                        if (tlvUtility.TLVDataGet(TLVData) == 0 && TLVData.len > 0) {
+                            String clAid = Converter.byteArray2HexString(TLVData.value, TLVData.len);
+                            GlobalPara.cardType = cardBrandFromAid(clAid);
+                            Log.d(TAG, "CL AID=" + clAid + " brand=" + GlobalPara.cardType);
+                        } else {
+                            GlobalPara.cardType = "CARD";
+                        }
 
                         // Store EMV data for ATM host transaction (CL)
                         if (GlobalPara.atmMode && tlvUtility.intTLVDataBaseLen > 0) {
                             GlobalPara.atmEmvData = Converter.byteArray2HexString(tlvUtility.TLVDataBase, tlvUtility.intTLVDataBaseLen);
-                            Log.d(TAG, "Stored ATM EMV Data (CL): " + GlobalPara.atmEmvData);
+                            Log.d(TAG, "Stored ATM EMV Data (CL): " + LogMask.tlv(GlobalPara.atmEmvData));
                         }
 
                         // Try to get tag 5A (PAN) for PIN translation - contactless
@@ -5855,7 +4298,7 @@ public class MainActivity extends AppCompatActivity {
                         TLVData.len = 256;
                         TLVData.value = new byte[256];
                         intRtn = tlvUtility.TLVDataGet(TLVData);
-                        Log.d(TAG, "TagData(57):" + Converter.byteArray2HexString(TLVData.value, TLVData.len));
+                        Log.d(TAG, "TagData(57): [masked]");
 
                         TLVData.tag = 0x84;
                         TLVData.len = 256;
@@ -5894,24 +4337,33 @@ public class MainActivity extends AppCompatActivity {
                             Log.d(TAG, "ATM MODE (CL): Requesting PIN entry (Format 1 - no clear PAN)...");
                             GlobalPara.atmEntryMode = 2; // Contactless
 
-                            // Extract PAN from Track 2 for display and DUKPT Format 0
-                            String clPan = null;
-                            if (rcData.track2Len > 0) {
-                                String track2Hex = Converter.byteArray2HexString(rcData.track2Data, rcData.track2Len);
-                                int sepIdx = track2Hex.indexOf("D");
-                                if (sepIdx > 0) {
-                                    clPan = track2Hex.substring(0, sepIdx).replaceAll("[Ff]+$", "");
+                            // Receipt/display PAN. Prefer the clear PAN from Tag 5A
+                            // (already stored in atmClearPan just above); fall back to a
+                            // correctly-decoded Track 2 only if 5A was absent.
+                            //
+                            // NOTE: the contactless rcData.track2Data is ASCII-encoded
+                            // (";PAN=...?"), not BCD-packed. The old code hex-dumped it and
+                            // cut at the first 'D', which in ASCII is the 'D' inside the
+                            // '=' separator's byte (0x3D) — landing mid-byte and yielding a
+                            // WRONG receipt last-4 (the PIN block was correct because it uses
+                            // Tag 5A). Reproduced on S1F4 PRO 2026-09-02. Track2PanExtractor
+                            // decodes both encodings; asciiPAN is stored MASKED because it is
+                            // printed on the receipt and used as a last-resort clear-PAN.
+                            String clearPanForDisplay = GlobalPara.atmClearPan;
+                            if (clearPanForDisplay == null || clearPanForDisplay.isEmpty()) {
+                                clearPanForDisplay = Track2PanExtractor.extractPan(
+                                        rcData.track2Data, rcData.track2Len);
+                                if (clearPanForDisplay != null && clearPanForDisplay.length() >= 13) {
+                                    GlobalPara.atmClearPan = clearPanForDisplay; // keep for PIN/host if 5A missing
+                                    Log.d(TAG, "ATM CL: CLEAR PAN from Track2 stored: "
+                                            + clearPanForDisplay.substring(0, Math.min(6, clearPanForDisplay.length())) + "****");
                                 }
                             }
-                            if (clPan != null && clPan.length() >= 4) {
-                                GlobalPara.asciiPAN = clPan;
-                                GlobalPara.atmLastFourDigits = clPan.substring(clPan.length() - 4);
+                            if (clearPanForDisplay != null && clearPanForDisplay.length() >= 4) {
+                                GlobalPara.atmLastFourDigits =
+                                        clearPanForDisplay.substring(clearPanForDisplay.length() - 4);
+                                GlobalPara.asciiPAN = Track2PanExtractor.maskPan(clearPanForDisplay);
                                 Log.d(TAG, "ATM CL: Stored last 4 digits: " + GlobalPara.atmLastFourDigits);
-                                // Also store as clear PAN if not already set from Tag 5A
-                                if ((GlobalPara.atmClearPan == null || GlobalPara.atmClearPan.isEmpty()) && clPan.length() >= 13) {
-                                    GlobalPara.atmClearPan = clPan;
-                                    Log.d(TAG, "ATM CL: CLEAR PAN from Track2 stored: " + clPan.substring(0, Math.min(6, clPan.length())) + "****");
-                                }
                             }
 
                             // Request PIN entry (DUKPT or Format 1)
@@ -6004,8 +4456,8 @@ public class MainActivity extends AppCompatActivity {
                                     track2Hex = track2Hex.toUpperCase().replaceAll("F+$", "");
                                     String track2Ascii = ";" + track2Hex.replace("D", "=") + "?";
 
-                                    Log.d(TAG, "ATM HOST (CL): Track2 raw hex: " + track2Hex);
-                                    Log.d(TAG, "ATM HOST (CL): Track2 ASCII: " + track2Ascii);
+                                    Log.d(TAG, "ATM HOST (CL): Track2 raw hex: " + LogMask.len(track2Hex));
+                                    Log.d(TAG, "ATM HOST (CL): Track2 ASCII: " + LogMask.track2(track2Ascii));
 
                                     // Try to encrypt track 2 with DUKPT
                                     DukptEncryptedData encryptedTrack2 = encryptTrack2WithDukpt(track2Ascii);
@@ -6014,7 +4466,7 @@ public class MainActivity extends AppCompatActivity {
                                         cardData.setEncryptedTrack2(Converter.hexString2ByteArray(encryptedTrack2.encryptedData));
                                         cardData.setTrack2KSN(Converter.hexString2ByteArray(encryptedTrack2.ksn));
                                         Log.d(TAG, "ATM HOST (CL): Track2 ENCRYPTED with DUKPT");
-                                        Log.d(TAG, "  Encrypted: " + encryptedTrack2.encryptedData);
+                                        Log.d(TAG, "  Encrypted: " + LogMask.len(encryptedTrack2.encryptedData));
                                         Log.d(TAG, "  KSN: " + encryptedTrack2.ksn);
 
                                         // Also set clear track 2 for processor (if not masked)
@@ -6038,7 +4490,7 @@ public class MainActivity extends AppCompatActivity {
                                 // Set encrypted PIN block and PIN KSN
                                 if (GlobalPara.atmEncryptedPinBlock != null && !GlobalPara.atmEncryptedPinBlock.isEmpty()) {
                                     cardData.setEncryptedPinBlock(GlobalPara.atmEncryptedPinBlock);
-                                    Log.d(TAG, "ATM HOST (CL): PIN block set: " + GlobalPara.atmEncryptedPinBlock);
+                                    Log.d(TAG, "ATM HOST (CL): PIN block set: " + LogMask.pinBlock(GlobalPara.atmEncryptedPinBlock));
                                     // Set PIN KSN separately for DUKPT PIN decryption
                                     if (GlobalPara.atmDukptKsn != null && !GlobalPara.atmDukptKsn.isEmpty()) {
                                         cardData.setPinBlockKSN(Converter.hexString2ByteArray(GlobalPara.atmDukptKsn));
@@ -6068,7 +4520,12 @@ public class MainActivity extends AppCompatActivity {
                                 // Calculate amount in cents
                                 long amountCents = 0;
                                 try {
-                                    double amtValue = Double.parseDouble(GlobalPara.atmTotal.isEmpty() ? "0" : GlobalPara.atmTotal);
+                                    // F4 on the wire must be the REQUESTED amount only —
+                                    // NOT amount+surcharge. atmTotal includes the surcharge;
+                                    // atmSelectedAmount is what the customer asked for.
+                                    // The host computes the cardholder charge as F4 + F6.
+                                    double amtValue = Double.parseDouble(
+                                        GlobalPara.atmSelectedAmount.isEmpty() ? "0" : GlobalPara.atmSelectedAmount);
                                     amountCents = (long)(amtValue * 100);
                                 } catch (Exception e) {
                                     Log.e(TAG, "ATM HOST (CL): Error parsing amount: " + e.getMessage());
@@ -6076,35 +4533,10 @@ public class MainActivity extends AppCompatActivity {
 
                                 long surchargeCents = (long)(GlobalPara.atmFlatFeeAmount * 100);
 
-                                // Check if Balance Inquiry or Withdrawal
-                                atmTransactionLatch = new java.util.concurrent.CountDownLatch(1);
-                                // Re-set transaction listener (may have been overwritten by admin screen)
-                                if (atmTransactionEventListener != null) {
-                                    atmHostService.setEventListener(atmTransactionEventListener);
-                                    Log.d(TAG, "ATM HOST (CL): Re-set transaction event listener");
-                                }
+                                // Send to host — loops PIN entry on "55 Incorrect PIN"
+                                // (see sendAtmHostRequestWithPinRetry / PIN_RETRY_ON_INCORRECT)
                                 String acctType = GlobalPara.getHyosungAccountType();
-                                if (GlobalPara.atmBalanceInquiryMode) {
-                                    Log.d(TAG, "ATM HOST (CL): Sending BALANCE INQUIRY, account=" + acctType);
-                                    atmHostService.performBalanceInquiry(cardData, acctType);
-                                } else {
-                                    Log.d(TAG, "ATM HOST (CL): Sending WITHDRAWAL - amount=" + amountCents + " cents, surcharge=" + surchargeCents + " cents, account=" + acctType);
-                                    atmHostService.performWithdrawal(cardData, amountCents, surchargeCents, acctType);
-                                }
-
-                                // Wait for response with 60 second timeout
-                                try {
-                                    boolean completed = atmTransactionLatch.await(60, java.util.concurrent.TimeUnit.SECONDS);
-                                    if (!completed) {
-                                        Log.e(TAG, "ATM HOST (CL): Transaction TIMEOUT after 60 seconds");
-                                        GlobalPara.atmHostCallSuccess = false;
-                                        GlobalPara.atmResponseMessage = "Transaction timeout";
-                                    }
-                                } catch (InterruptedException e) {
-                                    Log.e(TAG, "ATM HOST (CL): Transaction interrupted: " + e.getMessage());
-                                    GlobalPara.atmHostCallSuccess = false;
-                                    GlobalPara.atmResponseMessage = "Transaction interrupted";
-                                }
+                                sendAtmHostRequestWithPinRetry(cardData, amountCents, surchargeCents, acctType, "CL");
 
                                 // Check if transaction was approved
                                 if (GlobalPara.atmHostCallSuccess) {
@@ -6145,7 +4577,7 @@ public class MainActivity extends AppCompatActivity {
                                         track2Hex = track2Hex.toUpperCase().replaceAll("F+$", "");
                                         track2AsciiCT = ";" + track2Hex.replace("D", "=") + "?";
                                         Log.d(TAG, "ATM HOST (CT): Track2 from tag 57, len=" + TLVData.len);
-                                        Log.d(TAG, "ATM HOST (CT): Track2 ASCII: " + track2AsciiCT);
+                                        Log.d(TAG, "ATM HOST (CT): Track2 ASCII: " + LogMask.track2(track2AsciiCT));
                                     } else {
                                         // Tag 57 not available (Castle masks for PCI), check stored track 2
                                         Log.w(TAG, "ATM HOST (CT): Tag 57 not available, checking GlobalPara.atmTrack2Data");
@@ -6194,7 +4626,7 @@ public class MainActivity extends AppCompatActivity {
                                 // Set encrypted PIN block and PIN KSN
                                 if (GlobalPara.atmEncryptedPinBlock != null && !GlobalPara.atmEncryptedPinBlock.isEmpty()) {
                                     cardData.setEncryptedPinBlock(GlobalPara.atmEncryptedPinBlock);
-                                    Log.d(TAG, "ATM HOST (CT): PIN block set: " + GlobalPara.atmEncryptedPinBlock);
+                                    Log.d(TAG, "ATM HOST (CT): PIN block set: " + LogMask.pinBlock(GlobalPara.atmEncryptedPinBlock));
                                     // Set PIN KSN separately for DUKPT PIN decryption
                                     if (GlobalPara.atmDukptKsn != null && !GlobalPara.atmDukptKsn.isEmpty()) {
                                         cardData.setPinBlockKSN(Converter.hexString2ByteArray(GlobalPara.atmDukptKsn));
@@ -6227,7 +4659,12 @@ public class MainActivity extends AppCompatActivity {
                                 // Calculate amount in cents
                                 long amountCents = 0;
                                 try {
-                                    double amtValue = Double.parseDouble(GlobalPara.atmTotal.isEmpty() ? "0" : GlobalPara.atmTotal);
+                                    // F4 on the wire must be the REQUESTED amount only —
+                                    // NOT amount+surcharge. atmTotal includes the surcharge;
+                                    // atmSelectedAmount is what the customer asked for.
+                                    // The host computes the cardholder charge as F4 + F6.
+                                    double amtValue = Double.parseDouble(
+                                        GlobalPara.atmSelectedAmount.isEmpty() ? "0" : GlobalPara.atmSelectedAmount);
                                     amountCents = (long)(amtValue * 100);
                                 } catch (Exception e) {
                                     Log.e(TAG, "ATM HOST (CT): Error parsing amount: " + e.getMessage());
@@ -6235,35 +4672,10 @@ public class MainActivity extends AppCompatActivity {
 
                                 long surchargeCents = (long)(GlobalPara.atmFlatFeeAmount * 100);
 
-                                // Check if Balance Inquiry or Withdrawal
-                                atmTransactionLatch = new java.util.concurrent.CountDownLatch(1);
-                                // Re-set transaction listener (may have been overwritten by admin screen)
-                                if (atmTransactionEventListener != null) {
-                                    atmHostService.setEventListener(atmTransactionEventListener);
-                                    Log.d(TAG, "ATM HOST (CT): Re-set transaction event listener");
-                                }
+                                // Send to host — loops PIN entry on "55 Incorrect PIN"
+                                // (see sendAtmHostRequestWithPinRetry / PIN_RETRY_ON_INCORRECT)
                                 String acctTypeCT = GlobalPara.getHyosungAccountType();
-                                if (GlobalPara.atmBalanceInquiryMode) {
-                                    Log.d(TAG, "ATM HOST (CT): Sending BALANCE INQUIRY, account=" + acctTypeCT);
-                                    atmHostService.performBalanceInquiry(cardData, acctTypeCT);
-                                } else {
-                                    Log.d(TAG, "ATM HOST (CT): Sending WITHDRAWAL - amount=" + amountCents + " cents, surcharge=" + surchargeCents + " cents, account=" + acctTypeCT);
-                                    atmHostService.performWithdrawal(cardData, amountCents, surchargeCents, acctTypeCT);
-                                }
-
-                                // Wait for response with 60 second timeout
-                                try {
-                                    boolean completed = atmTransactionLatch.await(60, java.util.concurrent.TimeUnit.SECONDS);
-                                    if (!completed) {
-                                        Log.e(TAG, "ATM HOST (CT): Transaction TIMEOUT after 60 seconds");
-                                        GlobalPara.atmHostCallSuccess = false;
-                                        GlobalPara.atmResponseMessage = "Transaction timeout";
-                                    }
-                                } catch (InterruptedException e) {
-                                    Log.e(TAG, "ATM HOST (CT): Transaction interrupted: " + e.getMessage());
-                                    GlobalPara.atmHostCallSuccess = false;
-                                    GlobalPara.atmResponseMessage = "Transaction interrupted";
-                                }
+                                sendAtmHostRequestWithPinRetry(cardData, amountCents, surchargeCents, acctTypeCT, "CT");
 
                                 // Complete EMV transaction with host response
                                 Debugger.addSTR("Debugger", "Input response data to EMV kernel to complete transaction");
@@ -6440,12 +4852,28 @@ public class MainActivity extends AppCompatActivity {
 
                 GlobalPara.clLED.startIdleLEDBehavior();
 
-                // Check if ATM mode - navigate to receipt page
-                // Include both withdrawal (amount > 0) and balance inquiry mode
-                if (GlobalPara.atmMode ||
+                if (txnAborted && !GlobalPara.atmHostCallSuccess) {
+                    // Cancelled after card detection and the host did not approve —
+                    // either nothing was sent (sendAtmHostRequestWithPinRetry returned
+                    // "Transaction cancelled") or the cancel raced a decline. Nothing to
+                    // receipt. The Cancel handler stayed on the page because this thread
+                    // was still alive, so return to the menu from here, and release a
+                    // POS-armed slot (exactly-once; no-op otherwise). An APPROVAL always
+                    // takes the receipt path below, cancelled or not: money moved.
+                    Log.d(TAG, "Transaction cancelled — returning to main menu");
+                    castech.emvtxn.pos.PosTransactionObserver.notifyDeclined(
+                            "user_cancelled", "cancelled at terminal", false);
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            navigateToPage(GlobalDef.d_PAGE_MAIN_MENU);
+                        }
+                    });
+                } else if (GlobalPara.atmMode ||
                     (GlobalPara.atmSelectedAmount != null && !"0.00".equals(GlobalPara.atmSelectedAmount)) ||
                     GlobalPara.atmBalanceInquiryMode) {
-                    // ATM Mode: Mark transaction as complete and navigate to receipt
+                    // ATM Mode (withdrawal with amount > 0, or balance inquiry):
+                    // mark transaction as complete and navigate to receipt
                     GlobalPara.atmTransactionComplete = true;
 
                     // Small delay before navigating to receipt
@@ -6567,7 +4995,7 @@ public class MainActivity extends AppCompatActivity {
                 Log.d(TAG, "Start Get PIN");
 
                 IKMS2Callback.Stub callback = new IKMS2Callback.Stub() {
-                    StringBuffer sb = new StringBuffer();
+                    StringBuilder sb = new StringBuilder();
                     byte recv;
 
                     @Override
@@ -6965,7 +5393,7 @@ public class MainActivity extends AppCompatActivity {
      *
      * @return The PIN digits entered, or null if cancelled/timeout
      */
-    String collectPinForCallback() {
+    public String collectPinForCallback() {
         Log.d(TAG, "collectPinForCallback() - Showing software PIN pad for EMV callback");
 
         // Reset state
@@ -7034,13 +5462,217 @@ public class MainActivity extends AppCompatActivity {
      *
      * @return true if PIN was successfully entered and encrypted
      */
+    /**
+     * True only when this APK was built as the DUKPT flavor.
+     *
+     * DUKPT is deprecated — MKSK is the shipping key model. This is a compile-time
+     * gate so no amount of stale SharedPreferences, settings migration, or partial
+     * initialization can route an MKSK build down the DUKPT PIN path.
+     */
+    private static boolean isDukptBuild() {
+        return "DUKPT".equals(BuildConfig.KEY_MODE);
+    }
+
+    /**
+     * Short card-brand label for the receipt, derived from the EMV AID (tag 84/4F).
+     * Checks the network-agnostic US Common Debit AIDs first, then the RID (first
+     * 5 bytes). Cards that aren't credit Visa/MC used to fall through to the alarming
+     * "UNKNOWN CARD" — a normal US debit card selects the Common Debit AID
+     * (A0000000980840) and now reads "DEBIT". Truly unknown apps read "CARD".
+     */
+    private static String cardBrandFromAid(String aidHex) {
+        if (aidHex == null || aidHex.isEmpty()) return "CARD";
+        String aid = aidHex.toUpperCase().replace(" ", "");
+        // US Common Debit (network-agnostic debit routing)
+        if (aid.startsWith("A0000000980840")) return "DEBIT";   // Visa US Common Debit
+        if (aid.startsWith("A0000000042203")) return "DEBIT";   // MC US Common Debit
+        String rid = aid.length() >= 10 ? aid.substring(0, 10) : aid;
+        switch (rid) {
+            case "A000000003": return "VISA";
+            case "A000000004": return "MC";
+            case "A000000025": return "AMEX";
+            case "A000000152": return "DISC";
+            case "A000000324": return "DISC";
+            case "A000000277": return "INTERAC";
+            case "A000000098": return "DEBIT";   // Visa USA debit
+            default:           return "CARD";
+        }
+    }
+
+    /**
+     * Short card-brand label from the (masked) PAN IIN — used on the MSR path,
+     * where no AID is available. Unknown ranges read "CARD".
+     */
+    private static String cardBrandFromPan(String pan) {
+        if (pan == null || pan.isEmpty()) return "CARD";
+        char c0 = pan.charAt(0);
+        String p2 = pan.length() >= 2 ? pan.substring(0, 2) : "";
+        if (c0 == '4') return "VISA";
+        if (c0 == '5') return "MC";
+        if (p2.equals("34") || p2.equals("37")) return "AMEX";
+        if (c0 == '6') return "DISC";
+        return "CARD";
+    }
+
+    // ── PIN retry on incorrect PIN (response code 55) ────────────────────────
+    // The STD1 spec marks code 55 as "Decline, allow retry": instead of ending the
+    // transaction, re-prompt the PIN and resubmit with the SAME card/EMV data and a
+    // NEW sequence number + PIN block. Capped at PIN_MAX_ATTEMPTS total tries; a 75
+    // (issuer PIN-tries-exceeded) or any other decline ends the transaction as today.
+    // Set PIN_RETRY_ON_INCORRECT = false to restore the previous single-attempt flow.
+    private static final boolean PIN_RETRY_ON_INCORRECT = true;
+    private static final int PIN_MAX_ATTEMPTS = 3;
+
+    /**
+     * Sends the request to the ATM host and, when the host answers "55 Incorrect
+     * PIN", loops: re-prompt PIN → new PIN block → resend. Runs on the transaction
+     * thread (blocks on the response latch exactly like the code it replaces).
+     * On return, GlobalPara.atmHostCallSuccess / atmResponseCode / atmResponseMessage
+     * reflect the FINAL attempt.
+     *
+     * @param pathTag "CL" or "CT" — used only for log continuity with the old code
+     */
+    private void sendAtmHostRequestWithPinRetry(CastleCardData cardData, long amountCents,
+            long surchargeCents, String acctType, String pathTag) {
+        int attempt = 1;
+        while (true) {
+            // Cancel pressed while the card/PIN was being read (or during a PIN
+            // re-prompt): nothing has gone to the host for THIS attempt, so honour it
+            // here — the last point at which cancelling is free. Past this line the
+            // request is committed and abortTransaction() refuses (atmHostCallInProgress).
+            if (txnAborted) {
+                Log.w(TAG, "ATM HOST (" + pathTag + "): cancelled before send — not contacting host");
+                GlobalPara.atmHostCallSuccess = false;
+                GlobalPara.atmResponseMessage = "Transaction cancelled";
+                return;
+            }
+
+            atmTransactionLatch = new java.util.concurrent.CountDownLatch(1);
+            // Re-set transaction listener (may have been overwritten by admin screen)
+            if (atmTransactionEventListener != null) {
+                atmHostService.setEventListener(atmTransactionEventListener);
+                Log.d(TAG, "ATM HOST (" + pathTag + "): Re-set transaction event listener");
+            }
+            // From here until the latch releases, the request is committed to the host:
+            // abortTransaction() sees this flag and refuses, so a Cancel tap can never
+            // hide an approval that already moved money. Cleared in finally on every
+            // exit path (response, timeout, interrupt).
+            GlobalPara.atmHostCallInProgress = true;
+            try {
+                if (GlobalPara.atmBalanceInquiryMode) {
+                    Log.d(TAG, "ATM HOST (" + pathTag + "): Sending BALANCE INQUIRY, account=" + acctType
+                            + " (attempt " + attempt + ")");
+                    atmHostService.performBalanceInquiry(cardData, acctType);
+                } else {
+                    Log.d(TAG, "ATM HOST (" + pathTag + "): Sending WITHDRAWAL - amount=" + amountCents
+                            + " cents, surcharge=" + surchargeCents + " cents, account=" + acctType
+                            + " (attempt " + attempt + ")");
+                    atmHostService.performWithdrawal(cardData, amountCents, surchargeCents, acctType);
+                }
+
+                // Wait for the host result. MUST outlast the connection layer's own
+                // response timeout (120s for EFX/busy-MUX paths): the socket layer is
+                // the authority on giving up, and every outcome it produces (response,
+                // timeout, error) releases this latch via the listener callbacks. When
+                // this latch was 60s it fired FIRST on a ~50-120s host, abandoning an
+                // in-flight authorization the host then answered "after the fact" —
+                // the customer saw a timeout while the host approved/declined for real.
+                try {
+                    boolean completed = atmTransactionLatch.await(130, java.util.concurrent.TimeUnit.SECONDS);
+                    if (!completed) {
+                        Log.e(TAG, "ATM HOST (" + pathTag + "): Transaction TIMEOUT after 130 seconds");
+                        GlobalPara.atmHostCallSuccess = false;
+                        GlobalPara.atmResponseMessage = "Transaction timeout";
+                        return;
+                    }
+                } catch (InterruptedException e) {
+                    Log.e(TAG, "ATM HOST (" + pathTag + "): Transaction interrupted: " + e.getMessage());
+                    GlobalPara.atmHostCallSuccess = false;
+                    GlobalPara.atmResponseMessage = "Transaction interrupted";
+                    return;
+                }
+            } finally {
+                GlobalPara.atmHostCallInProgress = false;
+            }
+
+            // Anything other than a retryable incorrect-PIN decline is final.
+            if (!PIN_RETRY_ON_INCORRECT
+                    || GlobalPara.atmHostCallSuccess
+                    || !castech.emvtxn.atm.host.HyosungProtocol.RESP_INCORRECT_PIN
+                            .equals(GlobalPara.atmResponseCode)) {
+                return;
+            }
+            if (attempt >= PIN_MAX_ATTEMPTS) {
+                Log.w(TAG, "ATM HOST (" + pathTag + "): Incorrect PIN — local attempt limit reached ("
+                        + PIN_MAX_ATTEMPTS + ")");
+                return;
+            }
+
+            attempt++;
+            int remaining = PIN_MAX_ATTEMPTS - attempt + 1;
+            Log.w(TAG, "ATM HOST (" + pathTag + "): Incorrect PIN — re-prompting ("
+                    + remaining + " attempt(s) remaining)");
+            ui_ShowMsg("Incorrect PIN — please try again\n(" + remaining + " attempt(s) remaining)");
+            MyUtility.sleep(1500);
+
+            boolean pinOK = requestATMPin();
+            if (!pinOK || GlobalPara.atmEncryptedPinBlock == null
+                    || GlobalPara.atmEncryptedPinBlock.isEmpty()) {
+                // Customer cancelled or PIN encryption failed — keep the 55 decline as final
+                Log.w(TAG, "ATM HOST (" + pathTag + "): PIN re-entry cancelled/failed — ending transaction");
+                return;
+            }
+            cardData.setEncryptedPinBlock(GlobalPara.atmEncryptedPinBlock);
+        }
+    }
+
+    /**
+     * When true, transactions are gated on host-service init + a loaded working key.
+     * Set false to restore the previous behavior (transaction starts immediately,
+     * even if the terminal is still booting).
+     */
+    private static final boolean REQUIRE_READY_BEFORE_TXN = true;
+    // Auto-retry window while the working key is still downloading (~150s total).
+    // Was 20 x 1.5s = 30s, which expired long before a slow host answered: EFX takes
+    // ~50-57s for a Type 88 and can retry once (see ProcessorConfig.forEfx), so the
+    // customer hit "Terminal starting up" and the transaction dead-ended even though
+    // the key landed moments later. Sized to outlast a slow download plus one retry.
+    private static final int TXN_READY_MAX_RETRIES = 100;
+    private static final long TXN_READY_RETRY_INTERVAL_MS = 1500;
+    private int txnReadyRetryCount = 0;
+
+    /**
+     * True when the terminal is ready to take a transaction.
+     *
+     * MKSK build: requires the host service initialized AND a working key loaded
+     * (the Type 88 download completed). DUKPT build: the PIN key is injected in
+     * hardware — no working-key download — so only host-service init is required.
+     * Fails toward "ready" only when the gate is disabled via the flag.
+     */
+    private boolean isTransactionReady() {
+        if (!REQUIRE_READY_BEFORE_TXN) {
+            return true;
+        }
+        if (!isAtmHostServiceReady()) {
+            return false;
+        }
+        if (isDukptBuild()) {
+            return true;  // hardware-injected PIN key, no working-key download
+        }
+        return atmHostService != null && atmHostService.hasWorkingKeys();
+    }
+
     private boolean requestATMPin() {
-        Log.d(TAG, "requestATMPin() - Checking PIN format configuration...");
+        Log.d(TAG, "requestATMPin() - KEY_MODE=" + BuildConfig.KEY_MODE);
         Log.d(TAG, "  atmDukptEnabled: " + GlobalPara.atmDukptEnabled);
         Log.d(TAG, "  atmPinBlockFormat: " + GlobalPara.atmPinBlockFormat);
 
-        // Try DUKPT if enabled
-        if (GlobalPara.atmDukptEnabled || "DUKPT".equals(GlobalPara.atmPinBlockFormat)) {
+        // Try DUKPT only in a DUKPT build. The KEY_MODE gate is deliberate: stale
+        // prefs, the admin settings migration, or a failed AtmHostService init used
+        // to leave atmDukptEnabled=true in an MKSK build, which then encrypted the
+        // PIN at C000/0000 (no key → 0x2905) instead of using MKSK at C000/0010.
+        if (isDukptBuild()
+                && (GlobalPara.atmDukptEnabled || "DUKPT".equals(GlobalPara.atmPinBlockFormat))) {
             Log.d(TAG, "ATM PIN: Attempting DUKPT (Format 0) - MVP APPROACH...");
 
             // Use Castle MVP approach - standalone DUKPT PIN collection
@@ -7048,7 +5680,7 @@ public class MainActivity extends AppCompatActivity {
             boolean dukptOK = requestATMPinEntryDukptMvp();
 
             if (dukptOK) {
-                Log.d(TAG, "ATM PIN: DUKPT successful - PIN block: " + GlobalPara.atmEncryptedPinBlock);
+                Log.d(TAG, "ATM PIN: DUKPT successful - PIN block: " + LogMask.pinBlock(GlobalPara.atmEncryptedPinBlock));
                 Log.d(TAG, "ATM PIN: KSN: " + GlobalPara.atmDukptKsn);
                 return true;
             } else {
@@ -7156,8 +5788,8 @@ public class MainActivity extends AppCompatActivity {
             Log.d(TAG, "ATM PIN: Clear PAN: " + clearPan.substring(0, 6) + "****");
             Log.d(TAG, "ATM PIN: DUKPT enabled: " + GlobalPara.atmDukptEnabled);
 
-            // Choose encryption method based on atmDukptEnabled flag
-            if (GlobalPara.atmDukptEnabled) {
+            // Choose encryption method — DUKPT only in a DUKPT build (see isDukptBuild)
+            if (isDukptBuild() && GlobalPara.atmDukptEnabled) {
                 // DUKPT encryption (requires IPEK at C001/1A)
                 Log.d(TAG, "ATM PIN: Using DUKPT encryption");
                 DukptEncryptedData encryptedData = encryptPinBlockWithDukpt(pin, clearPan);
@@ -7338,7 +5970,7 @@ public class MainActivity extends AppCompatActivity {
             dukptKey.setPinControl(CtKMS2Dukpt.PIN_BLOCKTYPE_ANSI_X9_8_ISO_4, entryKeyTimeout, firstEntryKeyTimeout);
 
             // Set callback for PIN entry events
-            final StringBuffer pinDigits = new StringBuffer();
+            final StringBuilder pinDigits = new StringBuilder();
 
             IKMS2Callback.Stub callback = new IKMS2Callback.Stub() {
                 @Override
@@ -7391,7 +6023,7 @@ public class MainActivity extends AppCompatActivity {
 
             if (encryptedBlock != null && encryptedBlock.length >= 8) {
                 GlobalPara.atmEncryptedPinBlock = Converter.byteArray2HexString(encryptedBlock, 8);
-                Log.d(TAG, "DUKPT: Encrypted PIN block: " + GlobalPara.atmEncryptedPinBlock);
+                Log.d(TAG, "DUKPT: Encrypted PIN block: " + LogMask.pinBlock(GlobalPara.atmEncryptedPinBlock));
             }
 
             if (ksn != null && ksn.length > 0) {
@@ -7519,11 +6151,15 @@ public class MainActivity extends AppCompatActivity {
         GlobalPara.atmEncryptedPinBlock = "";
         GlobalPara.atmDukptKsn = "";
 
-        // Use DUKPT key at C000/0000 (where key is injected)
-        int keySet = GlobalPara.atmDukptKeySet;   // 0xC000
-        int keyIndex = GlobalPara.atmDukptKeyIndex; // 0x0000
+        // Key location depends on protocol:
+        // Triton: CFFF/0000 (TMK/Master Key) — uses CtKMS2SymmetryKey
+        // Hyosung: C000/0000 (DUKPT) — uses CtKMS2Dukpt
+        boolean useTritonKeys = "TRITON".equals(GlobalPara.atmProtocolType);
+        int keySet = GlobalPara.atmDukptKeySet;
+        int keyIndex = GlobalPara.atmDukptKeyIndex;
 
-        Log.d(TAG, ">>> MVP: Key location: " + String.format("0x%04X/0x%04X", keySet, keyIndex));
+        Log.d(TAG, ">>> MVP: Key location: " + String.format("0x%04X/0x%04X", keySet, keyIndex) +
+              " (protocol=" + GlobalPara.atmProtocolType + ", useTriton=" + useTritonKeys + ")");
 
         // Step 1: Show key attributes (Castle MVP does this first)
         showKeyAttributes(keySet, keyIndex);
@@ -7597,7 +6233,7 @@ public class MainActivity extends AppCompatActivity {
             Log.d(TAG, ">>> MVP: Button positions configured");
 
             // Create CtKMS2Callback (Castle MVP approach - NOT IKMS2Callback.Stub)
-            final StringBuffer pinDigits = new StringBuffer();
+            final StringBuilder pinDigits = new StringBuilder();
             CtKMS2Callback callback = new CtKMS2Callback() {
                 @Override
                 public int testCancel() {
@@ -7631,50 +6267,99 @@ public class MainActivity extends AppCompatActivity {
                 }
             };
 
-            // Create DUKPT key object
-            Log.d(TAG, ">>> MVP: Creating CtKMS2Dukpt...");
-            CtKMS2Dukpt dukptKey = new CtKMS2Dukpt();
-
-            // Step-by-step Castle MVP flow:
-            // 1. selectKey
-            Log.d(TAG, ">>> MVP: selectKey(" + String.format("0x%04X, 0x%04X", keySet, keyIndex) + ")");
-            dukptKey.selectKey(keySet, keyIndex);
-
-            // 2. setCipherMethod (ECB for PIN)
-            Log.d(TAG, ">>> MVP: setCipherMethod(PIN_CIPHER_METHOD_ECB)");
-            dukptKey.setCipherMethod(CtKMS2SymmetryKey.PIN_CIPHER_METHOD_ECB);
-
-            // 3. setPinInfo - Castle MVP uses 3 params: (pinBlockType, maxDigit, minDigit)
-            // PIN_BLOCKTYPE_ANSI_X9_8_ISO_0 = 0x00 = Format 0 (ISO-0)
-            byte pinBlockType = CtKMS2SymmetryKey.PIN_BLOCKTYPE_ANSI_X9_8_ISO_0;
+            // PIN encryption setup — common parameters
+            byte pinBlockType = 0x00; // PIN_BLOCKTYPE_ANSI_X9_8_ISO_0 = Format 0
             byte maxDigit = 12;
             byte minDigit = 4;
-            Log.d(TAG, ">>> MVP: setPinInfo(0x" + String.format("%02X", pinBlockType) + ", " + maxDigit + ", " + minDigit + ")");
-            dukptKey.setPinInfo(pinBlockType, maxDigit, minDigit);
+            byte nullPinAllowed = 0;
+            int timeout = 60;
+            int firstTimeout = 30;
 
-            // 4. setPinControl - (nullPinAllowed, timeout, firstTimeout)
-            byte nullPinAllowed = 0;  // Don't allow null PIN
-            int timeout = 60;         // 60 seconds between keys
-            int firstTimeout = 30;    // 30 seconds for first key
-            Log.d(TAG, ">>> MVP: setPinControl(" + nullPinAllowed + ", " + timeout + ", " + firstTimeout + ")");
-            dukptKey.setPinControl(nullPinAllowed, timeout, firstTimeout);
+            Log.d(TAG, ">>> MVP: selectKey(" + String.format("0x%04X, 0x%04X", keySet, keyIndex) + ")");
 
-            // 5. setCallback
-            Log.d(TAG, ">>> MVP: setCallback(CtKMS2Callback)");
-            dukptKey.setCallback(callback);
+            if (useTritonKeys) {
+                // Triton Master/Session: Software PIN pad + working key encryption
+                // No hardware KMS2 needed — uses downloaded working key
+                Log.d(TAG, ">>> MVP: Triton Master/Session PIN encryption");
+                Log.d(TAG, ">>> MVP: Using software PIN pad + CastleKeyManager working key");
 
-            // 6. setPAN - Castle MVP uses setPAN(), not setInputData()
-            Log.d(TAG, ">>> MVP: setPAN(panBytes[" + panBytes.length + "])");
-            dukptKey.setPAN(panBytes);
+                // Show software PIN pad and collect PIN
+                runOnUiThread(() -> ui_ShowLog("Enter PIN..."));
+                String pin = collectPinForCallback();
+
+                dismissAtmPinPadDialog();
+
+                if (pin == null || pin.isEmpty()) {
+                    Log.w(TAG, ">>> MVP: Triton PIN entry cancelled or empty");
+                    atmPinEntrySuccess = false;
+                    atmPinEntryCancelled = true;
+                    atmPinEntryComplete = true;
+                    return false;
+                }
+
+                if (pin.length() < 4) {
+                    Log.w(TAG, ">>> MVP: Triton PIN too short: " + pin.length());
+                    atmPinEntrySuccess = false;
+                    atmPinEntryComplete = true;
+                    return false;
+                }
+
+                // Get clear PAN for Format 0 PIN block
+                String clearPan = GlobalPara.atmClearPan;
+                if (clearPan == null || clearPan.isEmpty()) {
+                    clearPan = GlobalPara.asciiPAN;
+                }
+                Log.d(TAG, ">>> MVP: Triton PAN for PIN block: " + castech.emvtxn.util.PanMasker.maskPan(clearPan));
+
+                // Create Format 0 (ISO 9564-1) clear PIN block
+                String clearPinBlock = castech.emvtxn.atm.host.PinBlockFormatter.createFormat0PinBlock(pin, clearPan);
+                Log.d(TAG, ">>> MVP: Triton clear PIN block created (Format 0)");
+
+                // Encrypt with downloaded working key via CastleKeyManager
+                if (atmHostService == null || atmHostService.getKeyManager() == null) {
+                    Log.e(TAG, ">>> MVP: Triton - no key manager available");
+                    atmPinEntrySuccess = false;
+                    atmPinEntryComplete = true;
+                    return false;
+                }
+
+                String encryptedPinHex = atmHostService.getKeyManager().encryptPinBlock(clearPinBlock);
+
+                if (encryptedPinHex != null && encryptedPinHex.length() == 16) {
+                    GlobalPara.atmEncryptedPinBlock = encryptedPinHex;
+                    GlobalPara.atmDukptKsn = ""; // No KSN for Master/Session
+                    Log.d(TAG, ">>> MVP: Triton PIN block encrypted successfully with working key");
+                    atmPinEntrySuccess = true;
+                    ui_ShowMsg("PIN Accepted");
+                    MyUtility.sleep(500);
+                } else {
+                    Log.e(TAG, ">>> MVP: Triton PIN encryption failed - no working key loaded?");
+                    atmPinEntrySuccess = false;
+                }
+
+                atmPinEntryComplete = true;
+                return atmPinEntrySuccess;
+
+            } else {
+                // Hyosung: Use CtKMS2Dukpt with DUKPT at C000/0000
+                Log.d(TAG, ">>> MVP: Creating CtKMS2Dukpt (Hyosung/DUKPT)...");
+                CtKMS2Dukpt dukptKey = new CtKMS2Dukpt();
+                dukptKey.selectKey(keySet, keyIndex);
+                dukptKey.setCipherMethod(CtKMS2Dukpt.PIN_CIPHER_METHOD_ECB);
+                dukptKey.setPinInfo(pinBlockType, maxDigit, minDigit);
+                dukptKey.setPinControl(nullPinAllowed, timeout, firstTimeout);
+                dukptKey.setCallback(callback);
+                dukptKey.setPAN(panBytes);
 
             // Update UI
             runOnUiThread(() -> ui_ShowLog("Enter PIN on keypad..."));
 
             // 7. startVirtualPin - blocking call
+            runOnUiThread(() -> ui_ShowLog("Enter PIN on keypad..."));
             Log.d(TAG, ">>> MVP: startVirtualPin() - waiting for PIN entry...");
             dukptKey.startVirtualPin(virtualPinPad);
 
-            // 8. getKSN - MUST be called before getOutputData (per Castle support)
+            // 8. getKSN
             Log.d(TAG, ">>> MVP: getKSN()");
             byte[] ksn = dukptKey.getKSN();
 
@@ -7688,7 +6373,7 @@ public class MainActivity extends AppCompatActivity {
             // Process results
             if (encryptedBlock != null && encryptedBlock.length >= 8) {
                 GlobalPara.atmEncryptedPinBlock = Converter.byteArray2HexString(encryptedBlock, 8);
-                Log.d(TAG, ">>> MVP: Encrypted PIN block: " + GlobalPara.atmEncryptedPinBlock);
+                Log.d(TAG, ">>> MVP: Encrypted PIN block: " + LogMask.pinBlock(GlobalPara.atmEncryptedPinBlock));
             } else {
                 Log.e(TAG, ">>> MVP: encryptedBlock is null or too short");
             }
@@ -7700,9 +6385,9 @@ public class MainActivity extends AppCompatActivity {
                 Log.e(TAG, ">>> MVP: KSN is null or empty");
             }
 
-            // Validate
+            // Validate DUKPT result
             if (GlobalPara.atmEncryptedPinBlock.length() == 16 && GlobalPara.atmDukptKsn.length() >= 16) {
-                Log.d(TAG, ">>> MVP: PIN entry SUCCESS");
+                Log.d(TAG, ">>> MVP: PIN entry SUCCESS (DUKPT)");
                 atmPinEntrySuccess = true;
                 ui_ShowMsg("PIN Accepted");
                 MyUtility.sleep(500);
@@ -7714,6 +6399,7 @@ public class MainActivity extends AppCompatActivity {
                 ui_ShowMsg("PIN Entry Failed");
                 return false;
             }
+            } // end else (Hyosung/DUKPT path)
 
         } catch (CTOS.CtKMS2Exception e) {
             Log.e(TAG, ">>> MVP: KMS2 Exception: " + String.format("0x%08X", e.getErrorCode()));
@@ -7751,6 +6437,14 @@ public class MainActivity extends AppCompatActivity {
      * @return DukptEncryptedData containing encrypted data and KSN, or null on failure
      */
     public DukptEncryptedData encryptTrack2WithDukpt(String track2Data) {
+        // DUKPT only exists in a DUKPT build (same gate as the PIN path). In an MKSK
+        // build this used to attempt C000/0000 → 0x2905 on every transaction before
+        // falling back to clear track 2; skip straight to the fallback instead.
+        // Callers handle null by sending clear track 2 (ARQC provides security).
+        if (!isDukptBuild()) {
+            Log.d(TAG, "encryptTrack2: skipped — not a DUKPT build (clear track 2 + ARQC)");
+            return null;
+        }
         if (track2Data == null || track2Data.isEmpty()) {
             Log.w(TAG, "DUKPT encryptTrack2: No track 2 data to encrypt");
             return null;
@@ -7839,7 +6533,7 @@ public class MainActivity extends AppCompatActivity {
         try {
             // Create Format 0 clear PIN block (with PAN XOR)
             String clearPinBlock = PinBlockFormatter.createFormat0PinBlock(pin, pan);
-            Log.d(TAG, "DUKPT PIN: Clear PIN block (Format 0): " + clearPinBlock);
+            Log.d(TAG, "DUKPT PIN: Clear PIN block created (Format 0)");
 
             // Convert to bytes for encryption
             byte[] pinBlockBytes = Converter.hexString2ByteArray(clearPinBlock);
@@ -7908,7 +6602,7 @@ public class MainActivity extends AppCompatActivity {
         try {
             // Create Format 0 clear PIN block (with PAN XOR)
             String clearPinBlock = PinBlockFormatter.createFormat0PinBlock(pin, pan);
-            Log.d(TAG, "WorkingKey PIN: Clear PIN block (Format 0): " + clearPinBlock);
+            Log.d(TAG, "WorkingKey PIN: Clear PIN block created (Format 0)");
 
             // Use CastleKeyManager for encryption (handles software/hardware automatically)
             if (atmHostService != null && atmHostService.getKeyManager() != null) {
@@ -8111,7 +6805,7 @@ public class MainActivity extends AppCompatActivity {
 
             // Summary for processor
             result.append("=== FOR PROCESSOR ===\n");
-            result.append("IPEK: 6AC292FAA1315B4D858AB3A3D7D5933A\n");
+            result.append("IPEK: [removed - see key ceremony docs]\n");
             result.append("Clear: " + clearBlock + "\n\n");
             result.append("DATA variant (" + ksn1Hex + "): " + enc1Hex + "\n");
             result.append("PIN variant  (" + ksn2Hex + "): " + enc2Hex + "\n\n");
@@ -9510,6 +8204,48 @@ public class MainActivity extends AppCompatActivity {
             Print = new CtPrint();
         }
 
+        /**
+         * Reads the raw CtPrint hardware status.
+         *
+         * @return status code (0 = OK), or -1 if the printer is unavailable.
+         *         Notable values: CtPrint.STATUS_NOPAPPER_ERR (3) = out of paper,
+         *         STATUS_HEADTEMP_ERR (2), STATUS_PLATENRELEASE_ERR (20).
+         */
+        public int getStatus() {
+            try {
+                if (Print == null) {
+                    Init();
+                }
+                return Print.status();
+            } catch (Exception e) {
+                Log.e(TAG, "Printer status read failed: " + e.getMessage());
+                return -1;
+            }
+        }
+
+        /**
+         * True when the printer reports it is out of paper.
+         * Used to warn the customer and to report honest paper state to the host.
+         */
+        public boolean isOutOfPaper() {
+            return getStatus() == CtPrint.STATUS_NOPAPPER_ERR;
+        }
+
+        /**
+         * Human-readable description of a CtPrint status code (for logs/UI).
+         */
+        public String getStatusText() {
+            int st = getStatus();
+            switch (st) {
+                case 0:                                return "OK";
+                case CtPrint.STATUS_NOPAPPER_ERR:      return "OUT OF PAPER";
+                case CtPrint.STATUS_HEADTEMP_ERR:      return "HEAD OVERHEATED";
+                case CtPrint.STATUS_PLATENRELEASE_ERR: return "PLATEN OPEN";
+                case -1:                               return "UNAVAILABLE";
+                default:                               return "ERROR (" + st + ")";
+            }
+        }
+
         public int goprintf() throws IOException {
 
             int page_len = 920;
@@ -9710,6 +8446,28 @@ public class MainActivity extends AppCompatActivity {
          * Print text content - simple text-based printing for ATM receipts
          * @param text The text to print (use \n for line breaks)
          */
+        /**
+         * A "separator" line is one made up only of '=' or '-' (the full-width
+         * rules on the receipt). These print at the small font so they keep
+         * spanning the paper; everything else prints larger.
+         */
+        private boolean isSeparatorLine(String line) {
+            if (line == null) {
+                return false;
+            }
+            String t = line.trim();
+            if (t.length() < 5) {
+                return false;
+            }
+            for (int i = 0; i < t.length(); i++) {
+                char c = t.charAt(i);
+                if (c != '=' && c != '-') {
+                    return false;
+                }
+            }
+            return true;
+        }
+
         public void printf(String text) throws IOException {
             if (Print == null) {
                 Init();
@@ -9723,26 +8481,42 @@ public class MainActivity extends AppCompatActivity {
             // Split text by newlines
             String[] lines = text.split("\n", -1);
 
-            // Calculate page height based on number of lines
-            int lineHeight = 20;
-            int pageHeight = lines.length * lineHeight + 100;
+            // Font sizing. Text lines print LARGER for readability; the full-width
+            // "====="/"-----" separators stay at the small font so they don't run
+            // off the 384-dot paper (drawText clips, it does not wrap). Tune the two
+            // FONT_* / LINE_* constants together — text char width grows with font,
+            // so very long data lines (e.g. Transaction ID) are the width limit.
+            final int FONT_TEXT       = 26;   // larger, readable body text
+            final int FONT_SEPARATOR  = 16;   // keep separators full-width & compact
+            final int LINE_H_TEXT     = 34;
+            final int LINE_H_SEP      = 22;
+            final int leftMargin      = 25;
+            final boolean PRINT_TEXT_BOLD = true;  // body text bold; separators light
 
+            // First pass: total page height (per-line, since line heights differ).
+            int pageHeight = 40;  // top/bottom padding
+            for (String line : lines) {
+                pageHeight += isSeparatorLine(line) ? LINE_H_SEP : LINE_H_TEXT;
+            }
             Print.initPage(pageHeight);
 
+            // Second pass: draw each line. Body text prints BOLD for legibility;
+            // separators stay light. 9-arg overload per SDK Print_demo example:
+            // drawText(x, y, text, fontSize, widthScale, bold, angle, underline, reverse)
             int currentY = 20;
-            int leftMargin = 25;
-            int fontSize = 16;
-
-            // Print each line
             for (String line : lines) {
-                // Print even empty lines (to preserve spacing), but skip null
+                boolean sep = isSeparatorLine(line);
                 if (line != null) {
-                    Print.drawText(leftMargin, currentY, line, fontSize);
+                    int font = sep ? FONT_SEPARATOR : FONT_TEXT;
+                    boolean bold = !sep && PRINT_TEXT_BOLD;
+                    Print.drawText(leftMargin, currentY, line, font, 1, bold, (float) 0, false, false);
                 }
-                currentY += lineHeight;
+                currentY += sep ? LINE_H_SEP : LINE_H_TEXT;
             }
 
-            // Print the page
+            // Print the page. Kept on printPage() (the proven path) — paper-out is
+            // detected up-front via getStatus()/isOutOfPaper() rather than by
+            // interpreting a print return code whose contract is unverified.
             Print.printPage();
         }
     }
@@ -10642,7 +9416,7 @@ public class MainActivity extends AppCompatActivity {
             Log.d(TAG, "Tag 5A (PAN): rtn=" + String.format("0x%08X", rtn) + ", len=" + tag5A.len);
             if (rtn == 0 && tag5A.len > 0) {
                 String hex = Converter.byteArray2HexString(tag5A.value, tag5A.len);
-                Log.d(TAG, "  5A hex = " + hex);
+                Log.d(TAG, "  5A hex = " + LogMask.pan(hex));
                 Log.d(TAG, "  Contains * (masked): " + hex.contains("*"));
             }
 
@@ -10655,7 +9429,7 @@ public class MainActivity extends AppCompatActivity {
             Log.d(TAG, "Tag 57 (Track2): rtn=" + String.format("0x%08X", rtn) + ", len=" + tag57.len);
             if (rtn == 0 && tag57.len > 0) {
                 String hex = Converter.byteArray2HexString(tag57.value, tag57.len);
-                Log.d(TAG, "  57 hex = " + hex);
+                Log.d(TAG, "  57 hex = " + LogMask.track2(hex));
                 Log.d(TAG, "  Contains * (masked): " + hex.contains("*"));
             }
 
@@ -10698,10 +9472,10 @@ public class MainActivity extends AppCompatActivity {
 
             // Log what we have in GlobalPara
             Log.d(TAG, "--- GlobalPara State ---");
-            Log.d(TAG, "  asciiPAN = " + GlobalPara.asciiPAN);
-            Log.d(TAG, "  atmTrack2Data = " + GlobalPara.atmTrack2Data);
-            Log.d(TAG, "  atmClearPan = " + GlobalPara.atmClearPan);
-            Log.d(TAG, "  atmEncryptedPinBlock = " + GlobalPara.atmEncryptedPinBlock);
+            Log.d(TAG, "  asciiPAN = " + LogMask.pan(GlobalPara.asciiPAN));
+            Log.d(TAG, "  atmTrack2Data = " + LogMask.track2(GlobalPara.atmTrack2Data));
+            Log.d(TAG, "  atmClearPan = " + LogMask.pan(GlobalPara.atmClearPan));
+            Log.d(TAG, "  atmEncryptedPinBlock = " + LogMask.pinBlock(GlobalPara.atmEncryptedPinBlock));
 
             Log.d(TAG, "=== END EMV TAG DUMP ===");
 
@@ -10738,11 +9512,11 @@ public class MainActivity extends AppCompatActivity {
             long panVal = Long.parseUnsignedLong(panPart, 16);
             long clearBlock = pinVal ^ panVal;
             String expectedClearPinBlock = String.format("%016X", clearBlock);
-            Log.d(TAG, "Expected clear PIN block (ISO-0): " + expectedClearPinBlock);
+            Log.d(TAG, "Expected clear PIN block (ISO-0): [masked]");
 
             // If we have a PIN block from the SDK, compare
             if (GlobalPara.atmEncryptedPinBlock != null && !GlobalPara.atmEncryptedPinBlock.isEmpty()) {
-                Log.d(TAG, "Current SDK PIN block: " + GlobalPara.atmEncryptedPinBlock);
+                Log.d(TAG, "Current SDK PIN block: " + LogMask.pinBlock(GlobalPara.atmEncryptedPinBlock));
                 Log.d(TAG, "(Note: SDK block is encrypted, can't compare directly)");
             } else {
                 Log.d(TAG, "No PIN block in GlobalPara yet");
