@@ -48,6 +48,141 @@ Template:
 
 ---
 
+## 6.2.12 — 2026-10-05 · PR #8 · base 6.2.11 · versionCode 74
+
+### Highlights
+
+**Tapped cards now go to the processor.** Until this release a tap was never sent to the host.
+The terminal read the card, took the PIN, and then declined the transaction itself with
+"91 — Host service not available" — a host response code for a request the host never saw. Only
+an inserted chip card actually reached the processor. **A register is answered at once when a
+transaction ends on the terminal.** A POS-driven transaction that finished locally used to
+leave the register waiting for the 300-second slot watchdog, and every POS command in between
+was refused as busy. Both were found from one field report (2026-10-05): a POS balance
+inquiry that "got a 91" and then took exactly 300 seconds to answer. It was a tap.
+
+### What operators and customers will notice
+
+- **Tap works like insert.** PIN, "Online Processing", the processor's answer, receipt. Walk-up
+  and register-driven alike.
+- **Swipe is still declined at the terminal** — there is no host path for swiped cards in this
+  app — but it now says so: the screen and receipt read **SWIPE NOT SUPPORTED** (code `MSR_NA`)
+  instead of "HOST SERVICE NOT AVAILABLE" / 91.
+- **A 91 now means the processor said 91.** Before 6.2.12 a 91 on a receipt, in the journal or
+  on the Detail Report's declined count could be the terminal's own decline of a tap or swipe.
+  (One exception remains — see Known issues.)
+- **At a POS site**, a transaction that ends on the terminal — swipe, unreadable card, card
+  read error, PIN pad abandoned, a terminal fault — reaches the register within a few seconds
+  as `declined` with a terminal code, and the terminal accepts the next POS command straight
+  away. Nothing changes for approvals, host declines or Cancel.
+- **A wrong PIN on a register sale no longer ends the sale at the register.** The customer
+  gets up to two more tries, as before; the register now hears the outcome — approved if a
+  retry succeeds, `declined 55` only once the terminal has stopped re-prompting.
+- **While a walk-up customer is at the terminal, the register is told so.** POS commands are
+  refused as busy (`customer transaction in progress`) from the moment the card prompt
+  appears, not only once the request is with the host.
+
+### Fixes
+
+**Transaction**
+
+- A tapped card was declined at the terminal as "91 / Host service not available" and never
+  sent to the processor. The contactless host send sat inside the branch for the sample app's
+  *QuickChip* checkbox, which nothing ever ticks, so it could not run; taps fell through to
+  the last branch of the chain. The routing is now an explicit, tested decision
+  (`OnlineRoute`): tap → host, inserted chip → host, swipe → terminal decline. `TAP-01`
+- The contactless send would have put a hex dump of the track in Field 6. The tap reader hands
+  Track 2 over as text (`;PAN=EXPIRY…?` plus an LRC byte); that block treated it as BCD.
+  `Track2PanExtractor.toHostTrack2` reads either encoding, drops the LRC, and falls back to
+  Tag 57 when the reader gives no track. A tap with no usable Track 2 at all is declined at the
+  terminal (`NO_TRACK2`, "Card not readable - insert card") rather than sent. `TAP-01`
+- Track 2 from a tap is validated before it goes into the host message. Those bytes come from
+  the card, and Field 6 sits in a field-separated message: only digits and one `=` within
+  ISO 7813 lengths are accepted, so a crafted card cannot add fields to the request. (Raised by
+  the security review of the first cut of this change, which copied the bytes.) `TAP-01`
+- A swiped card reported a made-up host code. It now reports `MSR_NA` / "Swipe not supported".
+  `TAP-01`
+
+**POS**
+
+- A POS transaction that ended on the terminal without a host result answered the register
+  only when the 300-second watchdog fired (as `host_unreachable`), and the terminal refused
+  POS commands as `terminal_busy` until then. Only the host callbacks and Cancel answered the
+  register. The transaction thread now remembers the POS slot it was started for and answers
+  it on every exit path if nothing else has: `declined`, with the terminal's own code and
+  reason (the ones the receipt shows), `user_cancelled` when nothing was recorded, or
+  `terminal_error` when the terminal itself failed. It stays silent while a request is still
+  with the host and after an approval, so a late approval can still land. `POS-13`
+- On a register sale, a first "55 Incorrect PIN" was reported to the register at once and the
+  POS slot released, while the terminal re-prompted the PIN and resent; an approval on the
+  retry found no slot and was never reported — money moved on a sale the register showed as
+  declined. A retryable 55 is now not reported (`PinRetryPolicy`); the register hears the
+  outcome: the approval through the normal hook, or the final 55 — attempt limit reached or
+  the customer gave up — from the thread-exit answer, with the host's code and reason. `POS-14`
+
+**Transaction**
+
+- `atmTransactionInProgress` was cleared on the line after it was set, by the host-response
+  reset that runs at the start of every transaction, so it was false for the whole
+  transaction — since the baseline. Every guard that read it (duplicate start, the POS
+  gateway's "customer transaction in progress", the printer and Detail Report guards) was
+  asleep during the card and PIN phase; only the thread-alive backstop prevented a second
+  transaction thread. The reset no longer touches the lifecycle flag and the flag is set after
+  the reset. The now-live duplicate-start guard ignores a second auto-click quietly instead of
+  writing "ERROR" on the customer's screen. `TXN-01`
+
+### Known issues and deferred
+
+- **Tap has not yet run against the processor.** See Verification. The first taps on the bench
+  decide whether the contactless EMV data (Field 13) is accepted as built.
+- **Swipe has no host path** (`MSR-01`). It needs the reader's encrypted track and a PIN-block
+  decision with the MUX; not in this release.
+- **PIN retries and the POS watchdog.** With POS-14 the slot stays armed through PIN retries.
+  Three attempts against a very slow host (the 120–150 s busy-MUX path) could outlast the
+  300 s watchdog, which would then answer the register before the final result. Not expected
+  with the processor answering in seconds; noted for the watchdog's next review (`POS-06`).
+- **The in-progress flag is live for the first time** (`TXN-01`). Every exit of the
+  transaction thread clears it; the bench pass below checks that a walk-up leaves the terminal
+  ready for the register afterwards.
+- Two "91 / Host service not available" assignments remain for *host service not initialised*.
+  They sit behind the readiness gate and are not expected to be reachable.
+- The proxy team's two requests in `CASTLE-HOST-TIMEOUT-91-2026-10-05.md` (fail fast on connect
+  failure; cap the host leg at 60 s) are **not** taken: the host leg was never started in the
+  reported cases, and a 60 s cap would abandon live authorizations on the busy path.
+
+### Verification
+
+- Unit suite: **309** tests (47 new: Track 2 for the host ×16 including hostile input,
+  routing ×6, slot-safe local answer ×5, register wording ×10, PIN retry policy ×8,
+  in-progress flag ×2). Each new test was watched failing first. The same three
+  pre-existing failures remain (`TEST-01`).
+- The defect itself is on record from the terminal: a tap on 2026-09-02 logged PIN accepted,
+  kernel result "go online", and the terminal's own decline in the same millisecond, with no
+  host connection.
+- **Device pass 2026-10-05, terminal 000195250201680, debug build of this branch, EFX live:**
+  - Register-driven **tap balance inquiry**: route `CONTACTLESS_HOST`, Track 2 40 bytes in /
+    39 characters out (LRC dropped), Field 13 with 9F39 = 07, EFX approved 00 with the balance
+    1.4 s after connect, register answered 8 s after its request, journal row written, receipt
+    last-4 matches the card. The first tap this app has ever sent to a processor.
+  - Register-driven **tap sale** $10.00: terminal fee $3.50 applied, chip amount $13.50, EFX
+    approved with a reference number, register reply carries the applied fee, journal row
+    written, receipt printed with matching amounts.
+  - Both transactions shared the one register slot correctly: no late answer, no watchdog.
+  - No errors or warnings in the log between or after the tests; the six-minute health checks
+    ran as before.
+- **Not exercised on a terminal before shipping** (shipped on the user's call with the above):
+  a walk-up tap from the terminal menu (same card and host path as the register flows; only
+  the amount entry differs); swipe from the register (`MSR_NA`); abandoning the PIN pad
+  (`user_cancelled`); an inserted chip as a regression check; wrong PIN then right PIN on a
+  register sale (`POS-14`); a POS command during a walk-up (`terminal_busy`, `TXN-01`); a
+  Mastercard tap (`TAP-02`). Run these on the next bench session; an inserted chip first.
+
+### Upgrade notes
+
+Plain-install push from CasHUB. No parameter changes, no configuration migration.
+
+---
+
 ## 6.2.11 — 2026-10-01 · PR #7 · base 6.2.10 · versionCode 73
 
 ### Highlights

@@ -351,6 +351,12 @@ public class GlobalPara
 		atmHostCallInProgress = false;
 		atmHostCallSuccess = false;
 		atmTransactionComplete = false;
-		atmTransactionInProgress = false;
+		// NOT atmTransactionInProgress: that is the transaction's lifecycle flag, owned by
+		// MainActivity (set when a transaction starts, cleared on every exit of the
+		// transaction thread). This method is called at the START of a transaction, one
+		// line after the flag is set; clearing it here left the flag false for the whole
+		// transaction, so every guard that read it (duplicate start, POS "customer
+		// transaction in progress", printer and report guards) was asleep during the card
+		// and PIN phase — since the baseline (TXN-01, 6.2.12).
 	}
 }

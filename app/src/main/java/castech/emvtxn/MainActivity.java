@@ -1073,9 +1073,21 @@ public class MainActivity extends AppCompatActivity {
                             } else {
                                 Log.e(TAG, ">>> CALLBACK onTransactionDeclined: LATCH IS NULL - cannot signal!");
                             }
-                            // POS hook (no-op if no POS callback is armed)
-                            castech.emvtxn.pos.PosTransactionObserver.notifyDeclined(
-                                    responseCode, responseMessage, retainCard);
+                            // POS hook (no-op if no POS callback is armed). A "55 Incorrect
+                            // PIN" that the terminal will re-try with a fresh PIN is NOT the
+                            // outcome and is not reported: the register hears an approval on
+                            // the retry through onTransactionApproved, or a final 55 from the
+                            // transaction thread's exit (answerPosIfEndedLocally). Reporting it
+                            // here released the slot, and a retry approval was never told to
+                            // the register (POS-14).
+                            if (castech.emvtxn.atm.host.PinRetryPolicy.reportDeclineToRegisterNow(
+                                    PIN_RETRY_ON_INCORRECT, responseCode)) {
+                                castech.emvtxn.pos.PosTransactionObserver.notifyDeclined(
+                                        responseCode, responseMessage, retainCard);
+                            } else if (castech.emvtxn.pos.PosTransactionObserver.isArmed()) {
+                                Log.w(TAG, "POS hook: 55 Incorrect PIN not reported to the register — "
+                                        + "it hears the outcome (retry approval, final 55, or cancel)");
+                            }
                         }
 
                         @Override
@@ -2874,10 +2886,13 @@ public class MainActivity extends AppCompatActivity {
         // Show immediate feedback that button was clicked
         ui_ShowMsg("BTN CLICKED!\n");
 
-        // Prevent starting a new transaction while one is in progress
+        // Prevent starting a new transaction while one is in progress. Live since
+        // TXN-01 (6.2.12): before that the flag was cleared on the line after it was set,
+        // so this guard never fired and the thread-alive backstop below did its job. A
+        // second auto-click from the transaction page lands here now; it is ignored
+        // quietly — the running transaction owns the customer's screen.
         if (GlobalPara.atmTransactionInProgress) {
             Log.w(TAG, "Transaction already in progress, ignoring click");
-            ui_ShowMsg("ERROR: Txn already in progress\n");
             return 0;
         }
 
@@ -2947,11 +2962,13 @@ public class MainActivity extends AppCompatActivity {
         // Simple cleanup - just clear old thread reference (NO SDK calls)
         threadTxn = null;
 
-        // Reset flags and mark transaction as in progress
+        // Reset flags, then mark the transaction as in progress — in that order. The
+        // reset used to come second AND clear this flag (TXN-01), so it was false for
+        // the whole transaction. It is cleared on every exit of the transaction thread.
         resetAbortFlag();
         inCardDetectionLoop = false;  // Will be set true when we enter the loop
-        GlobalPara.atmTransactionInProgress = true;
         GlobalPara.resetATMHostResponse();
+        GlobalPara.atmTransactionInProgress = true;
 
         ui_ShowMsg("Creating thread...\n");
         Log.d(TAG, "About to create Thread object");
@@ -2966,6 +2983,12 @@ public class MainActivity extends AppCompatActivity {
             @Override
             public void run() {
                 Log.d(TAG, "Transaction thread started");
+
+                // POS-13 (6.2.12): the POS slot this transaction was started for (null for
+                // a walk-up). Whatever way this thread ends, the finally below answers that
+                // slot if nothing else has — see answerPosIfEndedLocally().
+                final Object posSlot = castech.emvtxn.pos.PosTransactionObserver.armedToken();
+                final String[] threadError = { null };
 
                 // DUKPT diagnostic tests REMOVED - they were slowing down transactions
                 // and incrementing the KSN counter unnecessarily
@@ -3021,6 +3044,7 @@ public class MainActivity extends AppCompatActivity {
                 if (!sdkInitialized) {
                     Log.e(TAG, "SDK not initialized! Cannot process transaction.");
                     ui_ShowMsg("Error: SDK not initialized. Please restart app.");
+                    threadError[0] = "SDK not initialized";   // POS-13: tell the register why
                     GlobalPara.atmTransactionInProgress = false;
                     ui_EnableAllButton();
                     return;
@@ -3031,6 +3055,7 @@ public class MainActivity extends AppCompatActivity {
                     Log.e(TAG, "Critical SDK objects are null! emv=" + (emv != null) +
                             ", emvcl=" + (emvcl != null) + ", msr=" + (msr != null) + ", sc=" + (sc != null));
                     ui_ShowMsg("Error: Card reader not ready. Please restart app.");
+                    threadError[0] = "card reader not ready";   // POS-13: tell the register why
                     GlobalPara.atmTransactionInProgress = false;
                     ui_EnableAllButton();
                     return;
@@ -4536,7 +4561,19 @@ public class MainActivity extends AppCompatActivity {
                     }
 
                     if (GlobalPara.transactionResult == 0x0004) {
-                        if (GlobalPara.isQuickChipTransaction == true && entryMode == GlobalDef.d_ENTRY_MODE_CT) {
+                        // TAP-01 (6.2.12): which online path this card takes — see OnlineRoute.
+                        // The contactless host send below used to sit INSIDE the
+                        // "QuickChip && contact" branch. QuickChip is the sample app's checkbox
+                        // and is never ticked, so that send could not run: every tapped card
+                        // fell through to the last branch and was declined at the terminal as
+                        // "91 / Host service not available" without the processor ever being
+                        // contacted (S1F4 PRO 2026-09-02; POS site 2026-10-05). Only an
+                        // inserted chip reached the host.
+                        final OnlineRoute onlineRoute =
+                                OnlineRoute.of(entryMode, GlobalPara.isQuickChipTransaction);
+                        Log.d(TAG, "Online route: " + onlineRoute + " (entryMode=" + entryMode + ")");
+
+                        if (onlineRoute == OnlineRoute.QUICK_CHIP_CONTACT) {
                             Log.d(TAG, "txnCompletion for QuickChip ***********************************************");
                             //Unable go onlne
                             EMVOnlineResponseData onlineRspData = new EMVOnlineResponseData();
@@ -4568,7 +4605,10 @@ public class MainActivity extends AppCompatActivity {
                                 } while (strAmt.isEmpty() == true);
                             }
                             finalAmount = Converter.hexString2ByteArray(strAmt);
+                        }
 
+                        if (onlineRoute == OnlineRoute.CONTACTLESS_HOST
+                                || onlineRoute == OnlineRoute.QUICK_CHIP_CONTACT) {
                             ui_ShowMsg("Online Processing ... \n");
 
                             // ATM HOST - Send actual transaction to server
@@ -4579,14 +4619,31 @@ public class MainActivity extends AppCompatActivity {
                                 CastleCardData cardData = new CastleCardData();
                                 cardData.setEntryMode(CastleCardData.ENTRY_MODE_CONTACTLESS);
 
-                                // Get Track 2 from rcData if available and encrypt with DUKPT
+                                // Track 2 for Field 6 (TAP-01). On this terminal the contactless
+                                // kernel hands Track 2 over as ASCII text (";PAN=...?" plus an LRC
+                                // byte). This block used to hex-dump that buffer as if it were
+                                // BCD-packed, which would have sent ";3B3434...?" to the processor
+                                // had the block ever run. toHostTrack2 reads either encoding. When
+                                // the kernel gave no track, fall back to Tag 57 (Track 2 Equivalent,
+                                // BCD) from this tap's own chip data.
+                                String track2Ascii = null;
                                 if (rcData != null && rcData.track2Len > 0) {
-                                    String track2Hex = Converter.byteArray2HexString(rcData.track2Data, rcData.track2Len);
-                                    // Strip trailing 'F' padding from BCD-encoded track 2
-                                    track2Hex = track2Hex.toUpperCase().replaceAll("F+$", "");
-                                    String track2Ascii = ";" + track2Hex.replace("D", "=") + "?";
+                                    track2Ascii = Track2PanExtractor.toHostTrack2(rcData.track2Data, rcData.track2Len);
+                                    Log.d(TAG, "ATM HOST (CL): Track2 from rcData [" + rcData.track2Len + " bytes]"
+                                            + (track2Ascii == null ? " - not usable" : ""));
+                                }
+                                if (track2Ascii == null) {
+                                    TLVData.tag = 0x57;
+                                    TLVData.len = 256;
+                                    TLVData.value = new byte[256];
+                                    if (tlvUtility.TLVDataGet(TLVData) == 0 && TLVData.len > 0) {
+                                        track2Ascii = Track2PanExtractor.toHostTrack2(TLVData.value, TLVData.len);
+                                        Log.d(TAG, "ATM HOST (CL): Track2 from Tag 57 [" + TLVData.len + " bytes]"
+                                                + (track2Ascii == null ? " - not usable" : ""));
+                                    }
+                                }
 
-                                    Log.d(TAG, "ATM HOST (CL): Track2 raw hex: " + LogMask.len(track2Hex));
+                                if (track2Ascii != null) {
                                     Log.d(TAG, "ATM HOST (CL): Track2 ASCII: " + LogMask.track2(track2Ascii));
 
                                     // Try to encrypt track 2 with DUKPT
@@ -4600,7 +4657,7 @@ public class MainActivity extends AppCompatActivity {
                                         Log.d(TAG, "  KSN: " + encryptedTrack2.ksn);
 
                                         // Also set clear track 2 for processor (if not masked)
-                                        if (!track2Hex.contains("2A") && !track2Ascii.contains("*")) {
+                                        if (!track2Ascii.contains("*")) {
                                             cardData.setTrack2Data(track2Ascii);
                                             Log.d(TAG, "ATM HOST (CL): Track2 CLEAR also set");
                                         } else {
@@ -4608,7 +4665,7 @@ public class MainActivity extends AppCompatActivity {
                                         }
                                     } else {
                                         // Encryption failed - try to send clear track if not masked
-                                        if (!track2Hex.contains("2A") && !track2Ascii.contains("*")) {
+                                        if (!track2Ascii.contains("*")) {
                                             cardData.setTrack2Data(track2Ascii);
                                             Log.d(TAG, "ATM HOST (CL): Track2 set (clear, encryption failed)");
                                         } else {
@@ -4670,7 +4727,18 @@ public class MainActivity extends AppCompatActivity {
                                 // Send to host — loops PIN entry on "55 Incorrect PIN"
                                 // (see sendAtmHostRequestWithPinRetry / PIN_RETRY_ON_INCORRECT)
                                 String acctType = GlobalPara.getHyosungAccountType();
-                                sendAtmHostRequestWithPinRetry(cardData, amountCents, surchargeCents, acctType, "CL");
+                                if (track2Ascii != null) {
+                                    sendAtmHostRequestWithPinRetry(cardData, amountCents, surchargeCents, acctType, "CL");
+                                } else {
+                                    // Nothing the host could identify the card by — a request without
+                                    // Track 2 can only be rejected. End it here, with a reason that
+                                    // says what happened, instead of contacting the processor.
+                                    Log.e(TAG, "ATM HOST (CL): no Track 2 from this tap (rcData or Tag 57) - "
+                                            + "declining at the terminal, host NOT contacted");
+                                    GlobalPara.atmResponseCode = "NO_TRACK2";
+                                    GlobalPara.atmResponseMessage = "Card not readable - insert card";
+                                    GlobalPara.atmHostCallSuccess = false;
+                                }
 
                                 // Check if transaction was approved
                                 if (GlobalPara.atmHostCallSuccess) {
@@ -4688,7 +4756,7 @@ public class MainActivity extends AppCompatActivity {
                                 GlobalPara.atmResponseMessage = "Host service not available";
                                 GlobalPara.atmHostCallSuccess = false;
                             }
-                        } else if (entryMode == GlobalDef.d_ENTRY_MODE_CT) {
+                        } else if (onlineRoute == OnlineRoute.CONTACT_HOST) {
                             ui_ShowMsg("Online Processing ... \n");
 
                             // ATM HOST - Send actual transaction to server for contact chip
@@ -4925,11 +4993,19 @@ public class MainActivity extends AppCompatActivity {
                             ui_ShowMsg("Remove card !");
                             MyUtility.sleep(2500);
                         } else {
-                            // MSR or other entry mode - Host not available, DECLINE
-                            Log.e(TAG, "ATM HOST (MSR): Host service not available - DECLINING transaction");
+                            // OnlineRoute.NO_HOST_PATH — a swiped card. There is no host send
+                            // for swipe in this app, so it ends here, at the terminal.
+                            //
+                            // This used to report "91 / Host service not available" — a host
+                            // response code for a transaction the host never saw, which read
+                            // (on the receipt, in the journal and to support) as the processor
+                            // being down. It is the terminal's own decline: say so, with a
+                            // terminal code. (Until 6.2.12 tapped cards landed here too.)
+                            Log.e(TAG, "ATM HOST: entry mode " + entryMode + " has no host path (swipe) - "
+                                    + "declining at the terminal, host NOT contacted");
                             GlobalPara.transactionResult = 0x0003;  // Declined
-                            GlobalPara.atmResponseCode = "91";
-                            GlobalPara.atmResponseMessage = "Host service not available";
+                            GlobalPara.atmResponseCode = "MSR_NA";
+                            GlobalPara.atmResponseMessage = "Swipe not supported";
                             GlobalPara.atmHostCallSuccess = false;
                         }
 
@@ -5047,10 +5123,14 @@ public class MainActivity extends AppCompatActivity {
               } catch (Throwable t) {
                 // Catch any error inside the thread's run() method (including Errors)
                 Log.e(TAG, "Error in transaction thread: " + t.getMessage(), t);
+                threadError[0] = t.getClass().getSimpleName();
                 final String errorMsg = "Thread error: " + t.getClass().getSimpleName() + "\n" + t.getMessage();
                 ui_ShowMsg(errorMsg);
                 GlobalPara.atmTransactionInProgress = false;
                 ui_EnableAllButton();
+              } finally {
+                // Every exit from this thread — the end above, an early return, a throw.
+                answerPosIfEndedLocally(posSlot, threadError[0]);
               }
             }
 
@@ -5659,6 +5739,53 @@ public class MainActivity extends AppCompatActivity {
         return "CARD";
     }
 
+    /**
+     * POS-13 (6.2.12): a POS-driven transaction that finished on the terminal answers the
+     * register NOW.
+     *
+     * <p>The register used to be answered only by the host callbacks (approved, declined,
+     * balance, error) and by Cancel. A transaction that ended locally — a card with no
+     * host path, a read error, an abandoned PIN pad, a failure in this thread — showed
+     * its result on the terminal and left the POS slot armed until the 300 s watchdog,
+     * which then reported host_unreachable; meanwhile the register had timed out and
+     * every POS command was refused as terminal_busy. Seen at a POS site 2026-10-05 as
+     * "the terminal took exactly 300 seconds to answer".
+     *
+     * <p>Called from the transaction thread's finally, so it covers every exit. It only
+     * ever answers the slot this transaction started with, and only if nothing else has
+     * (see PosTransactionObserver.notifyDeclinedIf): after a host result it is a no-op.
+     * It says nothing while a request is still with the host layer or after an approval
+     * (see PosLocalEnding). Never throws.
+     *
+     * @param posSlot the slot armed when the thread started (null for a walk-up)
+     * @param threadError what failed, when the terminal itself ended the transaction (a
+     *        Throwable's class name, "card reader not ready", ...); null otherwise
+     */
+    private void answerPosIfEndedLocally(Object posSlot, String threadError) {
+        if (posSlot == null) return;   // walk-up transaction: no register to answer
+        try {
+            boolean hostCallInFlight = atmHostService != null && atmHostService.isTransactionInProgress();
+            castech.emvtxn.pos.PosLocalEnding ending = castech.emvtxn.pos.PosLocalEnding.decide(
+                    hostCallInFlight, GlobalPara.atmHostCallSuccess,
+                    GlobalPara.atmResponseCode, GlobalPara.atmResponseMessage, threadError);
+            if (ending == null) {
+                if (castech.emvtxn.pos.PosTransactionObserver.armedToken() == posSlot) {
+                    Log.w(TAG, "POS: transaction thread ended with the register unanswered and "
+                            + (hostCallInFlight ? "a host call still in flight" : "the host approved")
+                            + " — leaving the answer to the host result / watchdog");
+                }
+                return;
+            }
+            if (castech.emvtxn.pos.PosTransactionObserver.notifyDeclinedIf(
+                    posSlot, ending.responseCode, ending.message, false)) {
+                Log.w(TAG, "POS: transaction ended at the terminal with no host result — register told: "
+                        + "declined rc=" + ending.responseCode + " (" + ending.message + ")");
+            }
+        } catch (Throwable t) {
+            Log.e(TAG, "answerPosIfEndedLocally failed: " + t.getMessage(), t);
+        }
+    }
+
     // ── PIN retry on incorrect PIN (response code 55) ────────────────────────
     // The STD1 spec marks code 55 as "Decline, allow retry": instead of ending the
     // transaction, re-prompt the PIN and resubmit with the SAME card/EMV data and a
@@ -5740,16 +5867,17 @@ public class MainActivity extends AppCompatActivity {
                 GlobalPara.atmHostCallInProgress = false;
             }
 
-            // Anything other than a retryable incorrect-PIN decline is final.
-            if (!PIN_RETRY_ON_INCORRECT
-                    || GlobalPara.atmHostCallSuccess
-                    || !castech.emvtxn.atm.host.HyosungProtocol.RESP_INCORRECT_PIN
-                            .equals(GlobalPara.atmResponseCode)) {
-                return;
-            }
-            if (attempt >= PIN_MAX_ATTEMPTS) {
-                Log.w(TAG, "ATM HOST (" + pathTag + "): Incorrect PIN — local attempt limit reached ("
-                        + PIN_MAX_ATTEMPTS + ")");
+            // Anything other than a retryable incorrect-PIN decline is final (PinRetryPolicy
+            // is also what keeps the POS decline hook from reporting a 55 that is about to
+            // be retried — POS-14). A final 55 reaches the register from the thread's exit
+            // (answerPosIfEndedLocally) with the host's code and reason.
+            if (!castech.emvtxn.atm.host.PinRetryPolicy.shouldRetry(PIN_RETRY_ON_INCORRECT,
+                    GlobalPara.atmHostCallSuccess, GlobalPara.atmResponseCode, attempt, PIN_MAX_ATTEMPTS)) {
+                if (castech.emvtxn.atm.host.PinRetryPolicy.isRetryableDecline(
+                        PIN_RETRY_ON_INCORRECT, GlobalPara.atmResponseCode)) {
+                    Log.w(TAG, "ATM HOST (" + pathTag + "): Incorrect PIN — local attempt limit reached ("
+                            + PIN_MAX_ATTEMPTS + ")");
+                }
                 return;
             }
 
