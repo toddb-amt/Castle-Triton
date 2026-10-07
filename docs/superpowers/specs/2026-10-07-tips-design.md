@@ -32,9 +32,9 @@ carried a TIP column since 6.2.11 waiting for this.
 |---|---|---|---|
 | `tips_enabled` | `true` / `false` / `1` / `0` | false | Enables the tip screen in both flows. Shown read-only on the Admin managed-configuration card as `Tips: on/off`. |
 
-Parsed through a `TipParams` class in the style of `PosParams` (or folded into the host-config mapping
-as a boolean, like `use_flat_fee`; the plan picks one — the behaviour is identical). Invalid values are
-logged and ignored.
+Handled in the host-config mapping (`KmsConfigStore.applyPayload`) as a boolean exactly like
+`use_flat_fee`, stored as `GlobalPara.atmTipsEnabled` and persisted with the other managed settings.
+Invalid values are logged and ignored. (No separate parser class: one boolean does not justify one.)
 
 ## 4. The tip screen — `Fragment_page_tip`
 
@@ -137,8 +137,8 @@ tip; any change to Host Totals or the STD1 sequence.
 
 ## 10. Files
 
-New: `Fragment_page_tip` + `res/layout/fragment_page_tip.xml`, `TipQuote`, `TipParams` (or a key in the
-host-config mapping), receipt money-block formatter (pure).
+New: `Fragment_page_tip` + `res/layout/fragment_page_tip.xml`, `TipQuote`, receipt money-block
+formatter (pure).
 Changed: `GlobalDef` (page constant), `MainActivity` (pager page, navigation), `Fragment_page_amount_selection`
 (navigate to tip), `AtmHostServiceGateway` (navigate to tip; register rounding on), `Fragment_page_receipt`,
 `atm/report/DetailReport` + `ReportRow`, `pos/PosTransactionExecutor` + `PosTerminalGateway.TransactionResult`
