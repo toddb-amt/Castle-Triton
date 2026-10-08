@@ -2372,6 +2372,11 @@ public class MainActivity extends AppCompatActivity {
     }
 
     // Helper method for page navigation
+    /** TIP-01: whether the pager is showing this page right now (a resumed-but-offscreen page must not act). */
+    public boolean isCurrentPage(int pageIndex) {
+        return mViewPager != null && mViewPager.getCurrentItem() == pageIndex;
+    }
+
     public void navigateToPage(int pageIndex) {
         Log.d(TAG, "navigateToPage() called with pageIndex=" + pageIndex + " (current=" +
             (mViewPager != null ? mViewPager.getCurrentItem() : "null") + ")");

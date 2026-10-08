@@ -115,9 +115,17 @@ the proxy team should be told.
   the four reset sites that left `atmAmounts` stale (6.2.13 review minor M7) use `clearAmounts()`.
 - `RegisterAmounts` (pure) builds the register breakdown with rounding on; `ReceiptMoneyBlock`
   (pure) formats the money block; `ReportRow` carries sale and cash back.
-- Unit suite: **424** tests (36 new: TipQuote ×15, tips parameter ×5, register amounts ×4,
-  POS reply ×2, receipt block ×5, Detail Report ×3, GlobalPara ×2). Each new behaviour was watched
-  failing first. The same three pre-existing failures remain (`TEST-01`).
+- **Fresh whole-branch review (2026-10-08)** found two Important issues, both fixed test-first before
+  shipping: (1) the tip page's 30 s timer could be re-armed by the pager resuming it while another
+  page (Admin) was current and then start a card read on a stale amount — now a `TipScreenGuard`
+  allows one decision per showing and only while the page is current; (2) rounding a register sale
+  could carry the withdrawal past `max_amount` when the maximum is not a multiple of the step (min
+  $30, max $500, sale $490 → $510) — the register is now answered `invalid_request` with the reason,
+  and a register amount already above the maximum is refused the same way (T6). Seven minors deferred
+  in `docs/CODE-REVIEW-BACKLOG.md`.
+- Unit suite: **431** tests (43 new: TipQuote ×15, tips parameter ×5, register amounts ×7, screen
+  guard ×4, POS reply ×2, receipt block ×5, Detail Report ×3, GlobalPara ×2). Each new behaviour was
+  watched failing first. The same three pre-existing failures remain (`TEST-01`).
 
 ## 6.2.13 — 2026-10-08 · PR #9 · base 6.2.12 · versionCode 75
 

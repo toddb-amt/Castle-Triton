@@ -173,6 +173,14 @@ public final class AtmHostServiceGateway implements PosTerminalGateway {
                 callback.onError(PosWire.ERR_INTERNAL, "terminal fee configuration invalid: " + bad.getMessage());
                 return;
             }
+            // T6: the maximum applies to the withdrawal (review 6.2.14 #2) — refuse, never charge over the cap
+            String over = RegisterAmounts.overMaximum(amounts, castech.emvtxn.Money.toCents(GlobalPara.atmMaxAmount),
+                    castech.emvtxn.Money.toCents(GlobalPara.atmMinAmount));
+            if (over != null) {
+                Log.w(TAG, "POS sale refused: " + over);
+                callback.onError(PosWire.ERR_INVALID_REQUEST, over);
+                return;
+            }
             if (surchargeCents > 0 && surchargeCents != amounts.fee) {
                 Log.w(TAG, "POS sent surcharge=" + surchargeCents + " cents; terminal fee config governs: "
                         + amounts.fee + " cents (reply carries the applied value)");

@@ -242,6 +242,10 @@ Registration error codes:
   sale **up to its `min_amount` step** (as a walk-up custom amount always did): a $12.50 sale becomes a
   $20.00 withdrawal and the customer receives $7.50 back. Both fields are always present on an
   approved sale (additive; the request format is unchanged).
+- **Maximum (6.2.14+):** the terminal's `max_amount` applies to the rounded withdrawal. A sale whose
+  rounded withdrawal would exceed it — including a sale already above the maximum — is answered
+  `error invalid_request` with a message such as `withdrawal $510.00 exceeds the terminal's maximum
+  $500.00 after rounding $490.00 up to the $30.00 step`. Nothing is charged.
 
 **Response (declined):**
 ```json

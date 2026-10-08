@@ -30,7 +30,8 @@ import java.util.Locale;
  *
  * <p>LIFE-02 lesson: the timer must never fire into the card phase — it is cancelled on every exit
  * (choice, cancel, onPause, onDestroyView, and {@link #onHidden()} from MainActivity.navigateToPage),
- * and a {@code decided} flag makes every path one-shot.
+ * and a {@link TipScreenGuard} makes every path one-shot and only valid while the page is shown: the
+ * pager resumes every attached page, so onResume can run while Admin is current (review 6.2.14 #1).
  */
 public class Fragment_page_tip extends Fragment {
 
@@ -54,7 +55,7 @@ public class Fragment_page_tip extends Fragment {
     private final NumberFormat currency = NumberFormat.getCurrencyInstance(Locale.US);
 
     private TipQuote quote;
-    private boolean decided;
+    private final TipScreenGuard guard = new TipScreenGuard();
     private AlertDialog openDialog;
 
     public Fragment_page_tip() {}
@@ -94,24 +95,30 @@ public class Fragment_page_tip extends Fragment {
 
     /** Called by MainActivity.navigateToPage when this page becomes current (the pager does not resume it). */
     public void onShown() {
-        decided = false;
         AmountBreakdown noTip = GlobalPara.atmAmounts;
         if (noTip == null || noTip.sale <= 0) {
             // Nothing to tip on — never stay here. Callers check TipQuote.offer first; this is the belt.
-            Log.w(TAG, "shown without a sale — going straight to the card");
+            Log.e(TAG, "shown without a sale — going straight to the card (tips skipped this transaction)");
+            guard.onHidden();
+            quote = null;
             goToCard();
             return;
         }
         quote = TipQuote.of(noTip, Money.toCents(GlobalPara.atmMinAmount), Money.toCents(GlobalPara.atmMaxAmount),
                 GlobalPara.atmUseFlatFee, GlobalPara.atmFlatFeeAmount, GlobalPara.atmPercentageFee);
+        guard.onShown();
         render();
         restartTimer();
     }
 
-    /** Called by MainActivity.navigateToPage when leaving this page by any route. */
-    public void onHidden() { stopTimer(); }
+    /** Called by MainActivity.navigateToPage when leaving this page by any route: nothing may act afterwards. */
+    public void onHidden() {
+        stopTimer();
+        guard.onHidden();
+        quote = null;
+    }
 
-    @Override public void onResume() { super.onResume(); if (quote != null && !decided) restartTimer(); }
+    @Override public void onResume() { super.onResume(); if (quote != null && guard.isOpen() && isCurrentPage()) restartTimer(); }
     @Override public void onPause() { stopTimer(); super.onPause(); }
     @Override public void onDestroyView() { stopTimer(); super.onDestroyView(); }
 
@@ -138,9 +145,14 @@ public class Fragment_page_tip extends Fragment {
         openDialog = null;
     }
 
+    /** True when the pager is actually showing this page — a resumed-but-offscreen page must not act. */
+    private boolean isCurrentPage() {
+        return mainActivity == null || mainActivity.isCurrentPage(GlobalDef.d_PAGE_TIP);
+    }
+
     private void choose(AmountBreakdown amounts) {
-        if (decided) return;              // one-shot: a late timer or a double tap must not navigate twice
-        decided = true;
+        if (!isCurrentPage()) { onHidden(); return; }     // left by a route that bypassed navigateToPage
+        if (!guard.decide()) return;      // one-shot: a late timer or a double tap must not navigate twice
         stopTimer();
         if (amounts == null) amounts = GlobalPara.atmAmounts;
         GlobalPara.applyAmounts(amounts);
@@ -153,8 +165,8 @@ public class Fragment_page_tip extends Fragment {
     }
 
     private void cancel() {
-        if (decided) return;
-        decided = true;
+        if (!isCurrentPage()) { onHidden(); return; }
+        if (!guard.decide()) return;
         stopTimer();
         boolean register = castech.emvtxn.pos.PosTransactionObserver.isArmed();
         if (register) {

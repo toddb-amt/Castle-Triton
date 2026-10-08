@@ -1,6 +1,8 @@
 package castech.emvtxn.pos;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 
 import org.junit.Test;
 
@@ -34,6 +36,29 @@ public class RegisterAmountsTest {
         AmountBreakdown a = RegisterAmounts.of(4_00, 10_00, true, 3.50, 0.0);
         assertEquals(10_00, a.withdrawal);
         assertEquals(6_00, a.cashBack);
+    }
+
+    @Test
+    public void roundingThatCrossesTheMaximum_isReportedNotCharged() {
+        // Review 6.2.14 Important #2: min $30, max $500, register sale $490 → rounds to $510, above the cap.
+        // T6: the maximum applies to the withdrawal. The register gets an error, the customer is not charged.
+        AmountBreakdown a = RegisterAmounts.of(490_00, 30_00, true, 3.50, 0.0);
+        assertEquals(510_00, a.withdrawal);
+        String why = RegisterAmounts.overMaximum(a, 500_00, 30_00);
+        assertTrue(why, why != null && why.contains("$510.00") && why.contains("$500.00") && why.contains("$30.00"));
+    }
+
+    @Test
+    public void aSaleWithinTheMaximum_hasNoObjection() {
+        assertNull(RegisterAmounts.overMaximum(RegisterAmounts.of(480_00, 30_00, true, 3.50, 0.0), 500_00, 30_00));
+        assertNull(RegisterAmounts.overMaximum(RegisterAmounts.of(500_00, 20_00, true, 3.50, 0.0), 500_00, 20_00));   // exactly at the cap
+    }
+
+    @Test
+    public void aRegisterAmountAlreadyAboveTheMaximum_isAlsoReported() {
+        // The register path never enforced max_amount; T6 now covers it on the rounded withdrawal.
+        String why = RegisterAmounts.overMaximum(RegisterAmounts.of(600_00, 20_00, true, 3.50, 0.0), 500_00, 20_00);
+        assertTrue(why, why != null && why.contains("$600.00"));
     }
 
     @Test(expected = IllegalArgumentException.class)
