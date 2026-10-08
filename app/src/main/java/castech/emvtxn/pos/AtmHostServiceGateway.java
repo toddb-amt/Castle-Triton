@@ -157,16 +157,15 @@ public final class AtmHostServiceGateway implements PosTerminalGateway {
         // fragment's writes.
         GlobalPara.atmBalanceInquiryMode = balanceInquiry;
         GlobalPara.atmAccountType = acctTypeCode;
-        // AMT-03: one breakdown. D7 stands: the register's surcharge is advisory; the terminal's
-        // fee configuration governs. 6.2.13 keeps register sales EXACT (roundToStep = false) —
-        // identical charges to 6.2.12; 6.2.14 turns rounding on together with tips.
+        // One breakdown (AMT-03). D7 stands: the register's surcharge is advisory; the terminal's
+        // fee configuration governs. From 6.2.14 a register sale ROUNDS to the step like a walk-up
+        // custom amount (T5): $12.50 → $20.00 withdrawal, $7.50 cash back.
         final castech.emvtxn.AmountBreakdown amounts;
         if (balanceInquiry) {
             amounts = castech.emvtxn.AmountBreakdown.balanceInquiry();
         } else {
             try {
-                amounts = castech.emvtxn.AmountBreakdown.of(amountCents, 0L,
-                        castech.emvtxn.Money.toCents(GlobalPara.atmMinAmount), false,
+                amounts = RegisterAmounts.of(amountCents, castech.emvtxn.Money.toCents(GlobalPara.atmMinAmount),
                         GlobalPara.atmUseFlatFee, GlobalPara.atmFlatFeeAmount, GlobalPara.atmPercentageFee);
             } catch (IllegalArgumentException bad) {
                 // Fee configuration that cannot be charged (review I4): answer the register, never crash.
