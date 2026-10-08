@@ -178,8 +178,7 @@ public final class AtmHostServiceGateway implements PosTerminalGateway {
                         + amounts.fee + " cents (reply carries the applied value)");
             }
         }
-        final long appliedSurchargeCents = amounts.fee;
-        final long appliedTotalCents = amounts.total;
+        final castech.emvtxn.AmountBreakdown armed = amounts;
         GlobalPara.atmAmounts = amounts;
         GlobalPara.atmSelectedAmount = castech.emvtxn.Money.dollars(amounts.withdrawal);
         GlobalPara.atmFee = castech.emvtxn.Money.dollars(amounts.fee);
@@ -187,8 +186,8 @@ public final class AtmHostServiceGateway implements PosTerminalGateway {
         GlobalPara.strAmount = balanceInquiry ? "0" : amounts.chipAmountCents();
 
         Log.d(TAG, "POS txn arming: balanceInquiry=" + balanceInquiry
-                + " amt=" + amountCents + " surcharge(applied)=" + appliedSurchargeCents
-                + " total=" + appliedTotalCents + " acct=" + acctTypeCode);
+                + " amt=" + amountCents + " surcharge(applied)=" + amounts.fee
+                + " total=" + amounts.total + " acct=" + acctTypeCode);
 
         // Arm the observer. The bridge below fires the executor's TransactionCallback
         // when the existing listener path completes.
@@ -197,10 +196,14 @@ public final class AtmHostServiceGateway implements PosTerminalGateway {
             public void onApproved(String responseCode, String referenceNumber,
                                     String authDate, String authTime,
                                     long acctBal, long availBal, String displayMessage) {
+                // The tip screen (6.2.14) may have changed the breakdown after arming: report what
+                // was charged — the same breakdown the journal and the push read at completion.
+                castech.emvtxn.AmountBreakdown done = GlobalPara.atmAmounts;
+                if (done == null || done.sale <= 0) done = armed;
                 callback.onApproved(new PosTerminalGateway.TransactionResult(
                         responseCode, referenceNumber, /* authCode */ "",
                         authDate, authTime, acctBal, availBal, displayMessage,
-                        appliedSurchargeCents, appliedTotalCents));
+                        done.fee, done.total, done.tip, done.cashBack));
             }
             @Override
             public void onDeclined(String responseCode, String responseMessage, boolean retainCard) {

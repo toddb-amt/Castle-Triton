@@ -82,7 +82,9 @@ public final class PosWire {
     public static final String RSP_AVAILABLE_BALANCE_CENTS = "available_balance_cents";
     public static final String RSP_DISPLAY_MESSAGE         = "display_message";
     public static final String RSP_RETAIN_CARD             = "retain_card";
-    public static final String RSP_TOTAL_CENTS             = "total_cents";  // amount + applied surcharge, as charged to the cardholder (sale only)
+    public static final String RSP_TOTAL_CENTS             = "total_cents";  // withdrawal + applied surcharge, as charged to the cardholder (sale only)
+    public static final String RSP_TIP_CENTS               = "tip_cents";        // 6.2.14: tip chosen at the terminal (0 when none / tips off)
+    public static final String RSP_CASH_BACK_CENTS         = "cash_back_cents";  // 6.2.14: withdrawal − amount − tip (rounding to the step)
 
     // ---- Standard error codes (resource error.code) ---------------------------
 
