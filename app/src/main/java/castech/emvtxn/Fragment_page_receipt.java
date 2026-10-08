@@ -769,10 +769,8 @@ public class Fragment_page_receipt extends Fragment {
         Log.d(TAG, "resetATMParameters called");
         // Reset auto-print flag so next transaction's receipt auto-prints
         autoPrintTriggered = false;
-        // Reset all ATM transaction parameters
-        GlobalPara.atmSelectedAmount = "0.00";
-        GlobalPara.atmFee = "0.00";
-        GlobalPara.atmTotal = "0.00";
+        // Reset all ATM transaction parameters (breakdown included, M7)
+        GlobalPara.clearAmounts();
         GlobalPara.atmTransactionComplete = false;
         // Clear EMV transaction result so onResume doesn't think old data is still valid
         // and auto-print the previous receipt on the next transaction.

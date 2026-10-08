@@ -1270,6 +1270,9 @@ public class MainActivity extends AppCompatActivity {
                 @Override public void navigateToTransactionPage() {
                     self.navigateToPage(GlobalDef.d_PAGE_TRANSACTION);
                 }
+                @Override public void navigateToTipPage() {
+                    self.navigateToPage(GlobalDef.d_PAGE_TIP);
+                }
             };
 
         posOrchestrator = new castech.emvtxn.pos.PosOrchestrator(
@@ -8532,10 +8535,8 @@ public class MainActivity extends AppCompatActivity {
 
                 // Check if ATM mode - navigate back to amount selection
                 if (GlobalPara.atmSelectedAmount != null && !"0.00".equals(GlobalPara.atmSelectedAmount)) {
-                    // ATM Mode: Reset amount and navigate to amount selection
-                    GlobalPara.atmSelectedAmount = "0.00";
-                    GlobalPara.atmFee = "0.00";
-                    GlobalPara.atmTotal = "0.00";
+                    // ATM Mode: Reset amount (breakdown included, M7) and navigate to amount selection
+                    GlobalPara.clearAmounts();
 
                     runOnUiThread(new Runnable() {
                         @Override

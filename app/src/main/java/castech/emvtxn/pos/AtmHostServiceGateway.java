@@ -179,11 +179,7 @@ public final class AtmHostServiceGateway implements PosTerminalGateway {
             }
         }
         final castech.emvtxn.AmountBreakdown armed = amounts;
-        GlobalPara.atmAmounts = amounts;
-        GlobalPara.atmSelectedAmount = castech.emvtxn.Money.dollars(amounts.withdrawal);
-        GlobalPara.atmFee = castech.emvtxn.Money.dollars(amounts.fee);
-        GlobalPara.atmTotal = castech.emvtxn.Money.dollars(amounts.total);
-        GlobalPara.strAmount = balanceInquiry ? "0" : amounts.chipAmountCents();
+        GlobalPara.applyAmounts(amounts);   // every mirror + the chip amount ("0" for a BI) from the one breakdown
 
         Log.d(TAG, "POS txn arming: balanceInquiry=" + balanceInquiry
                 + " amt=" + amountCents + " surcharge(applied)=" + amounts.fee
@@ -215,9 +211,13 @@ public final class AtmHostServiceGateway implements PosTerminalGateway {
             }
         });
 
-        // Kick the UI flow — this hops to the main thread and navigates to the
-        // transaction page, which auto-starts card detection.
-        ui.runOnUi(ui::navigateToTransactionPage);
+        // Kick the UI flow on the main thread: the tip screen when it applies (T2, 6.2.14), else the
+        // transaction page, which auto-starts card detection. The POS slot is armed either way;
+        // Cancel on the tip screen answers user_cancelled through it, the watchdog covers it.
+        final boolean tip = castech.emvtxn.TipQuote.offer(GlobalPara.atmTipsEnabled, balanceInquiry, amounts,
+                castech.emvtxn.Money.toCents(GlobalPara.atmMinAmount), castech.emvtxn.Money.toCents(GlobalPara.atmMaxAmount),
+                GlobalPara.atmUseFlatFee, GlobalPara.atmFlatFeeAmount, GlobalPara.atmPercentageFee);
+        ui.runOnUi(tip ? ui::navigateToTipPage : ui::navigateToTransactionPage);
     }
 
     // ---- Reversal (no card read required) -------------------------------------
@@ -355,5 +355,7 @@ public final class AtmHostServiceGateway implements PosTerminalGateway {
 
         /** Navigate to the TRANSACTION page; equivalent to GlobalPara.mainActivity.navigateToPage(d_PAGE_TRANSACTION). */
         void navigateToTransactionPage();
+        /** Navigate to the TIP page (6.2.14); the page itself continues to the transaction page. */
+        void navigateToTipPage();
     }
 }

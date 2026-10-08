@@ -152,20 +152,20 @@ public class Fragment_page_amount_selection extends Fragment {
                         showErrorDialog("Configuration error", "This terminal's fee settings are invalid. Please contact support.");
                         return;
                     }
-                    GlobalPara.atmAmounts = amounts;
-                    GlobalPara.atmSelectedAmount = Money.dollars(amounts.withdrawal);
-                    GlobalPara.atmFee = Money.dollars(amounts.fee);
-                    GlobalPara.atmTotal = Money.dollars(amounts.total);
-                    // Chip amount (9F02) = total in cents, no decimals
-                    GlobalPara.strAmount = amounts.chipAmountCents();
+                    // Every mirror and the chip amount (9F02 = total in cents) from the one breakdown
+                    GlobalPara.applyAmounts(amounts);
 
                     android.util.Log.d("AmountSelection", "Continue clicked - amount=" + GlobalPara.atmSelectedAmount +
                         ", balanceInquiry=" + GlobalPara.atmBalanceInquiryMode);
 
-                    // Navigate to transaction (account type defaults to Checking)
+                    // Navigate to the tip screen when it applies (TIP-01, 6.2.14), else to the
+                    // transaction page (account type defaults to Checking)
                     GlobalPara.atmAccountType = GlobalPara.ATM_ACCOUNT_CHECKING;
                     if (mainActivity != null) {
-                        mainActivity.navigateToPage(GlobalDef.d_PAGE_TRANSACTION);
+                        boolean tip = TipQuote.offer(GlobalPara.atmTipsEnabled, false, amounts,
+                                Money.toCents(GlobalPara.atmMinAmount), Money.toCents(GlobalPara.atmMaxAmount),
+                                GlobalPara.atmUseFlatFee, GlobalPara.atmFlatFeeAmount, GlobalPara.atmPercentageFee);
+                        mainActivity.navigateToPage(tip ? GlobalDef.d_PAGE_TIP : GlobalDef.d_PAGE_TRANSACTION);
                     } else {
                         android.util.Log.e("AmountSelection", "mainActivity is null!");
                     }
@@ -345,11 +345,8 @@ public class Fragment_page_amount_selection extends Fragment {
         // Set balance inquiry mode
         GlobalPara.atmBalanceInquiryMode = true;
 
-        // Clear any previous amount selection (balance inquiry has no amount)
-        GlobalPara.atmSelectedAmount = "0.00";
-        GlobalPara.atmFee = "0.00";
-        GlobalPara.atmTotal = "0.00";
-        GlobalPara.strAmount = "0";   // chip amount in cents — "0.00" is not a valid cents string
+        // Clear any previous amount selection (balance inquiry has no amount) — breakdown included (M7)
+        GlobalPara.clearAmounts();
 
         // Navigate to transaction (account type defaults to Checking)
         GlobalPara.atmAccountType = GlobalPara.ATM_ACCOUNT_CHECKING;
