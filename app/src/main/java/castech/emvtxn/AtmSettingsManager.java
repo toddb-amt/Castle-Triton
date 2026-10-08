@@ -24,6 +24,7 @@ public class AtmSettingsManager {
 
     // Regular preference keys (non-sensitive data)
     private static final String KEY_USE_FLAT_FEE = "use_flat_fee";
+    private static final String KEY_TIPS_ENABLED = "tips_enabled";   // TIP-01 (6.2.14)
     private static final String KEY_FLAT_FEE_AMOUNT = "flat_fee_amount";
     private static final String KEY_PERCENTAGE_FEE = "percentage_fee";
     private static final String KEY_MIN_AMOUNT = "min_amount";
@@ -104,6 +105,7 @@ public class AtmSettingsManager {
 
         // Load fee configuration
         GlobalPara.atmUseFlatFee = regularPrefs.getBoolean(KEY_USE_FLAT_FEE, true);
+        GlobalPara.atmTipsEnabled = regularPrefs.getBoolean(KEY_TIPS_ENABLED, false);
         GlobalPara.atmFlatFeeAmount = getDouble(regularPrefs, KEY_FLAT_FEE_AMOUNT, 3.00);
         GlobalPara.atmPercentageFee = getDouble(regularPrefs, KEY_PERCENTAGE_FEE, 0.0);
         GlobalPara.atmMinAmount = getDouble(regularPrefs, KEY_MIN_AMOUNT, 20.00);
@@ -177,6 +179,7 @@ public class AtmSettingsManager {
         // Save fee configuration
         SharedPreferences.Editor regularEditor = regularPrefs.edit();
         regularEditor.putBoolean(KEY_USE_FLAT_FEE, GlobalPara.atmUseFlatFee);
+        regularEditor.putBoolean(KEY_TIPS_ENABLED, GlobalPara.atmTipsEnabled);
         putDouble(regularEditor, KEY_FLAT_FEE_AMOUNT, GlobalPara.atmFlatFeeAmount);
         putDouble(regularEditor, KEY_PERCENTAGE_FEE, GlobalPara.atmPercentageFee);
         putDouble(regularEditor, KEY_MIN_AMOUNT, GlobalPara.atmMinAmount);
@@ -221,6 +224,7 @@ public class AtmSettingsManager {
 
         SharedPreferences.Editor editor = regularPrefs.edit();
         editor.putBoolean(KEY_USE_FLAT_FEE, GlobalPara.atmUseFlatFee);
+        editor.putBoolean(KEY_TIPS_ENABLED, GlobalPara.atmTipsEnabled);
         putDouble(editor, KEY_FLAT_FEE_AMOUNT, GlobalPara.atmFlatFeeAmount);
         putDouble(editor, KEY_PERCENTAGE_FEE, GlobalPara.atmPercentageFee);
         putDouble(editor, KEY_MIN_AMOUNT, GlobalPara.atmMinAmount);
@@ -318,6 +322,7 @@ public class AtmSettingsManager {
         sb.append("\nPort: ").append(GlobalPara.atmHostPort);
         sb.append("\nTerminal ID: ").append(GlobalPara.atmTerminalId.isEmpty() ? "(not set)" : GlobalPara.atmTerminalId);
         sb.append("\nProcessor: ").append(GlobalPara.atmProcessorType);
+        sb.append("\nTips: ").append(GlobalPara.atmTipsEnabled ? "on" : "off");
         sb.append("\nFee Type: ").append(GlobalPara.atmUseFlatFee ? "Flat" : "Percentage");
         if (GlobalPara.atmUseFlatFee) {
             sb.append("\nFee Amount: $").append(String.format("%.2f", GlobalPara.atmFlatFeeAmount));
