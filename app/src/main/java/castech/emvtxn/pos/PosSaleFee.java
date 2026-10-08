@@ -7,7 +7,11 @@ import castech.emvtxn.Money;
  * cash amount only; the fee comes from the terminal's fee configuration, exactly as for a
  * walk-up withdrawal, and the chip amount is amount + fee like a walk-up. A {@code surcharge}
  * the register sends is advisory — never applied — and the reply reports what was charged.
+ *
+ * @deprecated superseded by {@link castech.emvtxn.AmountBreakdown} (AMT-03, 6.2.13); the gateway
+ *             no longer uses it. Kept with its test until 6.2.14, then removed.
  */
+@Deprecated
 public final class PosSaleFee {
 
     public final long amountCents;
