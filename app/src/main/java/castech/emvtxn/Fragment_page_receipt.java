@@ -28,6 +28,8 @@ public class Fragment_page_receipt extends Fragment {
     private TextView txvWithdrawalAmount;
     private TextView txvFeeAmount;
     private TextView txvTotalAmount;
+    // TIP-01 (6.2.14): the split rows, gone unless there is a tip or cash back
+    private TextView txvSaleLabel, txvSaleAmount, txvTipLabel, txvTipAmount, txvCashBackLabel, txvCashBackAmount;
     private TextView txvCardInfo;
     private TextView txvDateTime;
     private TextView txvTransactionId;
@@ -103,6 +105,12 @@ public class Fragment_page_receipt extends Fragment {
         txvWithdrawalAmount = view.findViewById(R.id.txvWithdrawalAmount);
         txvFeeAmount = view.findViewById(R.id.txvFeeAmount);
         txvTotalAmount = view.findViewById(R.id.txvTotalAmount);
+        txvSaleLabel = view.findViewById(R.id.txvSaleLabel);
+        txvSaleAmount = view.findViewById(R.id.txvSaleAmount);
+        txvTipLabel = view.findViewById(R.id.txvTipLabel);
+        txvTipAmount = view.findViewById(R.id.txvTipAmount);
+        txvCashBackLabel = view.findViewById(R.id.txvCashBackLabel);
+        txvCashBackAmount = view.findViewById(R.id.txvCashBackAmount);
 
         // Transaction details
         txvCardInfo = view.findViewById(R.id.txvCardInfo);
@@ -248,10 +256,28 @@ public class Fragment_page_receipt extends Fragment {
             }
             txvTotalAmount.setVisibility(View.GONE);
         } else {
-            // Standard withdrawal display
-            txvWithdrawalAmount.setText(currencyFormat.format(parseAmount(GlobalPara.atmSelectedAmount)));
-            txvFeeAmount.setText(currencyFormat.format(parseAmount(GlobalPara.atmFee)));
-            txvTotalAmount.setText(currencyFormat.format(parseAmount(GlobalPara.atmTotal)));
+            // Standard withdrawal display — from the ONE breakdown (TIP-01): the split rows appear
+            // only when there is a tip or cash back; otherwise the screen is exactly as before.
+            AmountBreakdown a = GlobalPara.atmAmounts;
+            boolean split = a.tip > 0 || a.cashBack > 0;
+            int splitVis = split ? View.VISIBLE : View.GONE;
+            int tipVis = a.tip > 0 ? View.VISIBLE : View.GONE;
+            if (txvSaleLabel != null) { txvSaleLabel.setVisibility(splitVis); txvSaleAmount.setVisibility(splitVis); }
+            if (txvTipLabel != null) { txvTipLabel.setVisibility(tipVis); txvTipAmount.setVisibility(tipVis); }
+            if (txvCashBackLabel != null) { txvCashBackLabel.setVisibility(splitVis); txvCashBackAmount.setVisibility(splitVis); }
+            if (txvSaleAmount != null) txvSaleAmount.setText(currencyFormat.format(a.sale / 100.0));
+            if (txvTipAmount != null) txvTipAmount.setText(currencyFormat.format(a.tip / 100.0));
+            if (txvCashBackAmount != null) txvCashBackAmount.setText(currencyFormat.format(a.cashBack / 100.0));
+            View withdrawalLabel = view.findViewById(R.id.txvWithdrawalLabel);
+            View feeLabel = view.findViewById(R.id.txvFeeLabel);
+            View totalLabel = view.findViewById(R.id.txvTotalLabel);
+            if (withdrawalLabel instanceof TextView) ((TextView) withdrawalLabel).setText(split ? "Withdrawal:" : "Withdrawal Amount:");
+            if (feeLabel instanceof TextView) ((TextView) feeLabel).setText("Service Fee:");
+            if (totalLabel != null) totalLabel.setVisibility(View.VISIBLE);
+            txvTotalAmount.setVisibility(View.VISIBLE);
+            txvWithdrawalAmount.setText(currencyFormat.format(a.withdrawal / 100.0));
+            txvFeeAmount.setText(currencyFormat.format(a.fee / 100.0));
+            txvTotalAmount.setText(currencyFormat.format(a.total / 100.0));
         }
 
         // Display card info
@@ -618,12 +644,9 @@ public class Fragment_page_receipt extends Fragment {
                 receipt.append("Available Balance: ").append(currencyFormat.format(availableBalance)).append("\n");
                 receipt.append("\n");
             } else {
-                // Standard withdrawal receipt
-                receipt.append("Withdrawal Amount: ").append(currencyFormat.format(parseAmount(GlobalPara.atmSelectedAmount))).append("\n");
-                receipt.append("Service Fee:       ").append(currencyFormat.format(parseAmount(GlobalPara.atmFee))).append("\n");
-                receipt.append("--------------------------------\n");
-                receipt.append("Total Charged:     ").append(currencyFormat.format(parseAmount(GlobalPara.atmTotal))).append("\n");
-                receipt.append("\n");
+                // Standard withdrawal receipt — the money block from the ONE breakdown (TIP-01):
+                // byte-identical to before when there is no tip and no cash back.
+                receipt.append(ReceiptMoneyBlock.printed(GlobalPara.atmAmounts));
             }
 
             // Card and transaction info

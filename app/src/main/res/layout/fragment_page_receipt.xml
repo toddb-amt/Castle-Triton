@@ -103,7 +103,81 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent">
 
-        <!-- Withdrawal Amount -->
+        <!-- TIP-01 (6.2.14): Sale / Tip / Cash Back rows, shown only when there is a split -->
+        <TextView
+            android:id="@+id/txvSaleLabel"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Sale:"
+            android:textSize="16sp"
+            android:textColor="#666666"
+            android:visibility="gone"
+            app:layout_constraintTop_toTopOf="parent"
+            app:layout_constraintStart_toStartOf="parent"/>
+
+        <TextView
+            android:id="@+id/txvSaleAmount"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="$0.00"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:textColor="#000000"
+            android:visibility="gone"
+            app:layout_constraintTop_toTopOf="@+id/txvSaleLabel"
+            app:layout_constraintEnd_toEndOf="parent"/>
+
+        <TextView
+            android:id="@+id/txvTipLabel"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Tip:"
+            android:textSize="16sp"
+            android:textColor="#666666"
+            android:layout_marginTop="8dp"
+            android:visibility="gone"
+            app:layout_goneMarginTop="0dp"
+            app:layout_constraintTop_toBottomOf="@+id/txvSaleLabel"
+            app:layout_constraintStart_toStartOf="parent"/>
+
+        <TextView
+            android:id="@+id/txvTipAmount"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="$0.00"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:textColor="#000000"
+            android:visibility="gone"
+            app:layout_constraintTop_toTopOf="@+id/txvTipLabel"
+            app:layout_constraintEnd_toEndOf="parent"/>
+
+        <TextView
+            android:id="@+id/txvCashBackLabel"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Cash Back:"
+            android:textSize="16sp"
+            android:textColor="#666666"
+            android:layout_marginTop="8dp"
+            android:visibility="gone"
+            app:layout_goneMarginTop="0dp"
+            app:layout_constraintTop_toBottomOf="@+id/txvTipLabel"
+            app:layout_constraintStart_toStartOf="parent"/>
+
+        <TextView
+            android:id="@+id/txvCashBackAmount"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="$0.00"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:textColor="#000000"
+            android:visibility="gone"
+            app:layout_constraintTop_toTopOf="@+id/txvCashBackLabel"
+            app:layout_constraintEnd_toEndOf="parent"/>
+
+        <!-- Withdrawal Amount (sits at the top when the three rows above are gone) -->
         <TextView
             android:id="@+id/txvWithdrawalLabel"
             android:layout_width="wrap_content"
@@ -111,7 +185,9 @@
             android:text="Withdrawal Amount:"
             android:textSize="16sp"
             android:textColor="#666666"
-            app:layout_constraintTop_toTopOf="parent"
+            android:layout_marginTop="8dp"
+            app:layout_goneMarginTop="0dp"
+            app:layout_constraintTop_toBottomOf="@+id/txvCashBackLabel"
             app:layout_constraintStart_toStartOf="parent"/>
 
         <TextView
