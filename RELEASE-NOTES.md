@@ -48,6 +48,77 @@ Template:
 
 ---
 
+## 6.2.14 — Tips at the terminal (TIP-01)
+
+**What the customer sees.** When the merchant has tips enabled, a tip screen appears between the
+amount and the card prompt, on walk-up withdrawals and on register sales alike, never on a balance
+inquiry: **10% · 15% · 20% · Custom amount · No Tip**, each percentage showing its dollar value. Any
+choice goes straight to the card prompt; 30 seconds idle chooses No Tip; Cancel cancels the
+transaction (a register sale is answered `user_cancelled`). Choices that would push the withdrawal
+past `max_amount` are greyed with the limit beneath; a sale already at the maximum skips the screen.
+A custom tip larger than the sale asks once ("Tip $25.00 on a $10.00 sale?").
+
+**The arithmetic (T4).** Percentages are of the sale, half-up to the cent. The tip rides inside the
+amount the card is charged: `withdrawal = roundUp(sale + tip, min_amount)`, `cash back = withdrawal −
+sale − tip` (the change the customer receives; the fee is not deducted from it), `total = withdrawal
++ fee`. Agreed example: sale $10.00, 10% tip $1.00 → withdrawal $20.00, cash back $9.00, fee $3.50,
+card charged $23.50; the portal gets 1000 / 100 / 900 / 350 / 2350. A preset with **No Tip** is still
+charged exactly as its button says (6.2.13 review C1); with a tip it rounds, because the tip changed
+the amount ($60 preset + 10% with a $25 minimum → $75 withdrawal, $9 cash back).
+
+**Charges change for register sales (T5).** From this release a register sale rounds **up** to the
+`min_amount` step exactly like a walk-up custom amount, whether or not tips are on: a $12.50 register
+sale becomes a $20.00 withdrawal with $7.50 cash back (fee on $20.00). 6.2.13 and earlier charged
+register sales exactly. The register's `amount` in the reply is unchanged; the new fields say the rest.
+
+**Receipt.** When there is no tip and no cash back the receipt is byte-identical to 6.2.13. Otherwise
+the money block reads `Sale / Tip / Cash Back / Withdrawal / Service Fee / Total Charged` (no Tip
+line when only rounding happened). Same rows on the on-screen receipt.
+
+**Detail Report.** Per transaction: ` SALE … FEE …` then ` TIP … TOTAL …` with TOTAL = withdrawal +
+fee (the tip is inside the withdrawal; up to 6.2.13 the line said `AMT`). The summary keeps
+"Withdrawals" as the host amount and adds a "Cash back" line beside "Tips"; "Total"/"Grand Total" =
+withdrawals + fees. Rows journaled before 6.2.13 show their amount as the sale.
+
+**Register reply (`approved`).** Two additive fields beside `surcharge` and `total_cents`:
+`tip_cents` and `cash_back_cents` (both always present on a sale, 0 when none). `total_cents` is now
+withdrawal + fee. The request format is unchanged. `docs/CASTLE_POS_INTEGRATION_SPEC.md` updated;
+the proxy team should be told.
+
+### Parameters
+
+| Key | Default | Effect |
+|---|---|---|
+| `tips_enabled` | `false` | `true`/`false`/`1`/`0`. Enables the tip screen in both flows on the next transaction; shown as `Tips: on/off` on the Admin managed-configuration card. Invalid values are ignored. |
+
+### Device pass (pending)
+
+1. `tips_enabled` absent → no tip screen in either flow; set it `true` in CasHUB → screen appears on the next transaction without restart; `false` removes it again.
+2. Walk-up tap and chip insert: each of 10% / 15% / 20% / Custom / No Tip; receipt block; Detail Report lines; MyView shows `TipAmount` / `CashBackAmount` after the push.
+3. Register sale $12.50 → tip 10% → reply `tip_cents=125`, `cash_back_cents=625`, `total_cents=2350`; receipt shows the split.
+4. Register sale $490 with max $500: 10/15/20 greyed "Over $500.00 limit"; Custom accepts $10.00, refuses $10.01 naming $10.00.
+5. Custom $25 on a $10 sale → confirmation → Yes → withdrawal $40.00.
+6. 30 s idle (once with the custom keypad open) → No Tip → card prompt; no second navigation later in the log.
+7. Cancel: walk-up back to the menu; register sees `user_cancelled` within a second; slot free.
+8. $60 preset with `min_amount` 25: No Tip charges exactly $60.00; 10% charges $75.00 with $9.00 cash back.
+9. Percentage-fee mode: a tip that crosses a step shows the higher fee on the receipt and in the reply.
+
+### Internals
+
+- `TipQuote` (pure): the choices, the limit on the withdrawal, custom validation (above-the-limit
+  values are refused before any arithmetic — a background security review caught that an absurd
+  keypad value could wrap `sale + tip` negative and pass the maximum check), `offer(...)`.
+- `Fragment_page_tip` is ViewPager page 6; `MainActivity.navigateToPage` tells it when it is shown
+  and hidden so the 30 s timer never fires into the card phase (LIFE-02); a `decided` flag makes
+  every exit one-shot.
+- `GlobalPara.applyAmounts(...)` / `clearAmounts()` are now the only writers of the amount mirrors;
+  the four reset sites that left `atmAmounts` stale (6.2.13 review minor M7) use `clearAmounts()`.
+- `RegisterAmounts` (pure) builds the register breakdown with rounding on; `ReceiptMoneyBlock`
+  (pure) formats the money block; `ReportRow` carries sale and cash back.
+- Unit suite: **424** tests (36 new: TipQuote ×15, tips parameter ×5, register amounts ×4,
+  POS reply ×2, receipt block ×5, Detail Report ×3, GlobalPara ×2). Each new behaviour was watched
+  failing first. The same three pre-existing failures remain (`TEST-01`).
+
 ## 6.2.13 — 2026-10-08 · PR #9 · base 6.2.12 · versionCode 75
 
 ### Highlights
