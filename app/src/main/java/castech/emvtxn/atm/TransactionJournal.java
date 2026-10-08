@@ -4,7 +4,6 @@ import android.content.Context;
 import android.util.Log;
 
 import castech.emvtxn.GlobalPara;
-import castech.emvtxn.Money;
 
 /**
  * Writes one row per finished transaction into TransactionLogManager (6.2.11). Called at the
@@ -29,12 +28,14 @@ public final class TransactionJournal {
             log.setEntryMode(GlobalPara.atmEntryMode == 1 ? "CONTACT" : GlobalPara.atmEntryMode == 2 ? "CONTACTLESS"
                     : GlobalPara.atmEntryMode == 3 ? "MSR" : "UNKNOWN");
             boolean bi = "BALANCE_INQUIRY".equals(outcome.type);
-            long amount = bi ? 0L : Money.toCents(parse(GlobalPara.atmSelectedAmount));
-            long fee = bi ? 0L : Money.toCents(parse(GlobalPara.atmFee));
-            log.setAmountCents(amount);
-            log.setFeeCents(fee);
-            log.setTipCents(0L);
-            log.setTotalCents(amount + fee);
+            // AMT-03: the breakdown is the source; amount_cents stays the WITHDRAWAL (host amount)
+            castech.emvtxn.AmountBreakdown a = bi ? castech.emvtxn.AmountBreakdown.balanceInquiry() : GlobalPara.atmAmounts;
+            log.setSaleCents(a.sale);
+            log.setTipCents(a.tip);
+            log.setAmountCents(a.withdrawal);
+            log.setCashBackCents(a.cashBack);
+            log.setFeeCents(a.fee);
+            log.setTotalCents(a.total);
             log.setResult(outcome.result);
             log.setResponseCode(nz(GlobalPara.atmResponseCode));
             log.setAuthCode(nz(GlobalPara.atmAuthCode));
@@ -48,9 +49,17 @@ public final class TransactionJournal {
             log.setInvoiceNo(blankToNull(GlobalPara.atmInvoiceNo));
             log.setBatchId(m.currentBatchId());
             log.setReversed(false);
+            // RPT-02: push bookkeeping. Pending only when a reporting key exists and the row is sendable.
+            boolean configured = new castech.emvtxn.reporting.ReportingConfig(ctx).isConfigured();
+            log.setFlowId(java.util.UUID.randomUUID().toString().toUpperCase(java.util.Locale.US));
+            log.setPushState(castech.emvtxn.reporting.PushEligibility.initialState(outcome.type, outcome.result, configured));
             long id = m.saveTransaction(log);
             Log.d(TAG, "journaled " + outcome.type + "/" + outcome.result + " seq=" + GlobalPara.atmSequenceNumber
-                    + " batch=" + log.getBatchId() + " row=" + id);
+                    + " batch=" + log.getBatchId() + " row=" + id
+                    + " push=" + (log.getPushState() == castech.emvtxn.reporting.PushEligibility.PUSH_PENDING ? "pending" : "n/a"));
+            if (id != -1 && log.getPushState() == castech.emvtxn.reporting.PushEligibility.PUSH_PENDING) {
+                castech.emvtxn.reporting.PushSignal.newRow();
+            }
         } catch (Throwable t) {
             Log.w(TAG, "journal write skipped: " + t.getMessage());
         } finally {
@@ -68,6 +77,17 @@ public final class TransactionJournal {
             boolean hit = m.markReversed(transactionId);
             Log.w(TAG, "reversal accepted for " + transactionId + " → journal row "
                     + (hit ? "marked reversed" : "not found (nothing journaled under that id)"));
+            // RPT-02: the accepted reversal becomes its own row, pushed to the portal as RWT
+            if (hit) {
+                TransactionLog original = m.getTransactionById(transactionId);
+                if (original != null) {
+                    boolean configured = new castech.emvtxn.reporting.ReportingConfig(ctx).isConfigured();
+                    long row = m.insertReversalRow(original, configured);
+                    Log.w(TAG, "reversal row " + row + " written for seq " + original.getSequenceNumber()
+                            + (configured ? " (pending push as RWT)" : ""));
+                    if (row != -1 && configured) castech.emvtxn.reporting.PushSignal.newRow();
+                }
+            }
         } catch (Throwable t) {
             Log.w(TAG, "markReversed skipped: " + t.getMessage());
         }
@@ -77,9 +97,6 @@ public final class TransactionJournal {
         if (pan == null) return "";
         String digits = pan.replaceAll("[^0-9]", "");
         return digits.length() >= 4 ? digits.substring(digits.length() - 4) : digits;
-    }
-    private static double parse(String dollars) {
-        try { return Double.parseDouble(dollars.trim()); } catch (Exception e) { return 0d; }
     }
     private static String nz(String s) { return s == null ? "" : s; }
     private static String blankToNull(String s) { return s == null || s.trim().isEmpty() ? null : s.trim(); }
