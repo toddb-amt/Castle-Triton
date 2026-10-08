@@ -1268,6 +1268,11 @@ public class MainActivity extends AppCompatActivity {
         Log.d(TAG, "POS orchestrator started — state=" + posOrchestrator.getState());
     }
 
+    /** RPT-02: a reporting key or URL changed in CasHUB. Wired to the pusher in a later task. */
+    public void onReportingParamsChanged() {
+        Log.w(TAG, "Reporting parameters changed");
+    }
+
     /**
      * CasHUB pushed a change to the POS-mode settings (see CasHubParams). Apply it
      * live: restart the POS stack so the lane picks up the new proxy URL / access
