@@ -199,6 +199,13 @@ transactions" while the proxy is connected. See POS-12 and decision D5.
 
 - [ ] **TAP-02** · watch on the 6.2.12 bench pass · `atm/host/EmvTagEnhancer.parseEmvTags` reads one- and two-byte tags only. A tap sends the reader's whole tag database in Field 13; if a kernel includes three-byte tags (Mastercard `DF81xx`), everything after the first one is mis-parsed. Not seen (no tap has reached this code); check a Mastercard tap's "EMV TAGS BEING SENT" log. Also from that pass: two terminal-made "91 / Host service not available" assignments remain for *host service not initialised* (behind the readiness gate).
 
+- [x] **RPT-02** · MED (reporting) · `reporting/*`, `atm/TransactionLogManager` v3, `atm/TransactionJournal`, `MainActivity`, Admin — **shipped 6.2.13** (spec `docs/superpowers/specs/2026-10-07-reporting-push-design.md`, plan `docs/superpowers/plans/2026-10-08-reporting-push.md`). **Device pass pending.**
+  **Change:** journal is the outbox; every host-answered row and every card-present terminal decline is pushed to MyView in the Ingenico shape (`PushPayload`, pinned to the contract example); `ReportingPusher` drains oldest-first with backoff, stops on 401, parks a row only once a later row is accepted; pruning and Clear History skip batches with unsent rows; accepted reversals become `REVERSAL` rows pushed as `RWT`; two CasHUB keys (`reporting_access_key`, `reporting_url`). The STD1 sequence is untouched (TerminalSequenceNum = Field 4; 0 when no request was built). 61 unit tests.
+
+- [x] **AMT-03** · MED · `AmountBreakdown`, `GlobalPara.atmAmounts`, amount screen, `AtmHostServiceGateway` — **shipped 6.2.13.** Six-number model (sale, tip, withdrawal, cash back, fee, total) computed once; legacy strings are mirrors; tip 0 and register rounding off in this release so charges are identical to 6.2.12 (tips 6.2.14 flips the two inputs). The amount screen now records the typed amount as the sale. `PosSaleFee` deprecated.
+
+- [ ] **SEC-02** · LOW (hardening) · `reporting/ReportingConfig`, `pos/PosConfig` — both bearer keys (reporting tenant key, POS terminal access key) live in app-private SharedPreferences on a kiosk device whose CasHUB agent holds the same values in plain text. Move both to EncryptedSharedPreferences (`androidx.security:security-crypto`) in one change; raised by the commit security review of 6.2.13.
+
 - [ ] **REV-02** · MED · target **6.2.8** — MyView: terminal posts the reversal backlog (active/failed/out-of-service, last error) so a pending reversal raises an alert in MyView, and a remote **Resolve** (with reason, audited) exists for the case where nobody is on site. Until then the banner + Admin screen are the only signals.
 
 ---
