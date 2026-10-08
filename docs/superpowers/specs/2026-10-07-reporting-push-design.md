@@ -36,7 +36,7 @@ values alone, invalid values are logged and ignored.
 | Key | Values | Default | Effect |
 |---|---|---|---|
 | `reporting_access_key` | string, or the literal `off` | none | Tenant key. Without it reporting is off (see R6). The value `off` (any case) clears the stored key and switches reporting off — the only off-switch; a blank value is ignored like any other invalid value (review I6). Never logged, never in the host-config payload or the KMS backup. Merchant level is acceptable (it is per tenant). |
-| `reporting_url` | `https://` URL | the production ingestion URL from the contract (`…/transactions/addTransaction`) | Override for a test portal. Not displayed on the terminal. |
+| `reporting_url` | `https://` URL | the production ingestion URL: `https://d16f8tt74onlvr.cloudfront.net/transactions/addTransaction` (portal team, 2026-10-08; the contract's Lambda URL is retired) | Override for a test portal. Not displayed on the terminal. |
 
 A `ReportingParams` class mirrors `PosParams` / `ApnParams`: `KEYS`, `parse(Map)`, problems list; the
 two keys are excluded from the host-config payload like the POS and APN keys.

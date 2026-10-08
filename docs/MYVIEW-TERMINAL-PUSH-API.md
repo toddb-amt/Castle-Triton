@@ -19,6 +19,12 @@ arrives first, the push row is the record and the poll is treated as a duplicate
 
 ## 2. Endpoint
 
+> **Update 2026-10-08 (portal team):** the production endpoint is now
+> `https://d16f8tt74onlvr.cloudfront.net/transactions/addTransaction` — the CloudFront front door the
+> Ingenico terminals use. The Lambda URL below is retired. The Castle app's built-in default is the
+> CloudFront address (`ReportingConfig.DEFAULT_URL`); `reporting_url` overrides it.
+
+
 | | |
 |---|---|
 | Method | `POST` |

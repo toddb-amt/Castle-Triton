@@ -9,8 +9,9 @@ import android.content.SharedPreferences;
  */
 public final class ReportingConfig {
 
+    /** Production ingestion endpoint (the portal team's CloudFront front door, 2026-10-08; the earlier Lambda URL is retired). */
     public static final String DEFAULT_URL =
-            "https://t5wfhaal2k5usy2rfb5uwaszzm0ijsvn.lambda-url.us-east-1.on.aws/transactions/addTransaction";
+            "https://d16f8tt74onlvr.cloudfront.net/transactions/addTransaction";
 
     private static final String PREFS_FILE = "reporting_config";
     private static final String K_KEY = "access_key";

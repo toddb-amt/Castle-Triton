@@ -102,7 +102,7 @@ Spec: `docs/superpowers/specs/2026-10-07-reporting-push-design.md`. Contract:
 | Key | Default | Effect |
 |---|---|---|
 | `reporting_access_key` | none | tenant key from TFI; reporting is **off** until it is present; the value `off` switches it off again |
-| `reporting_url` | the production ingestion URL | test-portal override |
+| `reporting_url` | `https://d16f8tt74onlvr.cloudfront.net/transactions/addTransaction` (built in) | test-portal override |
 
 ### Known issues and deferred
 
