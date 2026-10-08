@@ -164,9 +164,16 @@ public final class AtmHostServiceGateway implements PosTerminalGateway {
         if (balanceInquiry) {
             amounts = castech.emvtxn.AmountBreakdown.balanceInquiry();
         } else {
-            amounts = castech.emvtxn.AmountBreakdown.of(amountCents, 0L,
-                    castech.emvtxn.Money.toCents(GlobalPara.atmMinAmount), false,
-                    GlobalPara.atmUseFlatFee, GlobalPara.atmFlatFeeAmount, GlobalPara.atmPercentageFee);
+            try {
+                amounts = castech.emvtxn.AmountBreakdown.of(amountCents, 0L,
+                        castech.emvtxn.Money.toCents(GlobalPara.atmMinAmount), false,
+                        GlobalPara.atmUseFlatFee, GlobalPara.atmFlatFeeAmount, GlobalPara.atmPercentageFee);
+            } catch (IllegalArgumentException bad) {
+                // Fee configuration that cannot be charged (review I4): answer the register, never crash.
+                Log.e(TAG, "Cannot build amounts for POS sale: " + bad.getMessage());
+                callback.onError(PosWire.ERR_INTERNAL, "terminal fee configuration invalid: " + bad.getMessage());
+                return;
+            }
             if (surchargeCents > 0 && surchargeCents != amounts.fee) {
                 Log.w(TAG, "POS sent surcharge=" + surchargeCents + " cents; terminal fee config governs: "
                         + amounts.fee + " cents (reply carries the applied value)");

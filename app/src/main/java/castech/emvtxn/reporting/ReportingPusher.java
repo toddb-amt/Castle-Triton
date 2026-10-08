@@ -82,69 +82,91 @@ public final class ReportingPusher {
     void noteFailure(long rowId, long at) { lastFailureAt.put(rowId, at); }
     void forgetBackoff(long rowId) { lastFailureAt.remove(rowId); }
 
-    /** One synchronous drain. Safe to call from any thread; runs never overlap. */
+    /** One synchronous drain. Safe to call from any thread; runs never overlap; never throws. */
     public RunReport drainOnce() {
         RunReport report = new RunReport();
         if (!running.compareAndSet(false, true)) return report;
         try {
-            // Settings are read once per run: a key rotated mid-run does not affect the run in flight.
-            String key = settings.accessKey();
-            String url = settings.url();
-            PushPayload.Identity id = settings.identity();
-            TimeZone zone = settings.zone();
-            if (key == null || key.isEmpty()) {
-                report.state = ReportingStatus.NOT_CONFIGURED;
-                publish(report);
-                return report;
-            }
-            long now = clock.now();
-            List<TransactionLog> pending = store.pendingPush(BATCH);
-            Long skippedCandidate = null;   // a 10+ failure row skipped this run, waiting for proof the portal is up
-            String skippedError = null;
-            for (TransactionLog row : pending) {
-                Long failedAt = lastFailureAt.get(row.getId());
-                if (failedAt != null && now - failedAt < backoffMillis(row.getPushAttempts())) continue;   // still backing off
-
-                JSONObject body = PushPayload.of(row, id, zone);
-                ReportingClient.Result res = client.post(url, key, body);
-                if (res.accepted()) {
-                    store.markSent(row.getId(), res.message, now);
-                    lastFailureAt.remove(row.getId());
-                    lastSentAt = now;
-                    report.sent++;
-                    if (skippedCandidate != null) {
-                        store.markParked(skippedCandidate, skippedError);
-                        report.parked++;
-                        skippedCandidate = null;
-                    }
-                    continue;
-                }
-                int attemptsBefore = row.getPushAttempts();
-                store.markFailed(row.getId(), res.error);
-                lastFailureAt.put(row.getId(), now);
-                report.failed++;
-                report.lastError = res.error;
-                if (res.unauthorized()) {
-                    report.state = ReportingStatus.KEY_REJECTED;
-                    publish(report);
-                    return report;
-                }
-                if (attemptsBefore + 1 >= PARK_AFTER_FAILURES && skippedCandidate == null) {
-                    skippedCandidate = row.getId();      // give the next row a chance to prove the portal is up
-                    skippedError = res.error;
-                    continue;
-                }
-                report.state = ReportingStatus.RETRYING;
-                publish(report);
-                return report;                             // back off; the next trigger or sweep resumes
-            }
-            report.state = skippedCandidate != null ? ReportingStatus.RETRYING : ReportingStatus.OK;
+            drain(report);
+        } catch (Throwable t) {
+            // Review I2: scheduleWithFixedDelay silently stops forever after one thrown exception,
+            // and a one-shot schedule() drops it into an unread Future. Report it instead.
+            report.state = ReportingStatus.RETRYING;
+            report.lastError = t.getClass().getSimpleName() + (t.getMessage() == null ? "" : ": " + t.getMessage());
             publish(report);
-            return report;
         } finally {
             running.set(false);
             if (runRequested.getAndSet(false) && executor != null) schedule(0);
         }
+        return report;
+    }
+
+    private void drain(RunReport report) {
+        // Settings are read once per run: a key rotated mid-run does not affect the run in flight.
+        String key = settings.accessKey();
+        String url = settings.url();
+        PushPayload.Identity id = settings.identity();
+        TimeZone zone = settings.zone();
+        if (key == null || key.isEmpty()) {
+            report.state = ReportingStatus.NOT_CONFIGURED;
+            publish(report);
+            return;
+        }
+        long now = clock.now();
+        List<TransactionLog> pending = store.pendingPush(BATCH);
+        Long skippedCandidate = null;   // a 10+ failure row skipped this run, waiting for proof the portal is up
+        String skippedError = null;
+        for (TransactionLog row : pending) {
+            Long failedAt = lastFailureAt.get(row.getId());
+            if (failedAt != null && now - failedAt < backoffMillis(row.getPushAttempts())) continue;   // still backing off
+
+            JSONObject body = PushPayload.of(row, id, zone);
+            ReportingClient.Result res = client.post(url, key, body);
+            if (res.accepted()) {
+                store.markSent(row.getId(), res.message, now);
+                lastFailureAt.remove(row.getId());
+                lastSentAt = now;
+                report.sent++;
+                if (skippedCandidate != null) {
+                    store.markParked(skippedCandidate, skippedError);
+                    report.parked++;
+                    skippedCandidate = null;
+                }
+                continue;
+            }
+            if (res.unauthorized()) {
+                // Review I1: a rejected key is never the row's fault — no attempt counted, no backoff,
+                // so the fixed key's first run sends this row first.
+                report.lastError = res.error;
+                report.state = ReportingStatus.KEY_REJECTED;
+                publish(report);
+                return;
+            }
+            int attemptsBefore = row.getPushAttempts();
+            store.markFailed(row.getId(), res.error);
+            lastFailureAt.put(row.getId(), now);
+            report.failed++;
+            report.lastError = res.error;
+            if (attemptsBefore + 1 >= PARK_AFTER_FAILURES) {
+                // Spec section 7: park only when a row written after this one has since been accepted —
+                // proof the portal is reachable and this payload is the problem (review I3).
+                if (store.anySentAfter(row.getId())) {
+                    store.markParked(row.getId(), res.error);
+                    report.parked++;
+                    continue;
+                }
+                if (skippedCandidate == null) {
+                    skippedCandidate = row.getId();      // give the next row a chance to prove the portal is up
+                    skippedError = res.error;
+                    continue;
+                }
+            }
+            report.state = ReportingStatus.RETRYING;
+            publish(report);
+            return;                                     // back off; the next trigger or sweep resumes
+        }
+        report.state = skippedCandidate != null ? ReportingStatus.RETRYING : ReportingStatus.OK;
+        publish(report);
     }
 
     /** Coalescing trigger: at most one queued run beyond the one in flight. */

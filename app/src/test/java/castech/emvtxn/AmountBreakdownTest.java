@@ -106,6 +106,24 @@ public class AmountBreakdownTest {
     }
 
     @Test
+    public void presetWithANonDivisorStep_isExactWhenNotRounded() {
+        // Review C1: the $60 preset with min_amount $25 is offered (range check only) and must charge $60.
+        // The amount screen passes roundToStep=false for presets; only custom entries round.
+        AmountBreakdown b = AmountBreakdown.of(60_00, 0, 25_00, false, FLAT, FLAT_FEE, 0);
+        assertEquals(60_00, b.withdrawal);
+        assertEquals(0, b.cashBack);
+        assertEquals(63_50, b.total);
+    }
+
+    @Test
+    public void roundingANonDivisorPreset_wouldChangeTheCharge() {
+        // what C1 did: this is why presets must never be built with roundToStep=true
+        AmountBreakdown b = AmountBreakdown.of(60_00, 0, 25_00, true, FLAT, FLAT_FEE, 0);
+        assertEquals(75_00, b.withdrawal);
+        assertEquals(15_00, b.cashBack);
+    }
+
+    @Test
     public void zeroStep_meansNoRounding() {
         AmountBreakdown b = AmountBreakdown.of(12_50, 0, 0, true, FLAT, FLAT_FEE, 0);
         assertEquals(12_50, b.withdrawal);

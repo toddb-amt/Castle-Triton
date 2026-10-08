@@ -1298,6 +1298,12 @@ public class MainActivity extends AppCompatActivity {
         final android.content.Context app = getApplicationContext();
         final castech.emvtxn.reporting.ReportingConfig cfg = new castech.emvtxn.reporting.ReportingConfig(app);
         final castech.emvtxn.atm.TransactionLogManager store = castech.emvtxn.atm.TransactionLogManager.getInstance(app);
+        // The hardware serial comes from the CTOS SDK (CtSystem). Resolve it HERE, once, on the same
+        // start-up path the POS client already uses — never from the pusher's thread (review I5).
+        final String hardwareSerial = getHardwareSerialNumber();
+        if (hardwareSerial.isEmpty()) {
+            Log.w(TAG, "Reporting: hardware serial unavailable at start — pushes will carry an empty tsn until restart");
+        }
         castech.emvtxn.reporting.ReportingPusher p = new castech.emvtxn.reporting.ReportingPusher(
                 store,
                 castech.emvtxn.reporting.ReportingClient.production(),
@@ -1306,7 +1312,7 @@ public class MainActivity extends AppCompatActivity {
                     @Override public String accessKey() { return cfg.getAccessKey(); }
                     @Override public castech.emvtxn.reporting.PushPayload.Identity identity() {
                         return new castech.emvtxn.reporting.PushPayload.Identity(
-                                GlobalPara.atmTerminalId, getHardwareSerialNumber(), cfg.getAccessKey(),
+                                GlobalPara.atmTerminalId, hardwareSerial, cfg.getAccessKey(),
                                 GlobalPara.atmProcessorType, BuildConfig.VERSION_NAME);
                     }
                     @Override public java.util.TimeZone zone() { return java.util.TimeZone.getDefault(); }

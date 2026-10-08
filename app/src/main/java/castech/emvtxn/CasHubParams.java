@@ -202,6 +202,7 @@ public final class CasHubParams {
         if (!rp.isEmpty()) {
             for (String problem : rp.problems) Log.w(TAG, "CasHUB reporting param ignored — " + problem);
             castech.emvtxn.reporting.ReportingConfig rc = new castech.emvtxn.reporting.ReportingConfig(ctx);
+            if (rp.clearKey && rc.isConfigured()) { rc.setAccessKey(""); reportingChanged = true; }   // "off": reporting switched off
             if (rp.accessKey != null && !rp.accessKey.equals(rc.getAccessKey())) { rc.setAccessKey(rp.accessKey); reportingChanged = true; }
             if (rp.url != null && !rp.url.equals(rc.getUrl())) { rc.setUrl(rp.url); reportingChanged = true; }
             Log.w(TAG, "Applied CasHUB " + rp.describe() + (reportingChanged ? " (changed)" : " (unchanged)"));

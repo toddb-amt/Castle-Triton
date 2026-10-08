@@ -130,7 +130,60 @@ public class ReportingPusherTest {
         assertEquals(ReportingStatus.KEY_REJECTED, r.state);
         assertEquals(1, server.getRequestCount());          // did not try row 2
         assertEquals(PushEligibility.PUSH_PENDING, store.get(1).getPushState());
-        assertEquals(1, store.get(1).getPushAttempts());
+        // Review I1: a bad key is never the row's fault — no attempt counted, no backoff
+        assertEquals(0, store.get(1).getPushAttempts());
+        assertEquals("Unauthorized", r.lastError);
+    }
+
+    @Test
+    public void afterAKeyIsFixed_theHeadRowGoesFirst() throws Exception {
+        // Review I1: the row that sat at the head during the bad-key period must not be in backoff
+        store.add(row(1, 1)); store.add(row(2, 2));
+        server.enqueue(new MockResponse().setResponseCode(401).setBody("{\"error\":\"Unauthorized\"}"));
+        pusher.drainOnce();
+        server.enqueue(new MockResponse().setBody(ok("Transaction ingested successfully")));
+        server.enqueue(new MockResponse().setBody(ok("Transaction ingested successfully")));
+        server.takeRequest();                                   // the 401 request
+        ReportingPusher.RunReport r = pusher.drainOnce();       // key fixed in CasHUB → parameter-change run
+        assertEquals(2, r.sent);
+        assertEquals("FLOW-1", flowIdOf(server.takeRequest()));
+        assertEquals("FLOW-2", flowIdOf(server.takeRequest()));
+    }
+
+    @Test
+    public void anExceptionInsideARun_isReportedAndDoesNotKillLaterRuns() throws Exception {
+        // Review I2: scheduleWithFixedDelay stops forever after one thrown exception; a URL that
+        // passes the https:// prefix check but OkHttp rejects used to throw out of drainOnce.
+        store.add(row(1, 1));
+        ReportingPusher broken = new ReportingPusher(store, new ReportingClient(http),
+                new ReportingPusher.Settings() {
+                    @Override public String url() { return "https://bad host/transactions/addTransaction"; }
+                    @Override public String accessKey() { return key; }
+                    @Override public PushPayload.Identity identity() {
+                        return new PushPayload.Identity("MS00TEST", "0000195260000000", key, "EFX", "6.2.13");
+                    }
+                    @Override public TimeZone zone() { return TimeZone.getTimeZone("America/New_York"); }
+                },
+                () -> NOW);
+        ReportingPusher.RunReport r = broken.drainOnce();
+        assertEquals(ReportingStatus.RETRYING, r.state);
+        assertEquals(true, r.lastError.contains("IllegalArgumentException"));
+        ReportingPusher.RunReport again = broken.drainOnce();   // the pusher is still alive
+        assertEquals(ReportingStatus.RETRYING, again.state);
+        assertEquals(PushEligibility.PUSH_PENDING, store.get(1).getPushState());
+    }
+
+    @Test
+    public void aPoisonRow_isParked_whenALaterRowWasAcceptedInAnEarlierRun() throws Exception {
+        // Review I3 / spec section 7: "failed 10+ times AND a row written after it has since been SENT"
+        TransactionLog poison = row(1, 1); poison.setPushAttempts(10); store.add(poison);
+        TransactionLog later = row(2, 2); later.setPushState(PushEligibility.PUSH_SENT); store.add(later);
+        server.enqueue(new MockResponse().setResponseCode(500).setBody("{\"error\":\"Invalid amounts\"}"));
+        ReportingPusher.RunReport r = pusher.drainOnce();
+        assertEquals(1, r.parked);
+        assertEquals(PushEligibility.PUSH_PARKED, store.get(1).getPushState());
+        assertEquals("Invalid amounts", store.get(1).getPushLastError());
+        assertEquals(0, store.countPending());
     }
 
     @Test

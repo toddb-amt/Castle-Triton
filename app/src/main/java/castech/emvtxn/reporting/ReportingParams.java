@@ -14,7 +14,9 @@ import java.util.Set;
  * parameter map that {@code CasHubParams} builds. Pure Java so the rules are unit-tested.
  * <ul>
  *   <li>{@code reporting_access_key} — the tenant key TFI issues; trimmed; blank is a problem and
- *       leaves the stored key alone. A bearer credential: never logged ({@link #maskForLog}).</li>
+ *       leaves the stored key alone. The literal value {@code off} (any case) clears the stored key
+ *       and switches reporting off — the only off-switch (review I6). A bearer credential: never
+ *       logged ({@link #maskForLog}).</li>
  *   <li>{@code reporting_url} — override of the production ingestion URL; must be {@code https://};
  *       trailing slashes removed. Invalid is a problem and leaves the stored URL alone.</li>
  * </ul>
@@ -29,16 +31,22 @@ public final class ReportingParams {
     public static final Set<String> KEYS = Collections.unmodifiableSet(new HashSet<>(
             Arrays.asList(KEY_ACCESS_KEY, KEY_URL)));
 
+    /** The value that switches reporting off. Keys are long random strings, so this cannot collide. */
+    public static final String OFF = "off";
+
     /** Parsed value, or null when the key is absent or unusable. */
     public final String accessKey;
     public final String url;
+    /** True when {@code reporting_access_key} was the {@link #OFF} sentinel: clear the stored key. */
+    public final boolean clearKey;
     /** Why a present key was ignored. Never contains the key. */
     public final List<String> problems;
     private final boolean anyKeyPresent;
 
-    private ReportingParams(String accessKey, String url, List<String> problems, boolean anyKeyPresent) {
+    private ReportingParams(String accessKey, String url, boolean clearKey, List<String> problems, boolean anyKeyPresent) {
         this.accessKey = accessKey;
         this.url = url;
+        this.clearKey = clearKey;
         this.problems = problems;
         this.anyKeyPresent = anyKeyPresent;
     }
@@ -48,22 +56,27 @@ public final class ReportingParams {
         boolean present = false;
         String key = null;
         String url = null;
+        boolean clear = false;
         if (params != null) {
             if (params.containsKey(KEY_ACCESS_KEY)) {
                 present = true;
                 String raw = trim(params.get(KEY_ACCESS_KEY));
-                if (!raw.isEmpty()) key = raw;
-                else problems.add(KEY_ACCESS_KEY + ": blank — ignored");
+                if (raw.equalsIgnoreCase(OFF)) clear = true;
+                else if (!raw.isEmpty()) key = raw;
+                else problems.add(KEY_ACCESS_KEY + ": blank — ignored (use \"off\" to switch reporting off)");
             }
             if (params.containsKey(KEY_URL)) {
                 present = true;
                 String raw = trim(params.get(KEY_URL));
                 while (raw.endsWith("/")) raw = raw.substring(0, raw.length() - 1);
-                if (raw.toLowerCase(Locale.US).startsWith("https://") && raw.length() > "https://".length()) url = raw;
-                else problems.add(KEY_URL + ": must start with https://" + (raw.isEmpty() ? " (blank)" : ", got \"" + raw + "\"") + " — ignored");
+                // https and parseable by the client that will use it (a typo that passes a prefix
+                // check but not OkHttp would otherwise throw inside the pusher — review I2)
+                okhttp3.HttpUrl parsed = okhttp3.HttpUrl.parse(raw);
+                if (parsed != null && "https".equals(parsed.scheme())) url = raw;
+                else problems.add(KEY_URL + ": must be a valid https:// URL" + (raw.isEmpty() ? " (blank)" : ", got \"" + raw + "\"") + " — ignored");
             }
         }
-        return new ReportingParams(key, url, Collections.unmodifiableList(problems), present);
+        return new ReportingParams(key, url, clear, Collections.unmodifiableList(problems), present);
     }
 
     /** True when neither key appeared in the map. */
@@ -71,7 +84,7 @@ public final class ReportingParams {
 
     /** Loggable summary: the URL in clear, the key only as [set] / [unchanged]. */
     public String describe() {
-        return "reporting: key=" + (accessKey != null ? "[set]" : "[unchanged]")
+        return "reporting: key=" + (clearKey ? "[off]" : accessKey != null ? "[set]" : "[unchanged]")
                 + " url=" + (url != null ? url : "[unchanged]")
                 + (problems.isEmpty() ? "" : " problems=" + problems);
     }

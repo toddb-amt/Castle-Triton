@@ -101,7 +101,7 @@ Spec: `docs/superpowers/specs/2026-10-07-reporting-push-design.md`. Contract:
 
 | Key | Default | Effect |
 |---|---|---|
-| `reporting_access_key` | none | tenant key from TFI; reporting is **off** until it is present |
+| `reporting_access_key` | none | tenant key from TFI; reporting is **off** until it is present; the value `off` switches it off again |
 | `reporting_url` | the production ingestion URL | test-portal override |
 
 ### Known issues and deferred
@@ -114,12 +114,18 @@ Spec: `docs/superpowers/specs/2026-10-07-reporting-push-design.md`. Contract:
 - The reporting key is kept in app-private preferences, as the POS access key has been since 6.2.x
   (`SEC-02`: encrypted preferences for both keys together).
 - Backoff timing is in memory: after a restart every pending row gets one immediate try.
+- Fresh whole-branch review (2026-10-08) found and this release fixes before shipping: presets were
+  being re-rounded to the step when `min_amount` did not divide them (a $60 preset with a $25 minimum
+  would have charged $75); a rejected key counted as a row failure; an exception in a drain run would
+  have silently stopped the sweep; the cross-run parking rule was not wired; a negative fee from
+  CasHUB would have crashed every transaction; the pusher thread read the serial from the SDK. All
+  have tests now. Twelve minor findings are deferred in `docs/CODE-REVIEW-BACKLOG.md` (RPT-02 notes).
 
 ### Verification
 
-- Unit suite: **370** tests (61 new: breakdown ×10, parameters ×7, eligibility ×6, report ×1,
-  signal ×3, payload ×13, pusher ×15, status ×6). Each new behaviour was watched failing first.
-  The same three pre-existing failures remain (`TEST-01`).
+- Unit suite: **381** tests (72 new: breakdown ×12, parameters ×9, eligibility ×6, report ×1,
+  signal ×3, payload ×13, pusher ×18, status ×6, fee-config boundary ×4). Each new behaviour was
+  watched failing first. The same three pre-existing failures remain (`TEST-01`).
 - Clean debug build verified to contain the new classes and the Admin layout ids.
 - **Device pass pending** (terminal + key needed): chip, tap and register sale pushed and seen in
   MyView; a host decline; a swipe as `Declined at terminal`; a reversal as `RWT`; offline queue

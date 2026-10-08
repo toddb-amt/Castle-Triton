@@ -32,6 +32,8 @@ public class Fragment_page_amount_selection extends Fragment {
     private double selectedAmount = 0.0;
     /** AMT-03: what the customer typed before AMT-01 rounding; equals selectedAmount for presets. */
     private double enteredAmount = 0.0;
+    /** True when the selection came from the custom-amount dialog (the only path that rounds). */
+    private boolean customEntry = false;
     private DecimalFormat currencyFormat = new DecimalFormat("$0.00");
 
     @Nullable
@@ -135,11 +137,21 @@ public class Fragment_page_amount_selection extends Fragment {
                     // withdrawal is that rounded up to the step (AMT-01) — identical to the
                     // selectedAmount the dialog already rounded, so charges are unchanged,
                     // and the difference is recorded as cash back for the journal and the
-                    // portal. Presets are multiples: sale == withdrawal, cash back 0.
+                    // portal. ONLY a custom entry rounds: a preset is charged exactly as its
+                    // button says even when min_amount does not divide it ($60 with a $25
+                    // minimum stays $60; review C1) — exactly as since 6.2.8.
                     long saleCents = Money.toCents(enteredAmount > 0 ? enteredAmount : selectedAmount);
-                    AmountBreakdown amounts = AmountBreakdown.of(saleCents, 0L,
-                            Money.toCents(GlobalPara.atmMinAmount), true,
-                            GlobalPara.atmUseFlatFee, GlobalPara.atmFlatFeeAmount, GlobalPara.atmPercentageFee);
+                    AmountBreakdown amounts;
+                    try {
+                        amounts = AmountBreakdown.of(saleCents, 0L,
+                                Money.toCents(GlobalPara.atmMinAmount), customEntry,
+                                GlobalPara.atmUseFlatFee, GlobalPara.atmFlatFeeAmount, GlobalPara.atmPercentageFee);
+                    } catch (IllegalArgumentException bad) {
+                        // Fee configuration that cannot be charged (review I4). Never crash the kiosk.
+                        android.util.Log.e("AmountSelection", "Cannot build amounts: " + bad.getMessage());
+                        showErrorDialog("Configuration error", "This terminal's fee settings are invalid. Please contact support.");
+                        return;
+                    }
                     GlobalPara.atmAmounts = amounts;
                     GlobalPara.atmSelectedAmount = Money.dollars(amounts.withdrawal);
                     GlobalPara.atmFee = Money.dollars(amounts.fee);
@@ -179,15 +191,17 @@ public class Fragment_page_amount_selection extends Fragment {
         }
     }
 
+    /** A preset: charged exactly as the button says, never rounded. */
     private void selectAmount(double amount) {
-        selectAmount(amount, amount);
+        selectAmount(amount, amount, false);
     }
 
     /**
      * @param amount  the withdrawal candidate (a preset, or a custom amount already rounded to the step)
      * @param entered what the customer actually asked for (AMT-03: recorded as the sale)
+     * @param custom  true from the custom-amount dialog — the only selection that rounds to the step
      */
-    private void selectAmount(double amount, double entered) {
+    private void selectAmount(double amount, double entered, boolean custom) {
         // Validate amount against limits
         if (amount < GlobalPara.atmMinAmount) {
             showErrorDialog("Amount too low",
@@ -203,6 +217,7 @@ public class Fragment_page_amount_selection extends Fragment {
 
         selectedAmount = amount;
         enteredAmount = entered > 0 ? entered : amount;
+        customEntry = custom;
         updateDisplay();
     }
 
@@ -240,7 +255,7 @@ public class Fragment_page_amount_selection extends Fragment {
                                     + " (withdrawals in " + currencyFormat.format(GlobalPara.atmMinAmount) + " steps)",
                                 android.widget.Toast.LENGTH_LONG).show();
                         }
-                        selectAmount(amount, entered);
+                        selectAmount(amount, entered, true);
                     } catch (NumberFormatException e) {
                         showErrorDialog("Invalid Amount", "Please enter a valid number");
                     }
@@ -296,6 +311,7 @@ public class Fragment_page_amount_selection extends Fragment {
     private void resetSelection() {
         selectedAmount = 0.0;
         enteredAmount = 0.0;
+        customEntry = false;
         updateDisplay();
     }
 

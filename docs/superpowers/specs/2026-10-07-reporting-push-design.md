@@ -35,7 +35,7 @@ values alone, invalid values are logged and ignored.
 
 | Key | Values | Default | Effect |
 |---|---|---|---|
-| `reporting_access_key` | string | none | Tenant key. Without it reporting is off (see R6). Never logged, never in the host-config payload or the KMS backup. Merchant level is acceptable (it is per tenant). |
+| `reporting_access_key` | string, or the literal `off` | none | Tenant key. Without it reporting is off (see R6). The value `off` (any case) clears the stored key and switches reporting off — the only off-switch; a blank value is ignored like any other invalid value (review I6). Never logged, never in the host-config payload or the KMS backup. Merchant level is acceptable (it is per tenant). |
 | `reporting_url` | `https://` URL | the production ingestion URL from the contract (`…/transactions/addTransaction`) | Override for a test portal. Not displayed on the terminal. |
 
 A `ReportingParams` class mirrors `PosParams` / `ApnParams`: `KEYS`, `parse(Map)`, problems list; the
@@ -56,8 +56,10 @@ All fields whole cents, immutable, built by one pure function.
 
 `AmountBreakdown.of(saleCents, tipCents, stepCents, roundToStep, feeConfig)`:
 
-- walk-up: `roundToStep = true` (today's `AmountRounding.roundUpToStep` behaviour, applied to the
-  entered amount; presets are already multiples so they are unchanged);
+- walk-up **custom entry**: `roundToStep = true` (today's `AmountRounding.roundUpToStep` behaviour,
+  applied to the entered amount); walk-up **preset**: `roundToStep = false` — a preset is charged
+  exactly as its button says even when `min_amount` does not divide it ($60 with a $25 minimum stays
+  $60), as since 6.2.8 (review C1 corrected the earlier "presets are already multiples" assumption);
 - register sale: `roundToStep = false` in 6.2.13 (today's behaviour: exact cents, no cash back);
 - balance inquiry: all zero.
 
@@ -155,7 +157,7 @@ client (connect 10 s, read/write 30 s, `Content-Type: application/json`, `X-API-
 | Response | Action |
 |---|---|
 | HTTP 200 | `SENT`, store `push_message`, continue |
-| HTTP 401 | stop the run; set reporting status `KEY_REJECTED` (Admin line, one log line); retry only on the next parameter change or the next 5-minute sweep |
+| HTTP 401 | stop the run; set reporting status `KEY_REJECTED` (Admin line, one log line); **no attempt is counted and no backoff is set on the row** — a rejected key is never the row's fault, so the fixed key's first run sends it first (review I1); retry on the next parameter change or the next 5-minute sweep |
 | any other failure: timeout, no network, HTTP 500 or any other status | `push_attempts++`, `push_last_error` (the contract's `error` text when present, truncated); backoff 5 s, 30 s, 2 min, then 5 min cap; stop the run (the next trigger or sweep resumes); rows stay `PENDING` indefinitely |
 
 **Parking.** A row is set `PARKED` only when it has failed **10 or more times AND a row written after it has since been `SENT`** — proof that the portal is reachable and this payload is the problem (our bug, or a value the portal rejects). While the portal is down every row fails and nothing is parked. To make that proof possible, a run that hits a row on its 10th or later failure skips it and tries the next row; if that one is accepted, the skipped row is parked and logged at WARN with the portal's reason.
@@ -179,8 +181,17 @@ plus a parked count when > 0. Rendered on the Admin screen next to the Network c
   `TransactionLogManager` (synchronized methods).
 - A crash or kill mid-request leaves the row `PENDING`; the next start resends; the portal de-duplicates.
 - Clock: `TransDateTimeUTC` uses the device clock at the time the row was written, not at send time.
-- No key → the pusher never constructs a client. Key removed later → pending rows stay pending (status
-  `NOT_CONFIGURED`, count shown).
+- No key → the pusher never constructs a client. Key switched off later (`reporting_access_key=off`) →
+  pending rows stay pending (status `NOT_CONFIGURED`, count shown); Clear History keeps refusing while
+  they exist, so switch back on to drain, or wait for the pruning guard to be lifted by a new build.
+- Any exception inside a drain run (an unparsable URL, a SQLite error) is caught, reported as
+  `RETRYING` with the exception name, and never kills the periodic sweep (review I2). `reporting_url`
+  is validated with the HTTP client's own parser, not a prefix check.
+- A negative `flat_fee`, `percentage_fee`, `min_amount` or `max_amount` from CasHUB is rejected at the
+  configuration boundary (previous value kept, logged); if a breakdown still cannot be built, the walk-up
+  shows "Configuration error" and a register sale is answered `internal_error` — never a crash (review I4).
+- The hardware serial for `tsn` is read from the CTOS SDK once, where the pusher is started, never on
+  the pusher's thread (review I5).
 - Parked rows are visible (count) and kept; a later build that fixes the payload bug can re-queue them
   by resetting `push_state` (an Admin "Re-queue parked" action is **not** in this release).
 

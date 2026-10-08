@@ -144,16 +144,29 @@ public final class KmsConfigStore {
                     case "processor_type": GlobalPara.atmProcessorType = v; break;
                     case "protocol_type":  GlobalPara.atmProtocolType = v; break;
                     case "use_flat_fee":   GlobalPara.atmUseFlatFee = Boolean.parseBoolean(v.trim()); break;
-                    case "flat_fee":       GlobalPara.atmFlatFeeAmount = Double.parseDouble(v.trim()); break;
-                    case "percentage_fee": GlobalPara.atmPercentageFee = Double.parseDouble(v.trim()); break;
-                    case "min_amount":     GlobalPara.atmMinAmount = Double.parseDouble(v.trim()); break;
-                    case "max_amount":     GlobalPara.atmMaxAmount = Double.parseDouble(v.trim()); break;
+                    // Money values must be >= 0: AmountBreakdown refuses a negative fee loudly, so a
+                    // negative value here would end every transaction (6.2.13 review I4). Keep the
+                    // previous value and say so.
+                    case "flat_fee":       GlobalPara.atmFlatFeeAmount = nonNegative(k, v, GlobalPara.atmFlatFeeAmount); break;
+                    case "percentage_fee": GlobalPara.atmPercentageFee = nonNegative(k, v, GlobalPara.atmPercentageFee); break;
+                    case "min_amount":     GlobalPara.atmMinAmount = nonNegative(k, v, GlobalPara.atmMinAmount); break;
+                    case "max_amount":     GlobalPara.atmMaxAmount = nonNegative(k, v, GlobalPara.atmMaxAmount); break;
                     default: break;
                 }
             } catch (Throwable ignore) {
                 // Skip any malformed line rather than fail the whole restore
             }
         }
+    }
+
+    /** Parses a money/limit value; a negative (or unparsable) value is logged and the current value kept. */
+    private static double nonNegative(String key, String raw, double current) {
+        double d = Double.parseDouble(raw.trim());   // NumberFormatException → caller skips the line
+        if (d < 0) {
+            Log.w(TAG, "Config " + key + "=" + raw.trim() + " rejected (negative) — keeping " + current);
+            return current;
+        }
+        return d;
     }
 
     private static String nz(String s) {

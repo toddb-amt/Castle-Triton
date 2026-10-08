@@ -54,6 +54,25 @@ public class ReportingParamsTest {
     }
 
     @Test
+    public void url_thatOkHttpCannotParse_isAProblem() {
+        // Review I2: a CasHUB typo that passes the https:// prefix check must not reach the pusher
+        ReportingParams bad = ReportingParams.parse(map("reporting_url", "https://bad host/transactions"));
+        assertNull(bad.url);
+        assertEquals(1, bad.problems.size());
+    }
+
+    @Test
+    public void offSentinel_turnsReportingOff() {
+        // Review I6 / spec section 8: the one way to switch reporting off from CasHUB
+        ReportingParams p = ReportingParams.parse(map("reporting_access_key", " OFF "));
+        assertTrue(p.clearKey);
+        assertNull(p.accessKey);
+        assertTrue(p.problems.isEmpty());
+        assertTrue(p.describe().contains("key=[off]"));
+        assertFalse(ReportingParams.parse(map("reporting_access_key", "test-key-not-real")).clearKey);
+    }
+
+    @Test
     public void describe_neverContainsTheKey() {
         ReportingParams p = ReportingParams.parse(map("reporting_access_key", "test-key-not-real",
                 "reporting_url", "https://portal.example/t"));
