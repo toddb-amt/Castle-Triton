@@ -211,6 +211,8 @@ public class MainActivity extends AppCompatActivity {
     // Started lazily in initializeAtmHostService() if PosConfig.isEnabled().
     // See castech.emvtxn.pos.* for the wire protocol and component design.
     private castech.emvtxn.pos.PosOrchestrator posOrchestrator = null;
+    /** RPT-02 (6.2.13): drains journal rows to the MyView portal. Lives for the activity. */
+    private castech.emvtxn.reporting.ReportingPusher reportingPusher = null;
 
     // Transaction Log Manager - DISABLED FOR TESTING
     // private TransactionLogManager transactionLogManager = null;
@@ -387,6 +389,11 @@ public class MainActivity extends AppCompatActivity {
             }
             posOrchestrator = null;
         }
+        if (reportingPusher != null) {
+            try { reportingPusher.stop(); } catch (Exception e) { Log.w(TAG, "reporting pusher stop: " + e.getMessage()); }
+            reportingPusher = null;
+            castech.emvtxn.reporting.PushSignal.setListener(null);
+        }
         teardownStatusBar();
         super.onDestroy();
     }
@@ -550,6 +557,9 @@ public class MainActivity extends AppCompatActivity {
                         if (svc != null) {
                             try { svc.onNetworkAvailable(); } catch (Throwable t) { Log.w(TAG, "onNetworkAvailable: " + t.getMessage()); }
                         }
+                        // RPT-02: network back — drain any reporting rows that queued up offline
+                        castech.emvtxn.reporting.ReportingPusher rp = reportingPusher;
+                        if (rp != null) rp.requestRun();
                     }
                     @Override public void onLost(android.net.Network n) { runOnUiThread(() -> updateSignalIcon()); }
                     @Override public void onCapabilitiesChanged(android.net.Network n,
@@ -982,6 +992,7 @@ public class MainActivity extends AppCompatActivity {
                 if (atmHostService.initialize(config)) {
                     Log.d(TAG, "ATM Host Service initialized successfully");
                     atmHostServiceConfigSignature = currentHostConfigSignature();
+                    startReportingPusher();   // RPT-02: identity needs the applied terminal id / processor
 
                     // Set up event listener to receive transaction results
                     // Store in member variable so we can re-set it before each transaction
@@ -1268,9 +1279,49 @@ public class MainActivity extends AppCompatActivity {
         Log.d(TAG, "POS orchestrator started — state=" + posOrchestrator.getState());
     }
 
-    /** RPT-02: a reporting key or URL changed in CasHUB. Wired to the pusher in a later task. */
+    /** RPT-02: a reporting key or URL changed in CasHUB — try the queue now (a fixed key clears KEY_REJECTED). */
     public void onReportingParamsChanged() {
-        Log.w(TAG, "Reporting parameters changed");
+        castech.emvtxn.reporting.ReportingPusher rp = reportingPusher;
+        Log.w(TAG, "Reporting parameters changed" + (rp == null ? " (pusher not started yet)" : " — requesting a run"));
+        if (rp != null) rp.requestRun();
+    }
+
+    /**
+     * RPT-02: build the pusher once the host service is up (its identity needs the terminal id and
+     * processor from the applied configuration). Settings are read per run, so a CasHUB change takes
+     * effect on the next run without a restart. Triggers: new journal row (PushSignal), network back
+     * (initStatusBar's callback), parameter change, app start, and a 5-minute sweep. Never the
+     * transaction thread, never the SDK.
+     */
+    private void startReportingPusher() {
+        if (reportingPusher != null) return;
+        final android.content.Context app = getApplicationContext();
+        final castech.emvtxn.reporting.ReportingConfig cfg = new castech.emvtxn.reporting.ReportingConfig(app);
+        final castech.emvtxn.atm.TransactionLogManager store = castech.emvtxn.atm.TransactionLogManager.getInstance(app);
+        castech.emvtxn.reporting.ReportingPusher p = new castech.emvtxn.reporting.ReportingPusher(
+                store,
+                castech.emvtxn.reporting.ReportingClient.production(),
+                new castech.emvtxn.reporting.ReportingPusher.Settings() {
+                    @Override public String url() { return cfg.getUrl(); }
+                    @Override public String accessKey() { return cfg.getAccessKey(); }
+                    @Override public castech.emvtxn.reporting.PushPayload.Identity identity() {
+                        return new castech.emvtxn.reporting.PushPayload.Identity(
+                                GlobalPara.atmTerminalId, getHardwareSerialNumber(), cfg.getAccessKey(),
+                                GlobalPara.atmProcessorType, BuildConfig.VERSION_NAME);
+                    }
+                    @Override public java.util.TimeZone zone() { return java.util.TimeZone.getDefault(); }
+                },
+                System::currentTimeMillis);
+        p.setStatusListener((state, pending, parked, lastSentAt, lastError) -> {
+            cfg.setStatus(state, pending, parked, lastSentAt, lastError);
+            Log.w(TAG, castech.emvtxn.reporting.ReportingStatus.render(state, pending, parked, lastSentAt, lastError,
+                    System.currentTimeMillis()));
+        });
+        reportingPusher = p;
+        castech.emvtxn.reporting.PushSignal.setListener(p::requestRun);
+        p.start(5 * 60_000L);
+        p.requestRun();   // app start: anything left from before
+        Log.w(TAG, "Reporting pusher started — " + (cfg.isConfigured() ? "configured" : "not configured (no key)"));
     }
 
     /**
