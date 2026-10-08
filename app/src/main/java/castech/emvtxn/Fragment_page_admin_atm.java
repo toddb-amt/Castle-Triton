@@ -1113,6 +1113,11 @@ public class Fragment_page_admin_atm extends Fragment {
                     }
                 }
                 sb.append("In use: ").append(transport).append("\n");
+                // TZ-01: the live zone, so a field tech can confirm the CasHUB time_zone without a cable
+                sb.append("Time zone: ").append(castech.emvtxn.TimeZoneApplier.currentZoneSummary());
+                String tzLast = castech.emvtxn.TimeZoneApplier.lastResult();
+                if (tzLast.startsWith("failed")) sb.append(" — CasHUB time_zone ").append(tzLast);
+                sb.append("\n");
 
                 // Cellular
                 android.telephony.TelephonyManager tm = (android.telephony.TelephonyManager) ctx.getSystemService(Context.TELEPHONY_SERVICE);

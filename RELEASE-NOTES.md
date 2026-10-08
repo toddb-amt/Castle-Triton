@@ -103,6 +103,16 @@ Spec: `docs/superpowers/specs/2026-10-07-reporting-push-design.md`. Contract:
 |---|---|---|
 | `reporting_access_key` | none | tenant key from TFI; reporting is **off** until it is present; the value `off` switches it off again |
 | `reporting_url` | `https://d16f8tt74onlvr.cloudfront.net/transactions/addTransaction` (built in) | test-portal override |
+| `time_zone` | none (terminal left as it is) | IANA zone name, e.g. `America/New_York`; sets the terminal's **system** zone through Castle's system service, so receipts, Detail Report batches and the push's `BusinessDate` all follow. Unknown/blank is ignored. `TZ-01` |
+
+- **Terminal time zone as a parameter.** Bench finding 2026-10-08: a terminal out of the box sits on
+  **GMT** — Android's zone is a stored setting nothing on the device ever writes (automatic zone is
+  off, and would need a cellular time signal or a location fix anyway); Castle's OS and CasHUB do not
+  set it. The clock is right, only the zone is not, so an evening sale after 8 PM Eastern was dated
+  *tomorrow* on the receipt, in the Detail Report and in the push's `BusinessDate`. New `time_zone`
+  parameter (table above) applied through `CtSystem.setTimeZone` only when it differs from the
+  terminal's; shown live on the Admin Network card as `Time zone: America/New_York (EDT)`. Assume
+  every field terminal needs it. `TZ-01`
 
 ### Known issues and deferred
 
@@ -123,8 +133,8 @@ Spec: `docs/superpowers/specs/2026-10-07-reporting-push-design.md`. Contract:
 
 ### Verification
 
-- Unit suite: **381** tests (72 new: breakdown ×12, parameters ×9, eligibility ×6, report ×1,
-  signal ×3, payload ×13, pusher ×18, status ×6, fee-config boundary ×4). Each new behaviour was
+- Unit suite: **388** tests (79 new: breakdown ×12, parameters ×9, eligibility ×6, report ×1,
+  signal ×3, payload ×13, pusher ×18, status ×6, fee-config boundary ×4, time zone ×7). Each new behaviour was
   watched failing first. The same three pre-existing failures remain (`TEST-01`).
 - Clean debug build verified to contain the new classes and the Admin layout ids.
 - **Device pass pending** (terminal + key needed): chip, tap and register sale pushed and seen in

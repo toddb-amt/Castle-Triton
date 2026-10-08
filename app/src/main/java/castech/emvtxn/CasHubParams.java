@@ -196,6 +196,13 @@ public final class CasHubParams {
                 castech.emvtxn.net.ApnApplier.applyIfChangedAsync(ctx, apn);
             }
         }
+        // time_zone (TZ-01, 6.2.13) → Castle system service, only when it differs from the terminal's
+        TimeZoneParam tz = TimeZoneParam.parse(merged);
+        if (tz.isPresent()) {
+            if (tz.problem != null) Log.w(TAG, "CasHUB time_zone param ignored — " + tz.problem);
+            else if (tz.changeFrom(java.util.TimeZone.getDefault().getID()) == null) Log.w(TAG, "Applied CasHUB " + tz.describe() + " (unchanged)");
+            else TimeZoneApplier.applyIfChangedAsync(tz);
+        }
         // Reporting keys (6.2.13) → ReportingConfig; never into the host payload / KMS backup
         boolean reportingChanged = false;
         castech.emvtxn.reporting.ReportingParams rp = castech.emvtxn.reporting.ReportingParams.parse(merged);
@@ -213,6 +220,7 @@ public final class CasHubParams {
             if (castech.emvtxn.pos.PosParams.KEYS.contains(e.getKey())) continue;
             if (castech.emvtxn.net.ApnParams.KEYS.contains(e.getKey())) continue;
             if (castech.emvtxn.reporting.ReportingParams.KEYS.contains(e.getKey())) continue;
+            if (TimeZoneParam.KEY.equals(e.getKey())) continue;
             payload.append(e.getKey()).append('=').append(e.getValue()).append('\n');
         }
         KmsConfigStore.applyPayload(payload.toString());
