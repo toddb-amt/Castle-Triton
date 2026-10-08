@@ -14,13 +14,13 @@ import java.util.List;
  * Manages persistent storage of transaction logs using SQLite.
  * Provides methods to save, query, and export transaction audit trail.
  */
-public class TransactionLogManager extends SQLiteOpenHelper {
+public class TransactionLogManager extends SQLiteOpenHelper implements castech.emvtxn.reporting.PushStore {
 
     private static final String TAG = "TransactionLogManager";
 
     // Database configuration
     private static final String DATABASE_NAME = "atm_transactions.db";
-    private static final int DATABASE_VERSION = 2;   // 2 (6.2.11): report columns + batches table
+    private static final int DATABASE_VERSION = 3;   // 2 (6.2.11): report columns + batches; 3 (6.2.13): breakdown + push columns
 
     // Table name
     private static final String TABLE_TRANSACTIONS = "transactions";
@@ -52,6 +52,24 @@ public class TransactionLogManager extends SQLiteOpenHelper {
     private static final String COL_TIP_CENTS = "tip_cents";
     private static final String COL_BATCH_ID = "batch_id";
     private static final String COL_REVERSED = "reversed";
+    // 6.2.13 columns (AMT-03 breakdown + RPT-02 push bookkeeping)
+    private static final String COL_SALE_CENTS = "sale_cents";
+    private static final String COL_CASH_BACK_CENTS = "cash_back_cents";
+    private static final String COL_FLOW_ID = "flow_id";
+    private static final String COL_PUSH_STATE = "push_state";
+    private static final String COL_PUSH_ATTEMPTS = "push_attempts";
+    private static final String COL_PUSH_LAST_ERROR = "push_last_error";
+    private static final String COL_PUSH_SENT_AT = "push_sent_at";
+    private static final String COL_PUSH_MESSAGE = "push_message";
+    private static final String[] V3_DDL = {
+            "ALTER TABLE " + TABLE_TRANSACTIONS + " ADD COLUMN " + COL_SALE_CENTS + " INTEGER DEFAULT 0",
+            "ALTER TABLE " + TABLE_TRANSACTIONS + " ADD COLUMN " + COL_CASH_BACK_CENTS + " INTEGER DEFAULT 0",
+            "ALTER TABLE " + TABLE_TRANSACTIONS + " ADD COLUMN " + COL_FLOW_ID + " TEXT",
+            "ALTER TABLE " + TABLE_TRANSACTIONS + " ADD COLUMN " + COL_PUSH_STATE + " INTEGER DEFAULT 0",
+            "ALTER TABLE " + TABLE_TRANSACTIONS + " ADD COLUMN " + COL_PUSH_ATTEMPTS + " INTEGER DEFAULT 0",
+            "ALTER TABLE " + TABLE_TRANSACTIONS + " ADD COLUMN " + COL_PUSH_LAST_ERROR + " TEXT",
+            "ALTER TABLE " + TABLE_TRANSACTIONS + " ADD COLUMN " + COL_PUSH_SENT_AT + " INTEGER DEFAULT 0",
+            "ALTER TABLE " + TABLE_TRANSACTIONS + " ADD COLUMN " + COL_PUSH_MESSAGE + " TEXT" };
 
     // Terminal-owned batches (6.2.11): one row per batch; closed_at = 0 while open
     private static final String TABLE_BATCHES = "batches";
@@ -87,7 +105,15 @@ public class TransactionLogManager extends SQLiteOpenHelper {
                     COL_INVOICE_NO + " TEXT, " +
                     COL_TIP_CENTS + " INTEGER DEFAULT 0, " +
                     COL_BATCH_ID + " INTEGER DEFAULT 1, " +
-                    COL_REVERSED + " INTEGER DEFAULT 0" +
+                    COL_REVERSED + " INTEGER DEFAULT 0, " +
+                    COL_SALE_CENTS + " INTEGER DEFAULT 0, " +
+                    COL_CASH_BACK_CENTS + " INTEGER DEFAULT 0, " +
+                    COL_FLOW_ID + " TEXT, " +
+                    COL_PUSH_STATE + " INTEGER DEFAULT 0, " +
+                    COL_PUSH_ATTEMPTS + " INTEGER DEFAULT 0, " +
+                    COL_PUSH_LAST_ERROR + " TEXT, " +
+                    COL_PUSH_SENT_AT + " INTEGER DEFAULT 0, " +
+                    COL_PUSH_MESSAGE + " TEXT" +
                     ")";
 
     // Index for faster queries
@@ -148,6 +174,18 @@ public class TransactionLogManager extends SQLiteOpenHelper {
             }
             db.execSQL(SQL_CREATE_BATCHES);
         }
+        if (oldVersion < 3) {
+            for (String ddl : V3_DDL) {
+                try { db.execSQL(ddl); } catch (Exception e) { Log.w(TAG, "migration step skipped: " + e.getMessage()); }
+            }
+            // Existing rows: the sale was never recorded separately; the best truth is the withdrawal.
+            try {
+                db.execSQL("UPDATE " + TABLE_TRANSACTIONS + " SET " + COL_SALE_CENTS + " = " + COL_AMOUNT_CENTS
+                        + " WHERE " + COL_SALE_CENTS + " = 0");
+            } catch (Exception e) {
+                Log.w(TAG, "sale_cents backfill skipped: " + e.getMessage());
+            }
+        }
     }
 
     /**
@@ -191,6 +229,14 @@ public class TransactionLogManager extends SQLiteOpenHelper {
             values.put(COL_TIP_CENTS, log.getTipCents());
             values.put(COL_BATCH_ID, log.getBatchId());
             values.put(COL_REVERSED, log.isReversed() ? 1 : 0);
+            values.put(COL_SALE_CENTS, log.getSaleCents());
+            values.put(COL_CASH_BACK_CENTS, log.getCashBackCents());
+            values.put(COL_FLOW_ID, log.getFlowId());
+            values.put(COL_PUSH_STATE, log.getPushState());
+            values.put(COL_PUSH_ATTEMPTS, log.getPushAttempts());
+            values.put(COL_PUSH_LAST_ERROR, log.getPushLastError());
+            values.put(COL_PUSH_SENT_AT, log.getPushSentAt());
+            values.put(COL_PUSH_MESSAGE, log.getPushMessage());
 
             long id = db.insert(TABLE_TRANSACTIONS, null, values);
             if (id != -1) {
@@ -597,6 +643,15 @@ public class TransactionLogManager extends SQLiteOpenHelper {
         if ((i = cursor.getColumnIndex(COL_TIP_CENTS)) >= 0) log.setTipCents(cursor.getLong(i));
         if ((i = cursor.getColumnIndex(COL_BATCH_ID)) >= 0) log.setBatchId(cursor.getInt(i));
         if ((i = cursor.getColumnIndex(COL_REVERSED)) >= 0) log.setReversed(cursor.getInt(i) != 0);
+        // 6.2.13 columns
+        if ((i = cursor.getColumnIndex(COL_SALE_CENTS)) >= 0) log.setSaleCents(cursor.getLong(i));
+        if ((i = cursor.getColumnIndex(COL_CASH_BACK_CENTS)) >= 0) log.setCashBackCents(cursor.getLong(i));
+        if ((i = cursor.getColumnIndex(COL_FLOW_ID)) >= 0) log.setFlowId(cursor.getString(i));
+        if ((i = cursor.getColumnIndex(COL_PUSH_STATE)) >= 0) log.setPushState(cursor.getInt(i));
+        if ((i = cursor.getColumnIndex(COL_PUSH_ATTEMPTS)) >= 0) log.setPushAttempts(cursor.getInt(i));
+        if ((i = cursor.getColumnIndex(COL_PUSH_LAST_ERROR)) >= 0) log.setPushLastError(cursor.getString(i));
+        if ((i = cursor.getColumnIndex(COL_PUSH_SENT_AT)) >= 0) log.setPushSentAt(cursor.getLong(i));
+        if ((i = cursor.getColumnIndex(COL_PUSH_MESSAGE)) >= 0) log.setPushMessage(cursor.getString(i));
         return log;
     }
 
@@ -650,8 +705,13 @@ public class TransactionLogManager extends SQLiteOpenHelper {
             open.put("opened_at", System.currentTimeMillis());
             db.insert(TABLE_BATCHES, null, open);
             long oldest = BatchMath.oldestBatchToKeep(next, BatchMath.KEEP_BATCHES);
-            db.delete(TABLE_TRANSACTIONS, COL_BATCH_ID + " < ?", new String[] { String.valueOf(oldest) });
-            db.delete(TABLE_BATCHES, "id < ?", new String[] { String.valueOf(oldest) });
+            // RPT-02: never prune a batch that still holds an unsent reporting row
+            if (hasPendingPushBelow(db, oldest)) {
+                Log.w(TAG, "Batch pruning skipped: unsent reporting rows in batches below " + oldest);
+            } else {
+                db.delete(TABLE_TRANSACTIONS, COL_BATCH_ID + " < ?", new String[] { String.valueOf(oldest) });
+                db.delete(TABLE_BATCHES, "id < ?", new String[] { String.valueOf(oldest) });
+            }
             db.setTransactionSuccessful();
         } finally {
             db.endTransaction();
@@ -691,12 +751,147 @@ public class TransactionLogManager extends SQLiteOpenHelper {
         return n > 0;
     }
 
-    /** Deletes rows (and batch records) of CLOSED batches; the open batch is never touched. */
+    /**
+     * Deletes rows (and batch records) of CLOSED batches; the open batch is never touched.
+     * Returns -1 (and deletes nothing) when a closed batch still holds an unsent reporting row (RPT-02).
+     */
     public synchronized int clearClosedBatches() {
         int current = currentBatchId();
         SQLiteDatabase db = getWritableDatabase();
+        if (hasPendingPushBelow(db, current)) {
+            Log.w(TAG, "Clear history refused: unsent reporting rows in closed batches");
+            return -1;
+        }
         int n = db.delete(TABLE_TRANSACTIONS, COL_BATCH_ID + " < ?", new String[] { String.valueOf(current) });
         db.delete(TABLE_BATCHES, "id < ?", new String[] { String.valueOf(current) });
         return n;
+    }
+
+    // ======================================================================
+    // RPT-02 push store (6.2.13) — the journal is the outbox
+    // ======================================================================
+
+    @Override
+    public List<TransactionLog> pendingPush(int limit) {
+        List<TransactionLog> out = new ArrayList<>();
+        Cursor c = null;
+        try {
+            c = getReadableDatabase().query(TABLE_TRANSACTIONS, null, COL_PUSH_STATE + " = ?",
+                    new String[] { String.valueOf(castech.emvtxn.reporting.PushEligibility.PUSH_PENDING) },
+                    null, null, COL_TIMESTAMP + " ASC, " + COL_ID + " ASC", String.valueOf(limit));
+            while (c.moveToNext()) out.add(cursorToTransactionLog(c));
+        } catch (Exception e) {
+            Log.e(TAG, "pendingPush: " + e.getMessage());
+        } finally {
+            if (c != null) c.close();
+        }
+        return out;
+    }
+
+    @Override
+    public boolean anySentAfter(long rowId) {
+        Cursor c = null;
+        try {
+            c = getReadableDatabase().rawQuery("SELECT 1 FROM " + TABLE_TRANSACTIONS + " WHERE " + COL_ID + " > ? AND "
+                    + COL_PUSH_STATE + " = ? LIMIT 1",
+                    new String[] { String.valueOf(rowId), String.valueOf(castech.emvtxn.reporting.PushEligibility.PUSH_SENT) });
+            return c.moveToFirst();
+        } catch (Exception e) {
+            return false;
+        } finally {
+            if (c != null) c.close();
+        }
+    }
+
+    @Override
+    public void markSent(long rowId, String message, long sentAt) {
+        ContentValues v = new ContentValues();
+        v.put(COL_PUSH_STATE, castech.emvtxn.reporting.PushEligibility.PUSH_SENT);
+        v.put(COL_PUSH_SENT_AT, sentAt);
+        v.put(COL_PUSH_MESSAGE, message);
+        v.put(COL_PUSH_LAST_ERROR, "");
+        getWritableDatabase().update(TABLE_TRANSACTIONS, v, COL_ID + " = ?", new String[] { String.valueOf(rowId) });
+    }
+
+    @Override
+    public void markFailed(long rowId, String error) {
+        getWritableDatabase().execSQL("UPDATE " + TABLE_TRANSACTIONS + " SET " + COL_PUSH_ATTEMPTS + " = " + COL_PUSH_ATTEMPTS
+                + " + 1, " + COL_PUSH_LAST_ERROR + " = ? WHERE " + COL_ID + " = ?",
+                new Object[] { truncate(error, 200), rowId });
+    }
+
+    @Override
+    public void markParked(long rowId, String error) {
+        ContentValues v = new ContentValues();
+        v.put(COL_PUSH_STATE, castech.emvtxn.reporting.PushEligibility.PUSH_PARKED);
+        v.put(COL_PUSH_LAST_ERROR, truncate(error, 200));
+        getWritableDatabase().update(TABLE_TRANSACTIONS, v, COL_ID + " = ?", new String[] { String.valueOf(rowId) });
+    }
+
+    @Override public int countPending() { return countByPushState(castech.emvtxn.reporting.PushEligibility.PUSH_PENDING); }
+    @Override public int countParked()  { return countByPushState(castech.emvtxn.reporting.PushEligibility.PUSH_PARKED); }
+
+    private int countByPushState(int state) {
+        Cursor c = null;
+        try {
+            c = getReadableDatabase().rawQuery("SELECT COUNT(*) FROM " + TABLE_TRANSACTIONS + " WHERE " + COL_PUSH_STATE + " = ?",
+                    new String[] { String.valueOf(state) });
+            return c.moveToFirst() ? c.getInt(0) : 0;
+        } catch (Exception e) {
+            return 0;
+        } finally {
+            if (c != null) c.close();
+        }
+    }
+
+    private static String truncate(String s, int max) {
+        if (s == null) return "";
+        return s.length() <= max ? s : s.substring(0, max);
+    }
+
+    /** True when any row in a batch older than {@code batchId} is still PENDING — such batches must not be pruned. */
+    private boolean hasPendingPushBelow(SQLiteDatabase db, long batchId) {
+        Cursor c = null;
+        try {
+            c = db.rawQuery("SELECT 1 FROM " + TABLE_TRANSACTIONS + " WHERE " + COL_BATCH_ID + " < ? AND " + COL_PUSH_STATE + " = ? LIMIT 1",
+                    new String[] { String.valueOf(batchId), String.valueOf(castech.emvtxn.reporting.PushEligibility.PUSH_PENDING) });
+            return c.moveToFirst();
+        } catch (Exception e) {
+            return false;
+        } finally {
+            if (c != null) c.close();
+        }
+    }
+
+    /**
+     * RPT-02: a reversal the host accepted becomes its own journal row, pushed as RWT. Carries the
+     * original's sequence, amounts, card and account; fresh id and flow id. The Detail Report and
+     * BatchMath select by type and ignore REVERSAL rows; "Reversed" keeps coming from the flag.
+     */
+    public long insertReversalRow(TransactionLog original, boolean pending) {
+        TransactionLog r = new TransactionLog();
+        r.setTransactionId(original.getTransactionId() + "-RWT");
+        r.setTransactionType("REVERSAL");
+        r.setTimestamp(System.currentTimeMillis());
+        r.setCardLastFour(original.getCardLastFour());
+        r.setEntryMode(original.getEntryMode());
+        r.setAmountCents(original.getAmountCents());
+        r.setSaleCents(original.getSaleCents());
+        r.setCashBackCents(original.getCashBackCents());
+        r.setFeeCents(original.getFeeCents());
+        r.setTipCents(original.getTipCents());
+        r.setTotalCents(original.getTotalCents());
+        r.setResult("APPROVED");
+        r.setResponseCode(original.getResponseCode());
+        r.setReferenceNumber(original.getReferenceNumber());
+        r.setTerminalId(original.getTerminalId());
+        r.setProcessorType(original.getProcessorType());
+        r.setSequenceNumber(original.getSequenceNumber());
+        r.setAccountType(original.getAccountType());
+        r.setBatchId(original.getBatchId());
+        r.setFlowId(java.util.UUID.randomUUID().toString().toUpperCase(java.util.Locale.US));
+        r.setPushState(pending ? castech.emvtxn.reporting.PushEligibility.PUSH_PENDING
+                               : castech.emvtxn.reporting.PushEligibility.PUSH_NOT_APPLICABLE);
+        return saveTransaction(r);
     }
 }

@@ -56,6 +56,15 @@ public class TransactionLog {
     private long tipCents;              // reserved (0 until tips ship)
     private int batchId;                // terminal-owned batch
     private boolean reversed;           // approval later reversed → excluded from detail lines
+    // 6.2.13 (AMT-03 / RPT-02)
+    private long saleCents;             // what the customer asked for; amountCents stays the withdrawal
+    private long cashBackCents;         // withdrawal - sale - tip
+    private String flowId;              // UUID, same on every push retry
+    private int pushState;              // PushEligibility.PUSH_*
+    private int pushAttempts;
+    private String pushLastError;
+    private long pushSentAt;
+    private String pushMessage;         // the portal's message on success
 
     /**
      * Default constructor.
@@ -236,6 +245,24 @@ public class TransactionLog {
     public void setBatchId(int batchId) { this.batchId = batchId; }
     public boolean isReversed() { return reversed; }
     public void setReversed(boolean reversed) { this.reversed = reversed; }
+
+    // 6.2.13 (AMT-03 / RPT-02)
+    public long getSaleCents() { return saleCents; }
+    public void setSaleCents(long saleCents) { this.saleCents = saleCents; }
+    public long getCashBackCents() { return cashBackCents; }
+    public void setCashBackCents(long cashBackCents) { this.cashBackCents = cashBackCents; }
+    public String getFlowId() { return flowId; }
+    public void setFlowId(String flowId) { this.flowId = flowId; }
+    public int getPushState() { return pushState; }
+    public void setPushState(int pushState) { this.pushState = pushState; }
+    public int getPushAttempts() { return pushAttempts; }
+    public void setPushAttempts(int pushAttempts) { this.pushAttempts = pushAttempts; }
+    public String getPushLastError() { return pushLastError; }
+    public void setPushLastError(String pushLastError) { this.pushLastError = pushLastError; }
+    public long getPushSentAt() { return pushSentAt; }
+    public void setPushSentAt(long pushSentAt) { this.pushSentAt = pushSentAt; }
+    public String getPushMessage() { return pushMessage; }
+    public void setPushMessage(String pushMessage) { this.pushMessage = pushMessage; }
 
     // Formatting helpers
 

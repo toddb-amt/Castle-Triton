@@ -1155,7 +1155,8 @@ public class Fragment_page_admin_atm extends Fragment {
                     String msg;
                     try {
                         int n = castech.emvtxn.atm.TransactionLogManager.getInstance(app).clearClosedBatches();
-                        msg = n + " row(s) cleared";
+                        // RPT-02: -1 = refused, a closed batch still holds rows not yet sent to MyView
+                        msg = n < 0 ? "Not cleared: unsent reporting rows in closed batches" : n + " row(s) cleared";
                     } catch (Throwable t) {
                         msg = "Clear failed: " + t.getMessage();
                     }
