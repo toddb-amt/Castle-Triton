@@ -261,11 +261,7 @@ public class GlobalPara
 		android.util.Log.d("GlobalPara", "resetATMTransactionState() called");
 
 		// Reset amount selection
-		atmSelectedAmount = "0.00";
-		atmFee = "0.00";
-		atmTotal = "0.00";
-		strAmount = "0";
-		atmAmounts = AmountBreakdown.balanceInquiry();
+		clearAmounts();
 
 		// Reset transaction mode
 		atmBalanceInquiryMode = false;
@@ -327,6 +323,24 @@ public class GlobalPara
 		cardType = null;
 
 		android.util.Log.d("GlobalPara", "ATM transaction state reset complete");
+	}
+
+	/** TIP-01: every amount string and the chip amount from the ONE breakdown. The only writer of these mirrors. */
+	public static void applyAmounts(AmountBreakdown a) {
+		atmAmounts = a;
+		atmSelectedAmount = Money.dollars(a.withdrawal);
+		atmFee = Money.dollars(a.fee);
+		atmTotal = Money.dollars(a.total);
+		strAmount = a.sale > 0 ? a.chipAmountCents() : "0";
+	}
+
+	/** The amount state of "no transaction": used by every reset site (6.2.13 review M7). */
+	public static void clearAmounts() {
+		atmAmounts = AmountBreakdown.balanceInquiry();
+		atmSelectedAmount = "0.00";
+		atmFee = "0.00";
+		atmTotal = "0.00";
+		strAmount = "0";
 	}
 
 	/**

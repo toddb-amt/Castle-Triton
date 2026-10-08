@@ -2391,6 +2391,28 @@ public class MainActivity extends AppCompatActivity {
                     ((Fragment_page_receipt) fragment).refreshDisplay();
                 }
             }
+            // TIP-01: the pager does not resume/pause adjacent pages — tell the tip page explicitly,
+            // so its 30 s timer starts when shown and can never fire into the card phase (LIFE-02).
+            if (mViewPager.getCurrentItem() == GlobalDef.d_PAGE_TIP && pageIndex != GlobalDef.d_PAGE_TIP) {
+                Fragment leaving = mSectionsPagerAdapter.getCachedFragment(GlobalDef.d_PAGE_TIP);
+                if (leaving instanceof Fragment_page_tip) ((Fragment_page_tip) leaving).onHidden();
+            }
+            if (pageIndex == GlobalDef.d_PAGE_TIP) {
+                mViewPager.setCurrentItem(pageIndex, false);
+                Fragment fragment = mSectionsPagerAdapter.getCachedFragment(pageIndex);
+                if (fragment instanceof Fragment_page_tip) {
+                    ((Fragment_page_tip) fragment).onShown();
+                } else {
+                    // First ever visit: the pager instantiates the page during setCurrentItem; show it next frame
+                    mViewPager.post(() -> {
+                        Fragment f = mSectionsPagerAdapter.getCachedFragment(GlobalDef.d_PAGE_TIP);
+                        if (f instanceof Fragment_page_tip) ((Fragment_page_tip) f).onShown();
+                        else Log.e(TAG, "tip page not instantiated — falling back to the transaction page");
+                        if (!(f instanceof Fragment_page_tip)) navigateToPage(GlobalDef.d_PAGE_TRANSACTION);
+                    });
+                }
+                return;
+            }
             Log.d(TAG, "navigateToPage() setting ViewPager to page " + pageIndex);
             mViewPager.setCurrentItem(pageIndex, false);
         } else {
@@ -2784,6 +2806,9 @@ public class MainActivity extends AppCompatActivity {
                 case 5:  // d_PAGE_SETTING
                     fragment = new Fragment_page_admin_atm(this.activity);  // ATM Admin (PIN-protected)
                     break;
+                case 6:  // d_PAGE_TIP
+                    fragment = new Fragment_page_tip(this.activity);  // TIP-01 (6.2.14)
+                    break;
             }
 
             if (fragment != null) {
@@ -2801,7 +2826,7 @@ public class MainActivity extends AppCompatActivity {
 
         @Override
         public int getCount() {
-            return 6;  // All pages (Account Type disabled for now)
+            return 7;  // All pages (Account Type disabled for now); 6 = tip screen (6.2.14)
         }
 
         @Override
@@ -2819,6 +2844,8 @@ public class MainActivity extends AppCompatActivity {
                     return "Receipt";
                 case GlobalDef.d_PAGE_SETTING:
                     return "Admin";
+                case GlobalDef.d_PAGE_TIP:
+                    return "Tip";
             }
             return null;
         }

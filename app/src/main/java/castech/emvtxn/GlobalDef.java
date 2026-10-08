@@ -9,6 +9,7 @@ public class GlobalDef
 	public static final int d_PAGE_TRANSACTION      = 3;
 	public static final int d_PAGE_RECEIPT          = 4;
 	public static final int d_PAGE_SETTING          = 5;  // Admin screen
+	public static final int d_PAGE_TIP              = 6;  // TIP-01: between amount and card (6.2.14)
 
 	// Account Type page - DISABLED for now (was causing ANR issues)
 	// Re-enable after core flow is stable
