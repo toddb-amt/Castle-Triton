@@ -108,6 +108,10 @@ public final class TipQuote {
     /** Validates a custom tip (T7): ≥ 1 cent, withdrawal within the maximum; flags tip > sale. */
     public Custom custom(long tipCents) {
         if (tipCents < 1) return new Custom(null, TOO_SMALL, customLimitCents, false);
+        // The limit is exactly "the largest tip whose rounded withdrawal fits" — so anything above it
+        // is OVER_LIMIT, decided BEFORE any addition: a huge value typed on the keypad must never
+        // reach sale + tip, where it would wrap negative and pass the maximum check (security review).
+        if (tipCents > customLimitCents) return new Custom(null, OVER_LIMIT, customLimitCents, false);
         AmountBreakdown a = AmountBreakdown.of(noTip.sale, tipCents, stepCents, true, useFlatFee, flatFeeDollars, percentFee);
         if (a.withdrawal > maxWithdrawalCents) return new Custom(null, OVER_LIMIT, customLimitCents, false);
         return new Custom(a, null, customLimitCents, tipCents > noTip.sale);

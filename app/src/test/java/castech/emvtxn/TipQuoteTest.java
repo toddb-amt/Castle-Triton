@@ -107,6 +107,19 @@ public class TipQuoteTest {
     }
 
     @Test
+    public void customTip_absurdlyLarge_isRefused_withoutOverflowingIntoAcceptance() {
+        // Security review 2026-10-08: sale + Long.MAX_VALUE wrapped negative, passed "withdrawal <= max",
+        // and would have been charged. Anything above the custom limit is refused before any arithmetic.
+        TipQuote q = quote(10_00);
+        for (long absurd : new long[] { Long.MAX_VALUE, Long.MAX_VALUE - 10_00, 1_000_000_000_000L, q.customLimitCents + 1 }) {
+            TipQuote.Custom c = q.custom(absurd);
+            assertEquals(TipQuote.OVER_LIMIT, c.failure);
+            assertNull(c.amounts);
+            assertEquals(490_00, c.maxTipCents);
+        }
+    }
+
+    @Test
     public void customTip_belowOneCent_isTooSmall() {
         assertEquals(TipQuote.TOO_SMALL, quote(10_00).custom(0).failure);
         assertEquals(TipQuote.TOO_SMALL, quote(10_00).custom(-5).failure);
