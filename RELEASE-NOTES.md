@@ -96,7 +96,7 @@ the proxy team should be told.
 1. `tips_enabled` absent → no tip screen in either flow; set it `true` in CasHUB → screen appears on the next transaction without restart; `false` removes it again.
 2. Walk-up tap and chip insert: each of 10% / 15% / 20% / Custom / No Tip; receipt block; Detail Report lines; MyView shows `TipAmount` / `CashBackAmount` after the push.
 3. Register sale $12.50 → tip 10% → reply `tip_cents=125`, `cash_back_cents=625`, `total_cents=2350`; receipt shows the split.
-4. Register sale $490 with max $500: 10/15/20 greyed "Over $500.00 limit"; Custom accepts $10.00, refuses $10.01 naming $10.00.
+4. Register sale $490 with max $500: 10/15/20 greyed "Over $500 limit"; Custom accepts $10.00, refuses $10.01 naming $10.00.
 5. Custom $25 on a $10 sale → confirmation → Yes → withdrawal $40.00.
 6. 30 s idle (once with the custom keypad open) → No Tip → card prompt; no second navigation later in the log.
 7. Cancel: walk-up back to the menu; register sees `user_cancelled` within a second; slot free.

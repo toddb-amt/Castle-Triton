@@ -71,10 +71,16 @@ public class TipQuoteTest {
         TipQuote q = quote(480_00);                            // 10% = $48 → $528 → $540 > $500
         for (TipQuote.Option o : q.options) {
             assertFalse(o.enabled);
-            assertEquals("Over $500.00 limit", o.reasonIfDisabled);
+            assertEquals("Over $500 limit", o.reasonIfDisabled);     // whole dollars read better on a button-width label
         }
         assertEquals(20_00, q.customLimitCents);               // 480 + 20 = 500 exactly
         assertFalse(q.skipScreen);                             // a custom tip is still possible
+    }
+
+    @Test
+    public void theLimitLabel_showsCentsOnlyWhenThereAreSome() {
+        TipQuote odd = TipQuote.of(noTip(480_00, true), STEP, 500_50, true, 3.50, 0.0);
+        assertEquals("Over $500.50 limit", odd.options.get(0).reasonIfDisabled);
     }
 
     @Test

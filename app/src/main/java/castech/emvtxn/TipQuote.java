@@ -93,7 +93,7 @@ public final class TipQuote {
                 a = AmountBreakdown.of(sale, tip, stepCents, true, useFlatFee, flatFeeDollars, percentFee);
                 enabled = a.withdrawal <= maxWithdrawalCents;
             }
-            opts.add(new Option(pct, tip, a, enabled, enabled ? "" : "Over $" + Money.dollars(maxWithdrawalCents) + " limit"));
+            opts.add(new Option(pct, tip, a, enabled, enabled ? "" : "Over $" + shortDollars(maxWithdrawalCents) + " limit"));
         }
         return new TipQuote(noTip, opts, limit, maxWithdrawalCents, stepCents, useFlatFee, flatFeeDollars, percentFee);
     }
@@ -115,6 +115,11 @@ public final class TipQuote {
         AmountBreakdown a = AmountBreakdown.of(noTip.sale, tipCents, stepCents, true, useFlatFee, flatFeeDollars, percentFee);
         if (a.withdrawal > maxWithdrawalCents) return new Custom(null, OVER_LIMIT, customLimitCents, false);
         return new Custom(a, null, customLimitCents, tipCents > noTip.sale);
+    }
+
+    /** "$500" for whole dollars, "$500.50" otherwise — the label sits under a 100 dp button. */
+    static String shortDollars(long cents) {
+        return cents % 100 == 0 ? Long.toString(cents / 100) : Money.dollars(cents);
     }
 
     /** roundUp(x, step) ≤ max ⇔ x ≤ the largest multiple of step that is ≤ max (max itself when no step). */
