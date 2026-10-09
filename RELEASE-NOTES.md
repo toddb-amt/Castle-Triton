@@ -129,6 +129,9 @@ the proxy team should be told.
 
 ## 6.2.13 — 2026-10-08 · PR #9 · base 6.2.12 · versionCode 75
 
+> **Not shipped as its own build.** Merged to `main` (PR #9) and tagged `v6.2.13` as code; everything below ships inside **6.2.14**, with tips off by default. The 6.2.13 device pass ran on the 6.2.14 build (same code plus the tip screen).
+
+
 ### Highlights
 
 **Every transaction is now reported to MyView directly from the terminal.** The portal's host-log
