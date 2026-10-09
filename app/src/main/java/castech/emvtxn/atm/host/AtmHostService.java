@@ -156,7 +156,7 @@ public class AtmHostService {
             }
 
             // Initialize transaction manager
-            transactionManager = new AtmTransactionManager(config, keyManager);
+            transactionManager = new AtmTransactionManager(config, keyManager, SequenceCounter.persistent(context));   // SEQ-01
             transactionManager.setTransactionListener(new InternalTransactionListener());
             transactionManager.setReversalManager(reversalManager);
 
