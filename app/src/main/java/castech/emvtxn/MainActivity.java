@@ -3635,6 +3635,14 @@ public class MainActivity extends AppCompatActivity {
 
 
                             if (isSelectSuccess == false) {
+                                if (chipFailures < CHIP_FAILURES_BEFORE_GIVING_UP) {   // MSR-01: the commonest chip failure on a damaged chip (bench 2026-10-09: 0x1004)
+                                    chipFailures++;
+                                    chipFailedThisTxn = true;
+                                    Log.w(TAG, "MSR-01: chip application selection failed (" + chipFailures + "/" + CHIP_FAILURES_BEFORE_GIVING_UP + ") - swipe now allowed for this transaction");
+                                    waitForChipCardRemoval("Chip could not be read\nRemove the card, then\nswipe it or try again\n");
+                                    entryMode = 0;
+                                    continue msrRetryLoop;
+                                }
                                 // Set decline result so receipt page shows error
                                 if (GlobalPara.atmMode) {
                                     GlobalPara.transactionResult = 0x0003; // Decline
