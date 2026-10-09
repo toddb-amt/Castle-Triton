@@ -54,6 +54,7 @@ public final class KmsConfigStore {
                     "protocol_type="  + nz(GlobalPara.atmProtocolType)   + "\n" +
                     "use_flat_fee="   + GlobalPara.atmUseFlatFee         + "\n" +
                     "tips_enabled="   + GlobalPara.atmTipsEnabled        + "\n" +
+                    "swipe_enabled="  + GlobalPara.atmSwipeEnabled       + "\n" +
                     "flat_fee="       + GlobalPara.atmFlatFeeAmount      + "\n" +
                     "percentage_fee=" + GlobalPara.atmPercentageFee      + "\n" +
                     "min_amount="     + GlobalPara.atmMinAmount          + "\n" +
@@ -146,6 +147,7 @@ public final class KmsConfigStore {
                     case "protocol_type":  GlobalPara.atmProtocolType = v; break;
                     case "use_flat_fee":   GlobalPara.atmUseFlatFee = Boolean.parseBoolean(v.trim()); break;
                     case "tips_enabled":   GlobalPara.atmTipsEnabled = parseBool(k, v, GlobalPara.atmTipsEnabled); break;
+                    case "swipe_enabled":  GlobalPara.atmSwipeEnabled = parseBool(k, v, GlobalPara.atmSwipeEnabled); break;
                     // Money values must be >= 0: AmountBreakdown refuses a negative fee loudly, so a
                     // negative value here would end every transaction (6.2.13 review I4). Keep the
                     // previous value and say so.

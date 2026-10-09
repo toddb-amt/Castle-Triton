@@ -227,7 +227,7 @@ public final class CasHubParams {
         Log.w(TAG, "Applied CasHUB central config: host=" + GlobalPara.atmHostAddress
                 + " port=" + GlobalPara.atmHostPort + " tid=" + GlobalPara.atmTerminalId
                 + " processor=" + GlobalPara.atmProcessorType
-                + " tips=" + (GlobalPara.atmTipsEnabled ? "on" : "off")
+                + " tips=" + (GlobalPara.atmTipsEnabled ? "on" : "off") + " swipe=" + (GlobalPara.atmSwipeEnabled ? "on" : "off")
                 + " min=" + GlobalPara.atmMinAmount + " max=" + GlobalPara.atmMaxAmount);
         return new Applied(true, posDiff, reportingChanged);
     }

@@ -1,40 +1,28 @@
 package castech.emvtxn;
 
 /**
- * Which online path a card takes once the kernel has said "go online". Pure — the
- * mapping is pinned by OnlineRouteTest.
- *
- * <p><b>Why this exists (TAP-01, 6.2.12):</b> the chain in MainActivity's transaction
- * thread read
- * <pre>
- *   if (QuickChip &amp;&amp; contact) { ...contactless host send... }
- *   else if (contact)          { ...contact host send... }
- *   else                       { decline "91 / Host service not available" }
- * </pre>
- * QuickChip is the sample app's checkbox and is never ticked, so the contactless send
- * could not run: every tapped card dropped into the last branch and was declined at the
- * terminal with a 91 the processor never sent. Only an inserted chip reached the host.
+ * Which online path a card-present transaction takes once the card has been read (TAP-01, 6.2.12;
+ * MSR-01, 6.2.14). Pure, so the routing is unit-tested — the branch it replaced had sent every
+ * tap to a terminal-made "91" for months because the host send sat behind a sample-app checkbox.
  */
 public enum OnlineRoute {
-    /** Tap: send to the host as a contactless transaction. */
     CONTACTLESS_HOST,
-    /** Inserted chip: send to the host, then complete the chip transaction. */
     CONTACT_HOST,
-    /**
-     * Inserted chip with the sample app's QuickChip box ticked. Kept exactly as it was
-     * (QuickChip completion, then the contactless-style send) — not used by the ATM flow.
-     */
     QUICK_CHIP_CONTACT,
-    /** Swipe, or anything unrecognised: there is no host path; decline at the terminal. */
+    /** A swipe, with swipes enabled: Track 2 to the host in Field 6, no EMV data (MSR-01). */
+    MSR_HOST,
+    /** No host send: ends at the terminal with a terminal-made decline. */
     NO_HOST_PATH;
 
-    /**
-     * @param entryMode one of {@code GlobalDef.d_ENTRY_MODE_*}
-     * @param quickChip {@code GlobalPara.isQuickChipTransaction}
-     */
+    /** Pre-6.2.14 form: swipes have no host path. */
     public static OnlineRoute of(byte entryMode, boolean quickChip) {
+        return of(entryMode, quickChip, false);
+    }
+
+    public static OnlineRoute of(byte entryMode, boolean quickChip, boolean swipeEnabled) {
         if (entryMode == GlobalDef.d_ENTRY_MODE_CL) return CONTACTLESS_HOST;
         if (entryMode == GlobalDef.d_ENTRY_MODE_CT) return quickChip ? QUICK_CHIP_CONTACT : CONTACT_HOST;
+        if (entryMode == GlobalDef.d_ENTRY_MODE_MSR && swipeEnabled) return MSR_HOST;
         return NO_HOST_PATH;
     }
 }

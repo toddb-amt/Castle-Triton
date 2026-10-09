@@ -43,7 +43,27 @@ public class OnlineRouteTest {
 
     @Test
     public void swipedCard_hasNoHostPath() {
-        assertEquals(OnlineRoute.NO_HOST_PATH, OnlineRoute.of(SWIPE, false));
+        assertEquals(OnlineRoute.NO_HOST_PATH, OnlineRoute.of(SWIPE, false));          // 2-arg form: swipes off
+    }
+
+    // ---- MSR-01 (6.2.14): a swipe goes to the host when swipes are enabled ---------------
+
+    @Test
+    public void swipe_goesToTheHost_whenSwipesAreEnabled() {
+        assertEquals(OnlineRoute.MSR_HOST, OnlineRoute.of(SWIPE, false, true));
+        assertEquals(OnlineRoute.MSR_HOST, OnlineRoute.of(SWIPE, true, true));           // quick chip is a contact thing
+    }
+
+    @Test
+    public void swipe_hasNoHostPath_whenSwipesAreOff() {
+        assertEquals(OnlineRoute.NO_HOST_PATH, OnlineRoute.of(SWIPE, false, false));
+    }
+
+    @Test
+    public void theSwipeSwitch_changesNothingForTapOrChip() {
+        assertEquals(OnlineRoute.CONTACTLESS_HOST, OnlineRoute.of(TAP, false, false));
+        assertEquals(OnlineRoute.CONTACT_HOST, OnlineRoute.of(CONTACT, false, false));
+        assertEquals(OnlineRoute.QUICK_CHIP_CONTACT, OnlineRoute.of(CONTACT, true, false));
         assertEquals(OnlineRoute.NO_HOST_PATH, OnlineRoute.of(SWIPE, true));
     }
 

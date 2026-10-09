@@ -161,6 +161,9 @@ public class MainActivity extends AppCompatActivity {
     private CtEMVManualEntry mentry = null;
     private CtSC sc = null;
     private CtEMVMSR msr = null;
+    /** MSR-01 (6.2.14): the plain stripe reader. The EMV one (CtEMVMSR) never releases tracks without an
+     *  encryption setting (0x61000009) — every swipe since v5.3 died there. CtMSR returns the tracks as read. */
+    private CTOS.CtMSR plainMsr = null;
     private CtEMVEDL edl = null;
     private boolean sdkInitialized = false;
     private static boolean isRunningOnEmulator = false;
@@ -3340,6 +3343,20 @@ public class MainActivity extends AppCompatActivity {
                     // v5.3-ATM: MSR retry counter (industry standard: 3 attempts)
                     int msrRetryCount = 0;
                     final int MSR_MAX_RETRIES = 3;
+                    // MSR-01 (6.2.14): the swipe read and the technical-fallback state for THIS transaction
+                    final byte[] swipeT1 = new byte[256], swipeT2 = new byte[256], swipeT3 = new byte[256];
+                    int swipeReadRc = 0;                 // CtMSR.read result when entryMode == MSR
+                    int swipeTrack2Len = 0;
+                    String swipeHostTrack2 = null;       // ";PAN=…?" validated for Field 6, set when a swipe is ACCEPTED
+                    String swipeRefusal = null;          // set when the swipe ends at the terminal (chip prompts exhausted)
+                    boolean chipFailedThisTxn = false;   // a chip read failed → a chip card may now be swiped
+                    int chipFailures = 0;
+                    final int CHIP_FAILURES_BEFORE_GIVING_UP = 2;
+                    int chipInsertPrompts = 0;
+                    final int CHIP_INSERT_PROMPTS_MAX = 3;
+                    if (plainMsr == null) {
+                        try { plainMsr = new CTOS.CtMSR(); } catch (Throwable t) { Log.e(TAG, "CtMSR unavailable: " + t); }
+                    }
 
                     // Enhanced logging for debugging
                     Log.d(TAG, "=== CARD DETECTION STARTING ===");
@@ -3389,10 +3406,16 @@ public class MainActivity extends AppCompatActivity {
 
                         if (txnAborted) { break; }
 
-                        // MSR
-                        if (isMSRAvaliable == true) {
-                            intRtn = msr.readTracks();
-                            if (intRtn == 0 || (intRtn != 0 && intRtn != CtEMVMSR.d_EMVMSR_ERR_NO_SWIPE)) {
+                        // MSR (MSR-01): the plain reader. 0 = a swipe with tracks in hand; 0x1201 = nothing yet;
+                        // anything else = an unreadable swipe (handled by the retry branch below).
+                        if (isMSRAvaliable == true && plainMsr != null) {
+                            java.util.Arrays.fill(swipeT2, (byte) 0);
+                            int msrRc = plainMsr.read(swipeT1, swipeT2, swipeT3);
+                            if (msrRc != 0x1201) {
+                                swipeReadRc = msrRc;
+                                swipeTrack2Len = msrRc == 0 ? plainMsr.getTk2Len() : 0;
+                                java.util.Arrays.fill(swipeT1, (byte) 0);     // track 1 and 3 are never used
+                                java.util.Arrays.fill(swipeT3, (byte) 0);
                                 entryMode = GlobalDef.d_ENTRY_MODE_MSR;
                                 break;
                             }
@@ -3459,6 +3482,14 @@ public class MainActivity extends AppCompatActivity {
                             intRtn = emv.txnAppSelect(selectedAppInfo);
                             ui_ShowLog("txnAppSelect Rtn: " + String.format("0x%08X", intRtn));
                             if (intRtn != 0) {
+                                if (chipFailures < CHIP_FAILURES_BEFORE_GIVING_UP) {   // MSR-01: let the same transaction continue by swipe
+                                    chipFailures++;
+                                    chipFailedThisTxn = true;
+                                    Log.w(TAG, "MSR-01: chip read failed (" + chipFailures + "/" + CHIP_FAILURES_BEFORE_GIVING_UP + ") - swipe now allowed for this transaction");
+                                    waitForChipCardRemoval("Chip could not be read\nRemove the card, then\nswipe it or try again\n");
+                                    entryMode = 0;
+                                    continue msrRetryLoop;
+                                }
                                 break;
                             }
                         } else    //using low level select API
@@ -3481,6 +3512,14 @@ public class MainActivity extends AppCompatActivity {
                             ui_ShowLog("txnCandidateList Rtn: " + String.format("0x%08X", intRtn));
                             if (intRtn != 0) {
                                 ui_ShowMsg("txnCandidateList Rtn: " + String.format("0x%08X", intRtn));
+                                if (chipFailures < CHIP_FAILURES_BEFORE_GIVING_UP) {   // MSR-01: let the same transaction continue by swipe
+                                    chipFailures++;
+                                    chipFailedThisTxn = true;
+                                    Log.w(TAG, "MSR-01: chip read failed (" + chipFailures + "/" + CHIP_FAILURES_BEFORE_GIVING_UP + ") - swipe now allowed for this transaction");
+                                    waitForChipCardRemoval("Chip could not be read\nRemove the card, then\nswipe it or try again\n");
+                                    entryMode = 0;
+                                    continue msrRetryLoop;
+                                }
                                 break;
                             } else {
                                 Log.d(TAG, "txnPSERsp ***********************************************");
@@ -3523,6 +3562,14 @@ public class MainActivity extends AppCompatActivity {
                                         GlobalPara.atmHostCallSuccess = false;
                                     }
                                     ui_ShowMsg("Transaction Error ! No Candidate");
+                                    if (chipFailures < CHIP_FAILURES_BEFORE_GIVING_UP) {   // MSR-01: let the same transaction continue by swipe
+                                        chipFailures++;
+                                        chipFailedThisTxn = true;
+                                        Log.w(TAG, "MSR-01: chip read failed (" + chipFailures + "/" + CHIP_FAILURES_BEFORE_GIVING_UP + ") - swipe now allowed for this transaction");
+                                        waitForChipCardRemoval("Chip could not be read\nRemove the card, then\nswipe it or try again\n");
+                                        entryMode = 0;
+                                        continue msrRetryLoop;
+                                    }
                                     break;
                                 } else if (candidate.candidateNum == 1 && candidate.isCardholderConfirmation == true) {
                                     intRtn = SeparateSelectAPI_appSelectedConfirm(candidate);
@@ -4151,66 +4198,73 @@ public class MainActivity extends AppCompatActivity {
                         }
                         ui_ShowMsg("Card Error: " + e.getMessage());
                         e.printStackTrace();
+                        if (chipFailures < CHIP_FAILURES_BEFORE_GIVING_UP && !txnAborted) {   // MSR-01: a crashed chip read also allows a swipe
+                            chipFailures++;
+                            chipFailedThisTxn = true;
+                            Log.w(TAG, "MSR-01: chip processing failed (" + chipFailures + "/" + CHIP_FAILURES_BEFORE_GIVING_UP + ") - swipe now allowed for this transaction");
+                            waitForChipCardRemoval("Chip could not be read\nRemove the card, then\nswipe it or try again\n");
+                            entryMode = 0;
+                            continue msrRetryLoop;
+                        }
                       }
                     } else if (entryMode == GlobalDef.d_ENTRY_MODE_MSR) {
                         Log.d(TAG, "d_ENTRY_MODE_MSR ***********************************************");
-                        if (intRtn != 0) {
-                            msrRetryCount++;
-                            Log.d(TAG, "MSR Error = " + String.format("0x%08X", intRtn) + " (attempt " + msrRetryCount + "/" + MSR_MAX_RETRIES + ")");
+                        // MSR-01 (6.2.14): the plain reader (CtMSR) has already produced the tracks, or a
+                        // read error, at detection time. The EMV reader used here before never released
+                        // tracks without an encryption setting (0x61000009), so every swipe since v5.3 died.
+                        String hostTrack2 = swipeReadRc == 0
+                                ? Track2PanExtractor.toHostTrack2(swipeT2, swipeTrack2Len) : null;
+                        java.util.Arrays.fill(swipeT2, (byte) 0);                 // the clear track lives in hostTrack2 only
+                        SwipePolicy.Decision swipe = SwipePolicy.decide(hostTrack2, GlobalPara.atmSwipeEnabled, chipFailedThisTxn);
+                        Log.d(TAG, "MSR-01: swipe " + swipe + " readRc=" + String.format("0x%04X", swipeReadRc)
+                                + " track2=" + (hostTrack2 == null ? "unusable" : LogMask.track2(hostTrack2))
+                                + " serviceCode=" + SwipePolicy.serviceCode(hostTrack2) + " chipFailedThisTxn=" + chipFailedThisTxn);
 
+                        if (swipe == SwipePolicy.Decision.UNREADABLE) {
+                            msrRetryCount++;
+                            Log.d(TAG, "MSR read error (attempt " + msrRetryCount + "/" + MSR_MAX_RETRIES + ")");
                             // v5.3-ATM: Retry logic - 3 attempts before giving up
                             if (msrRetryCount < MSR_MAX_RETRIES) {
-                                ui_ShowMsg("Swipe Error!\nPlease swipe again\n(" + msrRetryCount + "/" + MSR_MAX_RETRIES + ")\n");
-                                Log.d(TAG, "MSR retry " + msrRetryCount + " - flushing buffer and retrying...");
-                                MyUtility.sleep(1500);  // Brief pause for user to see message
-                                msr.flushTracksBuffer();  // Clear MSR buffer
-                                entryMode = 0;  // Reset entry mode
-                                continue msrRetryLoop;  // Go back to card detection
-                            } else {
-                                // Set decline result so receipt page shows error
-                                if (GlobalPara.atmMode) {
-                                    GlobalPara.transactionResult = 0x0003; // Decline
-                                    GlobalPara.atmResponseCode = "MSR_FAIL";
-                                    GlobalPara.atmResponseMessage = "Card swipe failed after multiple attempts";
-                                    GlobalPara.atmHostCallSuccess = false;
-                                }
-                                ui_ShowMsg("Swipe Failed!\nPlease try another card\nor use chip/tap\n");
-                                Log.d(TAG, "MSR failed after " + MSR_MAX_RETRIES + " attempts");
-                                break msrRetryLoop;  // Exit after max retries
+                                ui_ShowMsg("Swipe not read\nPlease swipe again\n(" + msrRetryCount + "/" + MSR_MAX_RETRIES + ")\n");
+                                MyUtility.sleep(1500);
+                                entryMode = 0;
+                                continue msrRetryLoop;
                             }
+                            if (GlobalPara.atmMode) {
+                                GlobalPara.transactionResult = 0x0003; // Decline
+                                GlobalPara.atmResponseCode = "MSR_FAIL";
+                                GlobalPara.atmResponseMessage = "Card swipe failed after multiple attempts";
+                                GlobalPara.atmHostCallSuccess = false;
+                            }
+                            ui_ShowMsg("Swipe Failed!\nPlease try another card\nor use chip/tap\n");
+                            Log.d(TAG, "MSR failed after " + MSR_MAX_RETRIES + " attempts");
+                            break msrRetryLoop;
+                        } else if (swipe == SwipePolicy.Decision.INSERT_CHIP) {
+                            // A chip card swiped before any chip failure: not a decline, a prompt (technical fallback rule)
+                            chipInsertPrompts++;
+                            GlobalPara.atmEntryMode = 3;
+                            if (chipInsertPrompts <= CHIP_INSERT_PROMPTS_MAX) {
+                                ui_ShowMsg("This card has a chip\nPlease insert it\n");
+                                MyUtility.sleep(2500);
+                                entryMode = 0;
+                                continue msrRetryLoop;
+                            }
+                            swipeRefusal = "Please insert the chip card";           // ends at the terminal (NO_HOST_PATH)
+                        } else if (swipe == SwipePolicy.Decision.NOT_ACCEPTED) {
+                            GlobalPara.atmEntryMode = 3;
+                            swipeRefusal = "Swipe not accepted - please tap or insert";   // swipe_enabled=false
                         } else {
-                            Log.d(TAG, "getTracksLen***********************************************");
-                            EMVMSRTracksLen tracksLen;
-                            tracksLen = msr.getTracksLen();
-                            Log.d(TAG, "T1 enable : " + String.valueOf(tracksLen.track1Enabled));
-                            Log.d(TAG, "T1 Len : " + String.valueOf(tracksLen.track1Len));
-                            Log.d(TAG, "T2 2enable : " + String.valueOf(tracksLen.track2Enabled));
-                            Log.d(TAG, "T2 Len : " + String.valueOf(tracksLen.track2Len));
-                            Log.d(TAG, "T3 enable : " + String.valueOf(tracksLen.track3Enabled));
-                            Log.d(TAG, "T3 Len : " + String.valueOf(tracksLen.track3Len));
-
-                            Log.d(TAG, "getMaskedPAN***********************************************");
-                            byte[] temp = msr.getMaskedPAN();
-                            if (temp == null) {
-                                temp = new byte[2];
-                            }
-
-                            byte[] maskedPAN = new byte[temp.length + 1];
-
-
-                            System.arraycopy(temp, 0, maskedPAN, 0, temp.length);
-                            Log.d(TAG, "Masked PAN : " + new String(maskedPAN));
-                            ui_ShowMsg("PAN : " + new String(maskedPAN) + "\n");
-                            MyUtility.sleep(2500);
-
-                            GlobalPara.asciiPAN = new String(maskedPAN).trim();
-
-                            // Store last 4 digits for ATM receipt
-                            String panStr = GlobalPara.asciiPAN.replaceAll("[^0-9]", "");
-                            if (panStr.length() >= 4) {
-                                GlobalPara.atmLastFourDigits = panStr.substring(panStr.length() - 4);
-                                Log.d(TAG, "Stored ATM last 4 digits: " + GlobalPara.atmLastFourDigits);
-                            }
+                            // ACCEPT: a stripe-only card, or a chip card after a failed chip read
+                            swipeHostTrack2 = hostTrack2;
+                            String swipedPan = SwipePolicy.pan(hostTrack2);
+                            GlobalPara.atmClearPan = swipedPan;                       // Format 0 PIN block (MKSK) needs it
+                            GlobalPara.asciiPAN = SwipePolicy.maskedPan(swipedPan);   // printed on the receipt: masked
+                            GlobalPara.atmLastFourDigits = SwipePolicy.lastFour(swipedPan);
+                            GlobalPara.cardType = cardBrandFromPan(swipedPan);
+                            GlobalPara.atmEntryMode = 3; // MSR
+                            Log.d(TAG, "Stored ATM last 4 digits: " + GlobalPara.atmLastFourDigits);
+                            ui_ShowMsg("Card : " + GlobalPara.asciiPAN + "\n");
+                            MyUtility.sleep(1500);
 
                             // ATM MODE: Request PIN entry for MSR (swipe) transactions
                             // NOTE: MSR doesn't go through EMV flow, so SDK PIN callback won't trigger
@@ -4240,175 +4294,8 @@ public class MainActivity extends AppCompatActivity {
                                 Log.d(TAG, "ATM PIN (MSR): PIN entry successful");
                             }
 
-                            GlobalPara.cardType = cardBrandFromPan(new String(maskedPAN));
-
-
-                            Log.d(TAG, "getMaskedTracks***********************************************");
-                            EMVMSRMaskedTracks maksedTracks = msr.getMaskedTracks();
-                            Log.d(TAG, "Masked Track1 Len : " + String.valueOf(maksedTracks.track1maskedDataLen));
-                            if (maksedTracks.track1maskedDataLen > 0) {
-                                byte[] maskedTracks1 = new byte[maksedTracks.track1maskedDataLen + 1];
-                                System.arraycopy(maksedTracks.track1maskedData, 0, maskedTracks1, 0, maksedTracks.track1maskedDataLen);
-                                Log.d(TAG, "Masked Track1 : " + new String(maskedTracks1));
-                            }
-                            Log.d(TAG, "Masked Track2 Len : " + String.valueOf(maksedTracks.track2maskedDataLen));
-                            if (maksedTracks.track2maskedDataLen > 0) {
-                                byte[] maskedTracks2 = new byte[maksedTracks.track2maskedDataLen + 1];
-                                System.arraycopy(maksedTracks.track2maskedData, 0, maskedTracks2, 0, maksedTracks.track2maskedDataLen);
-                                String maskedTrack2Str = new String(maskedTracks2);
-                                Log.d(TAG, "Masked Track2 : " + maskedTrack2Str);
-
-                                // ===== CASTLE SUPPORT DEBUG: DUKPT TRACK2 MASKING ISSUE =====
-                                // ISSUE: When setTracksEncryptInfo() is enabled for DUKPT encryption,
-                                // getMaskedTracks() returns Track2 with last 4 chars of discretionary data
-                                // replaced with asterisks (*). We need the FULL clear Track2 for the processor.
-                                //
-                                // EXPECTED: Full clear Track2 like: 4761739001010119D22122011758928889
-                                // ACTUAL:   Masked Track2 like:     4761739001010119D2212201175892****
-                                //
-                                // The masking makes it impossible to send proper clear Track2 to ATM processor
-                                // while also getting the DUKPT-encrypted Track2 from getEncrptedTracks().
-                                Log.e(TAG, "=== CASTLE SUPPORT DEBUG: TRACK2 MASKING ISSUE ===");
-                                Log.e(TAG, "getMaskedTracks() Track2: [" + maskedTrack2Str + "]");
-                                Log.e(TAG, "Track2 contains asterisks: " + maskedTrack2Str.contains("*"));
-                                Log.e(TAG, "DUKPT encryption enabled via setTracksEncryptInfo()");
-                                Log.e(TAG, "We need FULL clear Track2, but SDK masks last 4 chars of discretionary data");
-                                Log.e(TAG, "=== END CASTLE SUPPORT DEBUG ===");
-                            }
-                            Log.d(TAG, "Masked Track3 Len : " + String.valueOf(maksedTracks.track3maskedDataLen));
-                            if (maksedTracks.track3maskedDataLen > 0) {
-                                byte[] maskedTracks3 = new byte[maksedTracks.track3maskedDataLen + 1];
-                                System.arraycopy(maksedTracks.track3maskedData, 0, maskedTracks3, 0, maksedTracks.track3maskedDataLen);
-                                Log.d(TAG, "Masked Track3 : " + new String(maskedTracks3));
-                            }
-
-                            Log.d(TAG, "getEncrptedTracks***********************************************");
-                            EMVMSREncryptedTracks encryptedTracks = msr.getEncrptedTracks();
-                            if (encryptedTracks.track1EncryptedDataLen > 0) {
-                                Log.d(TAG, "Encrypted Track1 : " + Converter.byteArray2HexString(encryptedTracks.track1EncryptedData, encryptedTracks.track1EncryptedDataLen));
-                                Log.d(TAG, "Checksum Track1 : " + Converter.byteArray2HexString(encryptedTracks.track1Checksum, encryptedTracks.track1ChecksumLen));
-                                Log.d(TAG, "KSN Track1 : " + Converter.byteArray2HexString(encryptedTracks.track1KSN, encryptedTracks.track1KSNLen));
-                            }
-                            if (encryptedTracks.track2EncryptedDataLen > 0) {
-                                Log.d(TAG, "Encrypted Track2 : [" + encryptedTracks.track2EncryptedDataLen + " bytes]");
-                                Log.d(TAG, "Checksum Track2 : " + Converter.byteArray2HexString(encryptedTracks.track2Checksum, encryptedTracks.track2ChecksumLen));
-                                Log.d(TAG, "KSN Track2 : " + Converter.byteArray2HexString(encryptedTracks.track2KSN, encryptedTracks.track2KSNLen));
-
-                                // Store encrypted track 2 for ATM transactions
-                                GlobalPara.atmTrack2Data = Converter.byteArray2HexString(encryptedTracks.track2EncryptedData, encryptedTracks.track2EncryptedDataLen);
-                                Log.d(TAG, "Stored ATM Track2 Data: " + LogMask.track2(GlobalPara.atmTrack2Data));
-                            }
-                            if (encryptedTracks.track3EncryptedDataLen > 0) {
-                                Log.d(TAG, "Encrypted Track3 : " + Converter.byteArray2HexString(encryptedTracks.track3EncryptedData, encryptedTracks.track3EncryptedDataLen));
-                                Log.d(TAG, "Checksum Track3 : " + Converter.byteArray2HexString(encryptedTracks.track3Checksum, encryptedTracks.track3ChecksumLen));
-                                Log.d(TAG, "KSN Track3 : " + Converter.byteArray2HexString(encryptedTracks.track3KSN, encryptedTracks.track3KSNLen));
-                            }
-
-                            GlobalPara.transactionResult = 0x0004;
+                            GlobalPara.transactionResult = 0x0004;   // online required
                             GlobalPara.isNeedSignature = false;
-                            Log.d(TAG, "----Let's see if there are tracks in clear----");
-                            EMVEDLBinInfo matchdata = new EMVEDLBinInfo();
-
-                            int rtn = edl.getWhiteListMatchedBinInfo(matchdata);
-                            if (rtn == 0 && matchdata.isMatch == true) {
-                                Log.e(TAG, "~~**************************************************************\n");
-                                Log.d(TAG, "~~isMatch: " + matchdata.isMatch + "\n");
-                                Log.d(TAG, "~~binLen: " + matchdata.binLen + "\n");
-                                Log.d(TAG, "~~binStart: " + Converter.asciiBytesToString(matchdata.binStart) + "\n");
-                                Log.d(TAG, "~~binEnd: " + Converter.asciiBytesToString(matchdata.binEnd) + "\n");
-
-
-                                if (matchdata.brandLen > 0) {
-                                    Log.d(TAG, "~~brand: " + Converter.asciiBytesToString(matchdata.brand) + "\n");
-                                }
-
-                                if (matchdata.typeLen > 0) {
-                                    Log.d(TAG, "~~type: " + Converter.asciiBytesToString(matchdata.type) + "\n");
-                                }
-
-                                if (matchdata.gotCipher == true) {
-                                    Log.d(TAG, "~~isCipher: " + matchdata.isCipher + "\n");
-                                } else {
-                                    //Default is Cipher if this item isn't presented
-                                }
-
-                                if (matchdata.gotPanLen == true) {
-                                    Log.d(TAG, "~~panLenMin: " + matchdata.panLenMin + "\n");
-                                    Log.d(TAG, "~~panLenMax: " + matchdata.panLenMax + "\n");
-                                }
-                                //invalidPanLen is only checked for manual entry
-                                Log.d(TAG, "~~invalidPanLen: " + matchdata.invalidPanLen + "\n");
-                                if (matchdata.invalidPanLen == true) {
-                                    //invalid pan len, input again or terminated
-                                    return;
-                                }
-
-                                if (matchdata.gotMaskDigit == true) {
-                                    Log.d(TAG, "~~maskDigit1_BeginOfPan: " + matchdata.maskDigit1_BeginOfPan + "\n");
-                                    Log.d(TAG, "~~maskDigit2_EndOfPan: " + matchdata.maskDigit2_EndOfPan + "\n");
-                                    Log.d(TAG, "~~maskDigit2_AfterDelimiter: " + matchdata.maskDigit2_AfterDelimiter + "\n");
-                                }
-
-                                //for Manual Entry
-                                if (matchdata.gotExpdate == true) {
-                                    if (matchdata.expdatePrompt == true) {
-                                        //disaply expdate information on screen
-                                        Log.d(TAG, "~~expdateLenMin: " + matchdata.expdateLenMin + "\n");
-                                        Log.d(TAG, "~~expdateLenMax: " + matchdata.expdateLenMax + "\n");
-                                        Log.d(TAG, "~~expdateFormatLen: " + matchdata.expdateFormatLen + "\n");
-                                        Log.d(TAG, "~~expdateFormat: " + Converter.asciiBytesToString(matchdata.expdateFormat) + "\n");
-                                        Log.d(TAG, "~~expdateLabelLen: " + matchdata.expdateLabelLen + "\n");
-                                        Log.d(TAG, "~~expdateLabel: " + Converter.asciiBytesToString(matchdata.expdateLabel) + "\n");
-
-                                        //manual entry expdate
-                                    }
-                                }
-
-                                if (matchdata.gotCVV == true) {
-                                    if (matchdata.cvvPrompt == true) {
-                                        //disaply cvv information on screen
-                                        Log.d(TAG, "~~cvvLenMin: " + matchdata.cvvLenMin + "\n");
-                                        Log.d(TAG, "~~cvvLenMax: " + matchdata.cvvLenMax + "\n");
-                                        Log.d(TAG, "~~cvvFormatLen: " + matchdata.cvvFormatLen + "\n");
-                                        Log.d(TAG, "~~cvvFormat: " + Converter.asciiBytesToString(matchdata.cvvFormat) + "\n");
-                                        Log.d(TAG, "~~cvvLabelLen: " + matchdata.cvvLabelLen + "\n");
-                                        Log.d(TAG, "~~cvvLabel: " + Converter.asciiBytesToString(matchdata.cvvLabel) + "\n");
-
-                                        //manual entry for cvv
-                                    }
-                                }
-
-                                if (matchdata.gotPostcode == true) {
-                                    if (matchdata.postcodePrompt == true) {
-                                        //disaply postcode information on screen
-                                        Log.d(TAG, "~~postcodeLenMin: " + matchdata.postcodeLenMin + "\n");
-                                        Log.d(TAG, "~~postcodeLenMax: " + matchdata.postcodeLenMax + "\n");
-                                        Log.d(TAG, "~~postcodeFormatLen: " + matchdata.postcodeFormatLen + "\n");
-                                        Log.d(TAG, "~~postcodeFormat: " + Converter.asciiBytesToString(matchdata.postcodeFormat) + "\n");
-                                        Log.d(TAG, "~~postcodeLabelLen: " + matchdata.postcodeLabelLen + "\n");
-                                        Log.d(TAG, "~~postcodeLabel: " + Converter.asciiBytesToString(matchdata.postcodeLabel) + "\n");
-
-                                        //manual entry for postcode
-                                    }
-                                }
-
-                                if (matchdata.gotAddr == true) {
-                                    if (matchdata.addrPrompt == true) {
-                                        //disaply addr information on screen
-                                        Log.d(TAG, "~~addrLenMin: " + matchdata.addrLenMin + "\n");
-                                        Log.d(TAG, "~~addrLenMax: " + matchdata.addrLenMax + "\n");
-                                        Log.d(TAG, "~~addrFormatLen: " + matchdata.addrFormatLen + "\n");
-                                        Log.d(TAG, "~~addrFormat: " + Converter.asciiBytesToString(matchdata.addrFormat) + "\n");
-                                        Log.d(TAG, "~~addrLabelLen: " + matchdata.addrLabelLen + "\n");
-                                        Log.d(TAG, "~~addrLabel: " + Converter.asciiBytesToString(matchdata.addrLabel) + "\n");
-
-                                        //manual entry for addr
-                                    }
-                                }
-
-                            }
-                            Log.d(TAG, "----End for let's see if there are tracks in clear----");
-
                         }
 
                     } else if (entryMode == GlobalDef.d_ENTRY_MODE_CL) {
@@ -4667,7 +4554,8 @@ public class MainActivity extends AppCompatActivity {
                         // contacted (S1F4 PRO 2026-09-02; POS site 2026-10-05). Only an
                         // inserted chip reached the host.
                         final OnlineRoute onlineRoute =
-                                OnlineRoute.of(entryMode, GlobalPara.isQuickChipTransaction);
+                                OnlineRoute.of(entryMode, GlobalPara.isQuickChipTransaction,
+                                        GlobalPara.atmSwipeEnabled && swipeRefusal == null && swipeHostTrack2 != null);   // MSR-01
                         Log.d(TAG, "Online route: " + onlineRoute + " (entryMode=" + entryMode + ")");
 
                         if (onlineRoute == OnlineRoute.QUICK_CHIP_CONTACT) {
@@ -4850,6 +4738,48 @@ public class MainActivity extends AppCompatActivity {
                                 Log.e(TAG, "ATM HOST (CL): Host service not available - DECLINING transaction");
                                 GlobalPara.transactionResult = 0x0003; // Declined
                                 GlobalPara.atmResponseCode = "91";  // Issuer unavailable
+                                GlobalPara.atmResponseMessage = "Host service not available";
+                                GlobalPara.atmHostCallSuccess = false;
+                            }
+                        } else if (onlineRoute == OnlineRoute.MSR_HOST) {
+                            // MSR-01 (6.2.14): a swipe to the host — Track 2 in Field 6, no EMV data (Field 13
+                            // empty marks a stripe transaction), PIN block as every other entry mode.
+                            ui_ShowMsg("Online Processing ... \n");
+                            if (atmHostService != null && atmHostService.isInitialized()) {
+                                Log.d(TAG, "ATM HOST (MSR): Building transaction data...");
+                                CastleCardData cardData = new CastleCardData();
+                                cardData.setEntryMode(CastleCardData.ENTRY_MODE_MSR);
+                                cardData.setTrack2Data(swipeHostTrack2);
+                                Log.d(TAG, "ATM HOST (MSR): Track2 ASCII: " + LogMask.track2(swipeHostTrack2));
+                                if (GlobalPara.atmEncryptedPinBlock != null && !GlobalPara.atmEncryptedPinBlock.isEmpty()) {
+                                    cardData.setEncryptedPinBlock(GlobalPara.atmEncryptedPinBlock);
+                                    Log.d(TAG, "ATM HOST (MSR): PIN block set: " + LogMask.pinBlock(GlobalPara.atmEncryptedPinBlock));
+                                    if (GlobalPara.atmDukptKsn != null && !GlobalPara.atmDukptKsn.isEmpty()) {
+                                        cardData.setPinBlockKSN(Converter.hexString2ByteArray(GlobalPara.atmDukptKsn));
+                                    }
+                                }
+                                long amountCents = 0;
+                                try {
+                                    double amtValue = Double.parseDouble(
+                                        GlobalPara.atmSelectedAmount.isEmpty() ? "0" : GlobalPara.atmSelectedAmount);
+                                    amountCents = Money.toCents(amtValue);
+                                } catch (Exception e) {
+                                    Log.e(TAG, "ATM HOST (MSR): Error parsing amount: " + e.getMessage());
+                                }
+                                long surchargeCents = surchargeCentsFromReceipt(amountCents);
+                                String acctType = GlobalPara.getHyosungAccountType();
+                                sendAtmHostRequestWithPinRetry(cardData, amountCents, surchargeCents, acctType, "MSR");
+                                if (GlobalPara.atmHostCallSuccess) {
+                                    GlobalPara.transactionResult = 0x0002; // Approved
+                                    Log.d(TAG, "ATM HOST (MSR): Transaction APPROVED");
+                                } else {
+                                    GlobalPara.transactionResult = 0x0003; // Declined
+                                    Log.d(TAG, "ATM HOST (MSR): Transaction DECLINED - " + GlobalPara.atmResponseMessage);
+                                }
+                            } else {
+                                Log.e(TAG, "ATM HOST (MSR): Host service not available - DECLINING transaction");
+                                GlobalPara.transactionResult = 0x0003;
+                                GlobalPara.atmResponseCode = "91";
                                 GlobalPara.atmResponseMessage = "Host service not available";
                                 GlobalPara.atmHostCallSuccess = false;
                             }
@@ -5098,11 +5028,13 @@ public class MainActivity extends AppCompatActivity {
                             // (on the receipt, in the journal and to support) as the processor
                             // being down. It is the terminal's own decline: say so, with a
                             // terminal code. (Until 6.2.12 tapped cards landed here too.)
-                            Log.e(TAG, "ATM HOST: entry mode " + entryMode + " has no host path (swipe) - "
-                                    + "declining at the terminal, host NOT contacted");
+                            // 6.2.14 (MSR-01): swipes DO go to the host when enabled; this ending is now
+                            // for a refused swipe — swipe_enabled=false, or a chip card whose holder
+                            // would not insert it after three prompts.
+                            Log.e(TAG, "ATM HOST: swipe refused at the terminal (" + swipeRefusal + ") - host NOT contacted");
                             GlobalPara.transactionResult = 0x0003;  // Declined
                             GlobalPara.atmResponseCode = "MSR_NA";
-                            GlobalPara.atmResponseMessage = "Swipe not supported";
+                            GlobalPara.atmResponseMessage = swipeRefusal != null ? swipeRefusal : "Swipe not accepted - please tap or insert";
                             GlobalPara.atmHostCallSuccess = false;
                         }
 
@@ -5901,6 +5833,25 @@ public class MainActivity extends AppCompatActivity {
      *
      * @param pathTag "CL" or "CT" — used only for log continuity with the old code
      */
+    /**
+     * MSR-01 technical fallback: after a failed chip read, show the message and wait (up to 30 s) for the
+     * card to leave the slot before detection resumes — otherwise the still-inserted chip is re-detected
+     * at once and the failure counter is spent before the customer can swipe. Transaction thread only.
+     */
+    private void waitForChipCardRemoval(String message) {
+        ui_ShowMsg(message);
+        long end = System.currentTimeMillis() + 30_000L;
+        try {
+            while (System.currentTimeMillis() < end && !txnAborted) {
+                sc.status(0);
+                if ((sc.getStatus() & 0x01) != 0x01) break;
+                Thread.sleep(200);
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "waitForChipCardRemoval: " + t);
+        }
+    }
+
     private void sendAtmHostRequestWithPinRetry(CastleCardData cardData, long amountCents,
             long surchargeCents, String acctType, String pathTag) {
         int attempt = 1;

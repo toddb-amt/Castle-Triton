@@ -1026,7 +1026,8 @@ public class Fragment_page_admin_atm extends Fragment {
             String fee = GlobalPara.atmUseFlatFee
                     ? "Flat fee: $" + Money.dollars(Money.toCents(GlobalPara.atmFlatFeeAmount))
                     : "Percentage fee: " + String.format(java.util.Locale.US, "%.2f", GlobalPara.atmPercentageFee) + " %";
-            txvFeeConfig.setText(fee + "\nTips: " + (GlobalPara.atmTipsEnabled ? "on" : "off"));
+            txvFeeConfig.setText(fee + "\nTips: " + (GlobalPara.atmTipsEnabled ? "on" : "off")
+                    + "  ·  Swipe: " + (GlobalPara.atmSwipeEnabled ? "on" : "off"));
         }
         if (txvLimits != null) {
             txvLimits.setText("Minimum: $" + Money.dollars(Money.toCents(GlobalPara.atmMinAmount))
