@@ -4249,11 +4249,24 @@ public class MainActivity extends AppCompatActivity {
                                 entryMode = 0;
                                 continue msrRetryLoop;
                             }
-                            swipeRefusal = "Please insert the chip card";           // ends at the terminal (NO_HOST_PATH)
+                            swipeRefusal = "Please insert the chip card";
                         } else if (swipe == SwipePolicy.Decision.NOT_ACCEPTED) {
                             GlobalPara.atmEntryMode = 3;
                             swipeRefusal = "Swipe not accepted - please tap or insert";   // swipe_enabled=false
-                        } else {
+                        }
+                        if (swipeRefusal != null) {
+                            // A refused swipe ends here as a TERMINAL decline (not a cancel): the receipt, the
+                            // journal, the push and a waiting register all learn the reason. Host NOT contacted.
+                            Log.e(TAG, "ATM HOST: swipe refused at the terminal (" + swipeRefusal + ") - host NOT contacted");
+                            GlobalPara.transactionResult = 0x0003;  // Declined
+                            GlobalPara.atmResponseCode = "MSR_NA";
+                            GlobalPara.atmResponseMessage = swipeRefusal;
+                            GlobalPara.atmHostCallSuccess = false;
+                            ui_ShowMsg(swipeRefusal + "\n");
+                            MyUtility.sleep(2500);
+                            break msrRetryLoop;
+                        }
+                        if (swipe == SwipePolicy.Decision.ACCEPT) {
                             // ACCEPT: a stripe-only card, or a chip card after a failed chip read
                             swipeHostTrack2 = hostTrack2;
                             String swipedPan = SwipePolicy.pan(hostTrack2);
