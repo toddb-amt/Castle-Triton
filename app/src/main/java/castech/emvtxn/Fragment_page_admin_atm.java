@@ -72,6 +72,9 @@ public class Fragment_page_admin_atm extends Fragment {
     private TextView txvLimits;
     private TextView txvHostConfig;
     private TextView txvNetwork;
+    // RPT-02 (6.2.13): MyView push status line + Super-only Retry now
+    private TextView txvReporting;
+    private Button btnReportingRetry;
 
     // UI Elements - Terminal Info
     private TextView txvTerminalInfo;
@@ -232,6 +235,8 @@ public class Fragment_page_admin_atm extends Fragment {
         // Terminal Info
         txvTerminalInfo = rootView.findViewById(R.id.txvTerminalInfo);
         txvNetwork = rootView.findViewById(R.id.txvNetwork);
+        txvReporting = rootView.findViewById(R.id.txvReporting);
+        btnReportingRetry = rootView.findViewById(R.id.btnReportingRetry);
 
         // Buttons
         btnRequestNewKey = rootView.findViewById(R.id.btnRequestNewKey);
@@ -843,6 +848,24 @@ public class Fragment_page_admin_atm extends Fragment {
         setViewEnabledDimmed(rootView.findViewById(R.id.btnRequestNewKey), true);
         renderManagedConfig();
         renderNetworkCard();
+        renderReportingLine();
+    }
+
+    /** RPT-02: one line from the pusher's last published status; Retry now for Super only. */
+    private void renderReportingLine() {
+        if (txvReporting == null || getContext() == null) return;
+        castech.emvtxn.reporting.ReportingConfig cfg = new castech.emvtxn.reporting.ReportingConfig(getContext());
+        String state = cfg.isConfigured() ? cfg.getStatusState() : castech.emvtxn.reporting.ReportingStatus.NOT_CONFIGURED;
+        txvReporting.setText(castech.emvtxn.reporting.ReportingStatus.render(
+                state, cfg.getPending(), cfg.getParked(), cfg.getLastSentAt(), cfg.getLastError(), System.currentTimeMillis()));
+        if (btnReportingRetry != null) {
+            btnReportingRetry.setVisibility(accessLevel == ACCESS_SUPER && cfg.isConfigured() ? View.VISIBLE : View.GONE);
+            btnReportingRetry.setOnClickListener(v -> {
+                if (GlobalPara.mainActivity != null) GlobalPara.mainActivity.onReportingParamsChanged();
+                Toast.makeText(getContext(), "Reporting: retry requested", Toast.LENGTH_SHORT).show();
+                txvReporting.postDelayed(this::renderReportingLine, 3000);
+            });
+        }
     }
 
     /**
@@ -971,6 +994,7 @@ public class Fragment_page_admin_atm extends Fragment {
         // 6.2.9: fee, limit and host values are CasHUB-managed — shown read-only, never
         // written from this screen.
         renderManagedConfig();
+        renderReportingLine();
 
         // PIN encryption settings — key location depends on protocol (the protocol itself
         // comes from CasHUB's protocol_type; default HYOSUNG)
@@ -1089,6 +1113,11 @@ public class Fragment_page_admin_atm extends Fragment {
                     }
                 }
                 sb.append("In use: ").append(transport).append("\n");
+                // TZ-01: the live zone, so a field tech can confirm the CasHUB time_zone without a cable
+                sb.append("Time zone: ").append(castech.emvtxn.TimeZoneApplier.currentZoneSummary());
+                String tzLast = castech.emvtxn.TimeZoneApplier.lastResult();
+                if (tzLast.startsWith("failed")) sb.append(" — CasHUB time_zone ").append(tzLast);
+                sb.append("\n");
 
                 // Cellular
                 android.telephony.TelephonyManager tm = (android.telephony.TelephonyManager) ctx.getSystemService(Context.TELEPHONY_SERVICE);
@@ -1155,7 +1184,8 @@ public class Fragment_page_admin_atm extends Fragment {
                     String msg;
                     try {
                         int n = castech.emvtxn.atm.TransactionLogManager.getInstance(app).clearClosedBatches();
-                        msg = n + " row(s) cleared";
+                        // RPT-02: -1 = refused, a closed batch still holds rows not yet sent to MyView
+                        msg = n < 0 ? "Not cleared: unsent reporting rows in closed batches" : n + " row(s) cleared";
                     } catch (Throwable t) {
                         msg = "Clear failed: " + t.getMessage();
                     }

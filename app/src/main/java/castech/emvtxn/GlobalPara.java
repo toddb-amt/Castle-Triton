@@ -78,6 +78,8 @@ public class GlobalPara
 	public static String atmSelectedAmount = "0.00";
 	public static String atmFee = "0.00";
 	public static String atmTotal = "0.00";
+	/** AMT-03 (6.2.13): the current transaction's money, computed once. The three strings above and strAmount are mirrors of it. */
+	public static volatile AmountBreakdown atmAmounts = AmountBreakdown.balanceInquiry();
 	public static boolean atmTransactionComplete = false;
 	public static String atmTransactionId = "";
 	public static String atmLastFourDigits = "";
@@ -261,6 +263,7 @@ public class GlobalPara
 		atmFee = "0.00";
 		atmTotal = "0.00";
 		strAmount = "0";
+		atmAmounts = AmountBreakdown.balanceInquiry();
 
 		// Reset transaction mode
 		atmBalanceInquiryMode = false;

@@ -48,6 +48,108 @@ Template:
 
 ---
 
+## 6.2.13 — 2026-10-08 · PR #9 · base 6.2.12 · versionCode 75
+
+### Highlights
+
+**Every transaction is now reported to MyView directly from the terminal.** The portal's host-log
+poll has no tip or cash-back field; the Ingenico fleet fills that gap with a per-transaction push
+and the Castle terminals never did. From this release each finished transaction the host answered —
+and each decline the terminal made with a card present — is POSTed to the ingestion endpoint and
+retried until the portal acknowledges it. Tips (6.2.14) will ride on this feed. **No charge
+changes:** the new amount model is wired in with tip 0 and register sales still exact.
+Spec: `docs/superpowers/specs/2026-10-07-reporting-push-design.md`. Contract:
+`docs/MYVIEW-TERMINAL-PUSH-API.md`.
+
+### What operators and customers will notice
+
+- Nothing at the card, on the receipt or on the register. Charges are identical to 6.2.12.
+- Admin screen: a **Reporting (MyView)** card — "not configured" until the key arrives from CasHUB,
+  then the pending count and the last-sent time; Super admin gets **Retry now**. Clear Transaction
+  History refuses ("Not cleared: unsent reporting rows in closed batches") rather than delete rows
+  the portal has not received.
+- MyView: Castle terminals' rows now carry the terminal's own text on declines, balance inquiries
+  appear, our accepted reversals appear as `RWT`, and the cash back that a walk-up's rounding
+  produces is visible.
+
+### Fixes
+
+**Reporting**
+
+- The journal is the outbox: push bookkeeping is columns on the journal rows, so the queue survives
+  reboots and outages. `PushPayload` builds the Ingenico-shaped body from a row and is pinned, field
+  by field, to the contract's example. `ReportingPusher` drains oldest-first on one background
+  thread: 200 → sent; 401 → stop and show "key rejected"; anything else → back off 5 s, 30 s, 2 min,
+  5 min cap and keep trying forever. A row is parked only after ten failures **and** a later row
+  has since been accepted, so a portal outage parks nothing. Batches with unsent rows are never
+  pruned. Triggers: a new row, network back, a parameter change, app start, a 5-minute sweep. `RPT-02`
+- `TerminalSequenceNum` is our STD1 Field 4 number exactly as generated today; a terminal-side
+  decline that never built a request goes with 0. **The sequence mechanism is untouched.** `RPT-02`
+- An accepted reversal becomes its own journal row (type `REVERSAL`) and is pushed as `RWT` with the
+  original's sequence. The Detail Report ignores those rows; "Reversed" still comes from the flag on
+  the original. `RPT-02`
+
+**Transaction**
+
+- `AmountBreakdown`: sale, tip, withdrawal, cash back, fee and total computed once by one pure
+  function; the amount screen and the POS gateway write the legacy strings from it. A walk-up custom
+  amount now records what the customer typed as the sale and the rounding remainder as cash back
+  (the receipt is unchanged this release). Register sales are built with rounding **off** — exact,
+  as today. `AMT-03`
+
+### Parameters
+
+| Key | Default | Effect |
+|---|---|---|
+| `reporting_access_key` | none | tenant key from TFI; reporting is **off** until it is present; the value `off` switches it off again |
+| `reporting_url` | `https://d16f8tt74onlvr.cloudfront.net/transactions/addTransaction` (built in) | test-portal override |
+| `time_zone` | none (terminal left as it is) | IANA zone name, e.g. `America/New_York`; sets the terminal's **system** zone through Castle's system service, so receipts, Detail Report batches and the push's `BusinessDate` all follow. Unknown/blank is ignored. `TZ-01` |
+
+- **Terminal time zone as a parameter.** Bench finding 2026-10-08: a terminal out of the box sits on
+  **GMT** — Android's zone is a stored setting nothing on the device ever writes (automatic zone is
+  off, and would need a cellular time signal or a location fix anyway); Castle's OS and CasHUB do not
+  set it. The clock is right, only the zone is not, so an evening sale after 8 PM Eastern was dated
+  *tomorrow* on the receipt, in the Detail Report and in the push's `BusinessDate`. New `time_zone`
+  parameter (table above) applied through `CtSystem.setTimeZone` only when it differs from the
+  terminal's; shown live on the Admin Network card as `Time zone: America/New_York (EDT)`. Assume
+  every field terminal needs it. `TZ-01`
+
+### Known issues and deferred
+
+- Rows written before a key was configured are not sent retroactively; the batch catch-up endpoint
+  is left for a real case.
+- Parked rows need a new build to be re-queued (no Admin action yet).
+- The portal stores terminal-side declines as code 99 like host declines; the text
+  `Declined at terminal: …` distinguishes them.
+- The reporting key is kept in app-private preferences, as the POS access key has been since 6.2.x
+  (`SEC-02`: encrypted preferences for both keys together).
+- Backoff timing is in memory: after a restart every pending row gets one immediate try.
+- Fresh whole-branch review (2026-10-08) found and this release fixes before shipping: presets were
+  being re-rounded to the step when `min_amount` did not divide them (a $60 preset with a $25 minimum
+  would have charged $75); a rejected key counted as a row failure; an exception in a drain run would
+  have silently stopped the sweep; the cross-run parking rule was not wired; a negative fee from
+  CasHUB would have crashed every transaction; the pusher thread read the serial from the SDK. All
+  have tests now. Twelve minor findings are deferred in `docs/CODE-REVIEW-BACKLOG.md` (RPT-02 notes).
+
+### Verification
+
+- Unit suite: **388** tests (79 new: breakdown ×12, parameters ×9, eligibility ×6, report ×1,
+  signal ×3, payload ×13, pusher ×18, status ×6, fee-config boundary ×4, time zone ×7). Each new behaviour was
+  watched failing first. The same three pre-existing failures remain (`TEST-01`).
+- Clean debug build verified to contain the new classes and the Admin layout ids.
+- **Device pass pending** (terminal + key needed): chip, tap and register sale pushed and seen in
+  MyView; a host decline; a swipe as `Declined at terminal`; a reversal as `RWT`; offline queue
+  drains on reconnect; wrong key → "key rejected"; v2 → v3 journal migration; receipts and charges
+  identical to 6.2.12.
+
+### Upgrade notes
+
+Plain-install push from CasHUB. The journal migrates in place (v2 → v3) and keeps every row. Add
+`reporting_access_key` to the terminal's CasHUB parameters to turn reporting on; nothing is sent
+until it is present.
+
+---
+
 ## 6.2.12 — 2026-10-05 · PR #8 · base 6.2.11 · versionCode 74
 
 ### Highlights

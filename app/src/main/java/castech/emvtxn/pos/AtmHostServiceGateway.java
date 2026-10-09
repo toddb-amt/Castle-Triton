@@ -157,32 +157,35 @@ public final class AtmHostServiceGateway implements PosTerminalGateway {
         // fragment's writes.
         GlobalPara.atmBalanceInquiryMode = balanceInquiry;
         GlobalPara.atmAccountType = acctTypeCode;
-        final long appliedSurchargeCents;
-        final long appliedTotalCents;
+        // AMT-03: one breakdown. D7 stands: the register's surcharge is advisory; the terminal's
+        // fee configuration governs. 6.2.13 keeps register sales EXACT (roundToStep = false) —
+        // identical charges to 6.2.12; 6.2.14 turns rounding on together with tips.
+        final castech.emvtxn.AmountBreakdown amounts;
         if (balanceInquiry) {
-            appliedSurchargeCents = 0L;
-            appliedTotalCents = 0L;
-            GlobalPara.atmSelectedAmount = "0.00";
-            GlobalPara.atmFee = "0.00";
-            GlobalPara.atmTotal = "0.00";
-            GlobalPara.strAmount = "0";
+            amounts = castech.emvtxn.AmountBreakdown.balanceInquiry();
         } else {
-            // D7: the surcharge is the terminal's (fee configuration), exactly as for a
-            // walk-up. The register's "surcharge" is advisory only. Chip amount = total,
-            // like a walk-up (closes EMV-01).
-            PosSaleFee fee = PosSaleFee.resolve(amountCents, surchargeCents,
-                    GlobalPara.atmUseFlatFee, GlobalPara.atmFlatFeeAmount, GlobalPara.atmPercentageFee);
-            if (fee.posSurchargeDiffers()) {
-                Log.w(TAG, "POS sent surcharge=" + surchargeCents + " cents; terminal fee config governs: "
-                        + fee.feeCents + " cents (reply carries the applied value)");
+            try {
+                amounts = castech.emvtxn.AmountBreakdown.of(amountCents, 0L,
+                        castech.emvtxn.Money.toCents(GlobalPara.atmMinAmount), false,
+                        GlobalPara.atmUseFlatFee, GlobalPara.atmFlatFeeAmount, GlobalPara.atmPercentageFee);
+            } catch (IllegalArgumentException bad) {
+                // Fee configuration that cannot be charged (review I4): answer the register, never crash.
+                Log.e(TAG, "Cannot build amounts for POS sale: " + bad.getMessage());
+                callback.onError(PosWire.ERR_INTERNAL, "terminal fee configuration invalid: " + bad.getMessage());
+                return;
             }
-            appliedSurchargeCents = fee.feeCents;
-            appliedTotalCents = fee.totalCents;
-            GlobalPara.atmSelectedAmount = castech.emvtxn.Money.dollars(fee.amountCents);
-            GlobalPara.atmFee = castech.emvtxn.Money.dollars(fee.feeCents);
-            GlobalPara.atmTotal = castech.emvtxn.Money.dollars(fee.totalCents);
-            GlobalPara.strAmount = fee.chipAmountCents();
+            if (surchargeCents > 0 && surchargeCents != amounts.fee) {
+                Log.w(TAG, "POS sent surcharge=" + surchargeCents + " cents; terminal fee config governs: "
+                        + amounts.fee + " cents (reply carries the applied value)");
+            }
         }
+        final long appliedSurchargeCents = amounts.fee;
+        final long appliedTotalCents = amounts.total;
+        GlobalPara.atmAmounts = amounts;
+        GlobalPara.atmSelectedAmount = castech.emvtxn.Money.dollars(amounts.withdrawal);
+        GlobalPara.atmFee = castech.emvtxn.Money.dollars(amounts.fee);
+        GlobalPara.atmTotal = castech.emvtxn.Money.dollars(amounts.total);
+        GlobalPara.strAmount = balanceInquiry ? "0" : amounts.chipAmountCents();
 
         Log.d(TAG, "POS txn arming: balanceInquiry=" + balanceInquiry
                 + " amt=" + amountCents + " surcharge(applied)=" + appliedSurchargeCents

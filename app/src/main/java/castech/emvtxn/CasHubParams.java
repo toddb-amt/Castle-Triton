@@ -56,6 +56,10 @@ public final class CasHubParams {
                                 if (a.posDiff != null && a.posDiff.any()) {
                                     GlobalPara.mainActivity.onPosParamsChanged(a.posDiff);
                                 }
+                                // RPT-02: a new key or URL — let the pusher try the queue now
+                                if (a.reportingChanged) {
+                                    GlobalPara.mainActivity.onReportingParamsChanged();
+                                }
                             }
                         }
                     } catch (Throwable t) {
@@ -135,9 +139,12 @@ public final class CasHubParams {
         public final boolean anyRows;
         /** Null when no pos_* key was present. */
         public final castech.emvtxn.pos.PosParams.Diff posDiff;
-        Applied(boolean anyRows, castech.emvtxn.pos.PosParams.Diff posDiff) {
+        /** RPT-02: a reporting key or URL changed value. */
+        public final boolean reportingChanged;
+        Applied(boolean anyRows, castech.emvtxn.pos.PosParams.Diff posDiff, boolean reportingChanged) {
             this.anyRows = anyRows;
             this.posDiff = posDiff;
+            this.reportingChanged = reportingChanged;
         }
     }
 
@@ -154,7 +161,7 @@ public final class CasHubParams {
         java.util.LinkedHashMap<String, String> merged = new java.util.LinkedHashMap<>();
         int rows = mergeRows(ctx, URI_TERMINAL, merged);
         rows += mergeRows(ctx, URI_MERCHANT, merged);
-        if (merged.isEmpty()) return new Applied(false, null);
+        if (merged.isEmpty()) return new Applied(false, null, false);
 
         if (rows > 1) {
             Log.w(TAG, "CasHUB has " + rows + " parameter rows for this package; merged "
@@ -189,18 +196,38 @@ public final class CasHubParams {
                 castech.emvtxn.net.ApnApplier.applyIfChangedAsync(ctx, apn);
             }
         }
+        // time_zone (TZ-01, 6.2.13) → Castle system service, only when it differs from the terminal's
+        TimeZoneParam tz = TimeZoneParam.parse(merged);
+        if (tz.isPresent()) {
+            if (tz.problem != null) Log.w(TAG, "CasHUB time_zone param ignored — " + tz.problem);
+            else if (tz.changeFrom(java.util.TimeZone.getDefault().getID()) == null) Log.w(TAG, "Applied CasHUB " + tz.describe() + " (unchanged)");
+            else TimeZoneApplier.applyIfChangedAsync(tz);
+        }
+        // Reporting keys (6.2.13) → ReportingConfig; never into the host payload / KMS backup
+        boolean reportingChanged = false;
+        castech.emvtxn.reporting.ReportingParams rp = castech.emvtxn.reporting.ReportingParams.parse(merged);
+        if (!rp.isEmpty()) {
+            for (String problem : rp.problems) Log.w(TAG, "CasHUB reporting param ignored — " + problem);
+            castech.emvtxn.reporting.ReportingConfig rc = new castech.emvtxn.reporting.ReportingConfig(ctx);
+            if (rp.clearKey && rc.isConfigured()) { rc.setAccessKey(""); reportingChanged = true; }   // "off": reporting switched off
+            if (rp.accessKey != null && !rp.accessKey.equals(rc.getAccessKey())) { rc.setAccessKey(rp.accessKey); reportingChanged = true; }
+            if (rp.url != null && !rp.url.equals(rc.getUrl())) { rc.setUrl(rp.url); reportingChanged = true; }
+            Log.w(TAG, "Applied CasHUB " + rp.describe() + (reportingChanged ? " (changed)" : " (unchanged)"));
+        }
         // Everything else → the host-config mapping
         StringBuilder payload = new StringBuilder();
         for (java.util.Map.Entry<String, String> e : merged.entrySet()) {
             if (castech.emvtxn.pos.PosParams.KEYS.contains(e.getKey())) continue;
             if (castech.emvtxn.net.ApnParams.KEYS.contains(e.getKey())) continue;
+            if (castech.emvtxn.reporting.ReportingParams.KEYS.contains(e.getKey())) continue;
+            if (TimeZoneParam.KEY.equals(e.getKey())) continue;
             payload.append(e.getKey()).append('=').append(e.getValue()).append('\n');
         }
         KmsConfigStore.applyPayload(payload.toString());
         Log.w(TAG, "Applied CasHUB central config: host=" + GlobalPara.atmHostAddress
                 + " port=" + GlobalPara.atmHostPort + " tid=" + GlobalPara.atmTerminalId
                 + " processor=" + GlobalPara.atmProcessorType);
-        return new Applied(true, posDiff);
+        return new Applied(true, posDiff, reportingChanged);
     }
 
     /**
@@ -287,6 +314,7 @@ public final class CasHubParams {
                         }
                         if (v != null) v = castech.emvtxn.pos.PosParams.maskForLog(v);   // never log the access key
                         if (v != null) v = castech.emvtxn.net.ApnParams.maskForLog(v);   // nor the APN password
+                        if (v != null) v = castech.emvtxn.reporting.ReportingParams.maskForLog(v);   // nor the reporting key
                         if (v != null && v.length() > 300) v = v.substring(0, 300) + "...(" + v.length() + ")";
                         sb.append(c.getColumnName(i)).append('=').append(v).append(" | ");
                     }

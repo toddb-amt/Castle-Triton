@@ -88,6 +88,20 @@ public class DetailReportTest {
         assertEquals(4, out.split("CWDR", -1).length - 1);
     }
 
+    /** RPT-02 (6.2.13): an accepted reversal is journaled as its own REVERSAL row for the portal push. It is not a transaction here. */
+    @Test
+    public void reversalRow_changesNoCountAndNoTotal() {
+        ReportRow original = wd(1, "2803", 1, 20, 50_00, 3_50, "1", "r1", null, null);
+        ReportRow rwt = new ReportRow(1, "2803", 1, 20, 50_00, 3_50, 0L, "1", "r1", null, null, "REVERSAL", "APPROVED", false);
+        List<ReportRow> rows = Arrays.asList(original, rwt);
+        DetailReport.Summary s = DetailReport.summarize(rows);
+        assertEquals(1, s.withdrawals);
+        assertEquals(50_00, s.amountCents);
+        assertEquals(0, s.reversed);          // the flag on the original drives this, never the RWT row
+        assertEquals(0, s.declined + s.cancelled + s.balanceInquiries);
+        assertEquals(1, DetailReport.render(header(), rows).split("CWDR", -1).length - 1);
+    }
+
     @Test
     public void reversedApproval_isCountedNotListed() {
         ReportRow rev = new ReportRow(9, "4444", 1, 20, 50_00, 3_50, 0L, "A", "r9", null, null, "WITHDRAWAL", "APPROVED", true);
