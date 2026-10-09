@@ -4251,8 +4251,17 @@ public class MainActivity extends AppCompatActivity {
                             }
                             swipeRefusal = "Please insert the chip card";
                         } else if (swipe == SwipePolicy.Decision.NOT_ACCEPTED) {
+                            // swipe_enabled=false: say so and give the customer the tap or insert the message
+                            // invites — ending the transaction here would contradict it. Three prompts, then a decline.
+                            chipInsertPrompts++;
                             GlobalPara.atmEntryMode = 3;
-                            swipeRefusal = "Swipe not accepted - please tap or insert";   // swipe_enabled=false
+                            if (chipInsertPrompts <= CHIP_INSERT_PROMPTS_MAX) {
+                                ui_ShowMsg("Swipe not accepted here\nPlease tap or insert\n");
+                                MyUtility.sleep(2500);
+                                entryMode = 0;
+                                continue msrRetryLoop;
+                            }
+                            swipeRefusal = "Swipe not accepted - please tap or insert";
                         }
                         if (swipeRefusal != null) {
                             // A refused swipe ends here as a TERMINAL decline (not a cancel): the receipt, the
