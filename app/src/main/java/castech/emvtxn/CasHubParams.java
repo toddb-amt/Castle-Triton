@@ -226,7 +226,9 @@ public final class CasHubParams {
         KmsConfigStore.applyPayload(payload.toString());
         Log.w(TAG, "Applied CasHUB central config: host=" + GlobalPara.atmHostAddress
                 + " port=" + GlobalPara.atmHostPort + " tid=" + GlobalPara.atmTerminalId
-                + " processor=" + GlobalPara.atmProcessorType);
+                + " processor=" + GlobalPara.atmProcessorType
+                + " tips=" + (GlobalPara.atmTipsEnabled ? "on" : "off")
+                + " min=" + GlobalPara.atmMinAmount + " max=" + GlobalPara.atmMaxAmount);
         return new Applied(true, posDiff, reportingChanged);
     }
 
