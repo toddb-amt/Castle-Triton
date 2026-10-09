@@ -91,7 +91,7 @@ the proxy team should be told.
 |---|---|---|
 | `tips_enabled` | `false` | `true`/`false`/`1`/`0`. Enables the tip screen in both flows on the next transaction; shown as `Tips: on/off` on the Admin managed-configuration card. Invalid values are ignored. |
 
-### Device pass (pending)
+### Device pass (2026-10-09, bench unit MP001194 on EFX — steps 1–7 passed; 8 and 9 optional, parameter changes needed)
 
 1. `tips_enabled` absent → no tip screen in either flow; set it `true` in CasHUB → screen appears on the next transaction without restart; `false` removes it again.
 2. Walk-up tap and chip insert: each of 10% / 15% / 20% / Custom / No Tip; receipt block; Detail Report lines; MyView shows `TipAmount` / `CashBackAmount` after the push.
