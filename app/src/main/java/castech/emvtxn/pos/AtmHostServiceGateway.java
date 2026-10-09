@@ -177,8 +177,10 @@ public final class AtmHostServiceGateway implements PosTerminalGateway {
             String over = RegisterAmounts.overMaximum(amounts, castech.emvtxn.Money.toCents(GlobalPara.atmMaxAmount),
                     castech.emvtxn.Money.toCents(GlobalPara.atmMinAmount));
             if (over != null) {
+                // Its own code (not invalid_request): the proxy maps a clean business refusal to a
+                // "fix the amount, don't retry" response, and a malformed exchange to a terminal error.
                 Log.w(TAG, "POS sale refused: " + over);
-                callback.onError(PosWire.ERR_INVALID_REQUEST, over);
+                callback.onError(PosWire.ERR_AMOUNT_EXCEEDS_MAXIMUM, over);
                 return;
             }
             if (surchargeCents > 0 && surchargeCents != amounts.fee) {

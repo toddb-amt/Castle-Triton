@@ -244,8 +244,9 @@ Registration error codes:
   approved sale (additive; the request format is unchanged).
 - **Maximum (6.2.14+):** the terminal's `max_amount` applies to the rounded withdrawal. A sale whose
   rounded withdrawal would exceed it — including a sale already above the maximum — is answered
-  `error invalid_request` with a message such as `withdrawal $510.00 exceeds the terminal's maximum
-  $500.00 after rounding $490.00 up to the $30.00 step`. Nothing is charged.
+  `error amount_exceeds_maximum` with a message such as `withdrawal $510.00 exceeds the terminal's
+  maximum $500.00 after rounding $490.00 up to the $30.00 step`. Nothing is charged. (Its own code,
+  at the proxy team's request, so a clean business refusal is never mapped like a malformed exchange.)
 
 **Response (declined):**
 ```json
@@ -456,6 +457,7 @@ Sent in the `error.code` field. Stable identifiers — never localized; pair wit
 | `pin_entry_failed`    | PIN pad collection failed                                        |
 | `reversal_pending`    | Cannot start new txn until pending reversals drain               |
 | `invalid_request`     | Required field missing or invalid value                          |
+| `amount_exceeds_maximum` | 6.2.14+: the sale's rounded withdrawal exceeds the terminal's `max_amount`; nothing charged. A business refusal: show the message to the cashier, do not retry unchanged |
 | `internal_error`      | Unexpected internal failure (logged on terminal)                 |
 | `unknown_terminal`    | (Registration only) Proxy doesn't recognize this `tsn`           |
 | `invalid_credentials` | (Registration only) Bad `terminal_access_key`                    |

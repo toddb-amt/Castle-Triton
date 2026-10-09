@@ -120,7 +120,7 @@ the proxy team should be told.
   page (Admin) was current and then start a card read on a stale amount — now a `TipScreenGuard`
   allows one decision per showing and only while the page is current; (2) rounding a register sale
   could carry the withdrawal past `max_amount` when the maximum is not a multiple of the step (min
-  $30, max $500, sale $490 → $510) — the register is now answered `invalid_request` with the reason,
+  $30, max $500, sale $490 → $510) — the register is now answered `amount_exceeds_maximum` with the reason (its own code at the proxy team's request, 2026-10-09),
   and a register amount already above the maximum is refused the same way (T6). Seven minors deferred
   in `docs/CODE-REVIEW-BACKLOG.md`.
 - Unit suite: **431** tests (43 new: TipQuote ×15, tips parameter ×5, register amounts ×7, screen

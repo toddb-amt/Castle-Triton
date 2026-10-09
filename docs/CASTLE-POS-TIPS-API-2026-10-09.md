@@ -86,3 +86,41 @@ Pass `tip_cents` and `cash_back_cents` through on the `/tsi/v1/payment` response
 5. Sale with tips on, no touch for 30 s → card prompt appears, result as (1).
 
 Spec: `docs/CASTLE_POS_INTEGRATION_SPEC.md` §5.1.1 and §9 (versioning: additive fields are non-breaking). Questions to the terminal team.
+
+---
+
+## Proxy team response (2026-10-09)
+
+Reviewed; the design works for us. Status on our side, one change request, and one question — raised now while the build is still on the bench.
+
+**§2/§6 — done on our side.** The proxy forwards unrecognized resource fields on an approved sale to the register-facing response and the stored transaction record as-is, so `tip_cents`, `cash_back_cents`, and `total_cents` pass through with no proxy change. We have pinned this with a test emulating a 6.2.14 approved sale (including the §2 identity), so the pass-through is now a contract, not an accident. Older builds omitting the fields are handled (absent, not zeroed). We will send register integrators the §3 notice — that the card is charged `total_cents`, not `amount + surcharge`, with `cash_back_cents` returned in cash, and that absent fields mean a pre-6.2.14 terminal.
+
+**§4 — change request: give the over-maximum refusal its own error code.** You send it as `error.code: "invalid_request"`. On our side `invalid_request` maps to a generic terminal-error class (HTTP 502) because it otherwise means a malformed exchange — a register seeing 502 may retry or raise a malfunction alert, which is wrong for a clean business refusal that charged nothing. We don't want to distinguish the two by parsing the message text. Request: use a distinct code, e.g. `error.code: "amount_exceeds_maximum"` (message unchanged — it's good). We'll map it to a 4xx "fix the amount, don't retry" response with your message shown to the cashier. One line on each side, but only cheap before this ships.
+
+**§5 — question on the timing budget.** The tip screen adds up to 30 s before the card prompt, inside our 90-second window. But your 2026-08-30 watchdog note said the processor leg alone can legitimately run ~130 s on the busy-MUX deployment — already past our window before any tip screen. Two things to confirm: (a) the 30 s tip window is capped by the No-Tip default and nothing else can extend it; (b) tips don't lengthen the processor leg (the withdrawal is still a single host operation). If both hold, nothing changes for us; if the end-to-end worst case grows, tell us the realistic ceiling so we can decide whether the 90-second register budget needs revisiting fleet-wide.
+
+**Bench test plan (§7):** we'll mirror it from the register side the same day — happy to run our five calls against your bench unit on an agreed window. Our test 3 note: we'll also assert nothing was recorded as charged on our side for the over-max refusal.
+
+---
+
+## Terminal team reply (2026-10-09)
+
+**§4 — done.** The over-maximum refusal now has its own code, `error.code: "amount_exceeds_maximum"`, message unchanged. `invalid_request` keeps its old meaning (malformed exchange). Spec §7 lists the new code. It is in the bench build as of today; your test 3 will see it.
+
+**§5 (a) — confirmed, with one caveat.** The tip screen is bounded by a single 30-second idle timer that selects No Tip; it covers the custom-amount keypad and the "tip larger than the sale?" confirmation as well (both are dismissed when it fires), and nothing on the screen restarts it. The caveat: the timer runs only while the screen is in the foreground. If the terminal's display sleeps while the tip screen is up, the timer pauses and restarts at 30 s on wake — so a sleeping terminal can hold a register sale on the tip screen longer than 30 s. That is bounded by the 300-second slot watchdog like every other phase, and we have it on our list to make the tip screen cancel the register sale instead if the slot has already been released. It needs a long screen-off mid-sale to occur at all.
+
+**§5 (b) — confirmed.** Tips do not touch the processor leg. The withdrawal is still one host operation for the rounded amount, same message, same timeouts; the processor never sees the tip.
+
+**The realistic ceiling, from the code as shipped (unchanged by tips except the first line):**
+
+| Phase | Bound | Changed by 6.2.14? |
+|---|---|---|
+| Tip screen | ≤ 30 s (foreground), No Tip on expiry | **new** |
+| Card prompt | no terminal-side limit; the 300 s slot watchdog is the only bound | no |
+| PIN entry | 30 s to the first key, 60 s between keys (SDK) | no |
+| Processor leg, EFX | 30 s connect + 120 s response (EFX answers key requests in 50–57 s, so the response timeout is EFX-specific) | no |
+| Terminal-side endings (cancel, swipe, PIN failure) | answered within a second since 6.2.12 | no |
+
+So the end-to-end worst case grows by exactly the tip screen's 30 seconds; a typical approved sale grows by the few seconds a customer takes to tap a percentage. Your 2026-10-05 request to cap the processor leg of POS-driven transactions at or below 60 seconds is **still open** on our side — it was not part of 6.2.12–6.2.14 — and is the lever if the 90-second register budget is to be met in the busy-MUX worst case. We would rather decide that one with you deliberately than fold it into the tips release.
+
+**§7 — agreed.** Same-day mirror from the register side against the bench unit; propose a window and we will have `tips_enabled` on for tests 2, 4 and 5 and off for test 1.

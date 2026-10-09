@@ -97,6 +97,7 @@ public final class PosWire {
     public static final String ERR_PIN_ENTRY_FAILED  = "pin_entry_failed";
     public static final String ERR_REVERSAL_PENDING  = "reversal_pending";
     public static final String ERR_INVALID_REQUEST   = "invalid_request";
+    public static final String ERR_AMOUNT_EXCEEDS_MAXIMUM = "amount_exceeds_maximum";  // 6.2.14: business refusal, nothing charged — not a malformed exchange (proxy team 2026-10-09)
     public static final String ERR_INTERNAL          = "internal_error";
 
     // Registration-specific error codes
