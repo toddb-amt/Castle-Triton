@@ -69,10 +69,7 @@ public class Fragment_page_main_menu extends Fragment {
                         // the previous receipt on resume.
                         GlobalPara.resetATMTransactionState();
                         GlobalPara.atmBalanceInquiryMode = true;
-                        GlobalPara.atmSelectedAmount = "0.00";
-                        GlobalPara.atmFee = "0.00";
-                        GlobalPara.atmTotal = "0.00";
-                        GlobalPara.strAmount = "0"; // Amount in cents for EMV SDK
+                        GlobalPara.clearAmounts();   // no amount on a balance inquiry — breakdown included (M7)
                         GlobalPara.atmAccountType = GlobalPara.ATM_ACCOUNT_CHECKING;
                         if (mainActivity != null) {
                             mainActivity.navigateToPage(GlobalDef.d_PAGE_TRANSACTION);

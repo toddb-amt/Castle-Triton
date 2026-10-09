@@ -229,10 +229,14 @@ public final class PosTransactionExecutor implements PosCommandDispatcher.Transa
                     resource.put(PosWire.TXN_AMOUNT, amountCents);
                     resource.put(PosWire.TXN_SURCHARGE, r.surchargeCents);
                     resource.put(PosWire.RSP_TOTAL_CENTS, r.totalCents > 0 ? r.totalCents : amountCents + r.surchargeCents);
+                    // 6.2.14: the tip chosen at the terminal and the rounding remainder (TIP-01)
+                    resource.put(PosWire.RSP_TIP_CENTS, r.tipCents);
+                    resource.put(PosWire.RSP_CASH_BACK_CENTS, r.cashBackCents);
                 }
             } catch (JSONException ignored) {}
             reply(flowId, "approved rc=" + r.responseCode + " rrn=" + r.referenceNumber
-                    + " amt=" + amountCents + " surcharge=" + r.surchargeCents,
+                    + " amt=" + amountCents + " surcharge=" + r.surchargeCents
+                    + " tip=" + r.tipCents + " cashBack=" + r.cashBackCents,
                     PosEnvelope.response(flowId, resource, null));
         }
 

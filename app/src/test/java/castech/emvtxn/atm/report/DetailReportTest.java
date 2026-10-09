@@ -16,13 +16,13 @@ public class DetailReportTest {
 
     private static ReportRow wd(int seq, String last4, int em, int acct, long amt, long fee, String auth, String rrn,
                                 String clerk, String inv) {
-        return new ReportRow(seq, last4, em, acct, amt, fee, 0L, auth, rrn, clerk, inv, "WITHDRAWAL", "APPROVED", false);
+        return new ReportRow(seq, last4, em, acct, amt, fee, 0L, amt, 0L, auth, rrn, clerk, inv, "WITHDRAWAL", "APPROVED", false);
     }
     private static ReportRow other(int seq, String type, String result) {
-        return new ReportRow(seq, "0000", 1, 20, 0L, 0L, 0L, "", "", null, null, type, result, false);
+        return new ReportRow(seq, "0000", 1, 20, 0L, 0L, 0L, 0L, 0L, "", "", null, null, type, result, false);
     }
     private static DetailReport.Header header() {
-        return new DetailReport.Header(3, T0 - 5 * 3600_000L, T0, "MP001194");
+        return new DetailReport.Header(3, T0 - 5 * 3600_000L, T0, "MS00TEST");
     }
     private static List<String> lines(String s) { return Arrays.asList(s.split("\n", -1)); }
 
@@ -42,10 +42,10 @@ public class DetailReportTest {
                 wd(1, "2803", 1, 20, 5_00, 3_50, "123456", "673100000012", null, null)));
         assertTrue(out, out.contains("         DETAIL REPORT\n"));
         assertTrue(out, out.contains("  Batch #: 003\n"));
-        assertTrue(out, out.contains("TID MP001194"));
+        assertTrue(out, out.contains("TID MS00TEST"));
         assertTrue(out, out.contains("****2803  CWDR DB  C    #00001\n"));
         assertTrue(out, out.contains(" AUTH 123456   REF 673100000012\n"));
-        assertTrue(out, out.contains(" AMT     $5.00   FEE     $3.50\n"));
+        assertTrue(out, out.contains(" SALE     $5.00   FEE     $3.50\n"));
         assertTrue(out, out.contains(" TIP     $0.00  TOTAL    $8.50\n"));
         assertFalse(out, out.contains("CLRK"));
         assertTrue(out, out.endsWith("         END OF REPORT\n\n\n"));
@@ -92,7 +92,7 @@ public class DetailReportTest {
     @Test
     public void reversalRow_changesNoCountAndNoTotal() {
         ReportRow original = wd(1, "2803", 1, 20, 50_00, 3_50, "1", "r1", null, null);
-        ReportRow rwt = new ReportRow(1, "2803", 1, 20, 50_00, 3_50, 0L, "1", "r1", null, null, "REVERSAL", "APPROVED", false);
+        ReportRow rwt = new ReportRow(1, "2803", 1, 20, 50_00, 3_50, 0L, 50_00, 0L, "1", "r1", null, null, "REVERSAL", "APPROVED", false);
         List<ReportRow> rows = Arrays.asList(original, rwt);
         DetailReport.Summary s = DetailReport.summarize(rows);
         assertEquals(1, s.withdrawals);
@@ -104,7 +104,7 @@ public class DetailReportTest {
 
     @Test
     public void reversedApproval_isCountedNotListed() {
-        ReportRow rev = new ReportRow(9, "4444", 1, 20, 50_00, 3_50, 0L, "A", "r9", null, null, "WITHDRAWAL", "APPROVED", true);
+        ReportRow rev = new ReportRow(9, "4444", 1, 20, 50_00, 3_50, 0L, 50_00, 0L, "A", "r9", null, null, "WITHDRAWAL", "APPROVED", true);
         List<ReportRow> rows = Arrays.asList(wd(1, "2803", 1, 20, 5_00, 3_50, "1", "r1", null, null), rev);
         DetailReport.Summary s = DetailReport.summarize(rows);
         assertEquals(1, s.withdrawals);
@@ -118,7 +118,7 @@ public class DetailReportTest {
     /** Review #2: a withdrawal the processor reversed counts under Reversed whatever the terminal recorded. */
     @Test
     public void reversedDecline_countsUnderReversedNotDeclined() {
-        ReportRow rev = new ReportRow(4, "4444", 1, 20, 50_00, 3_50, 0L, "", "", null, null, "WITHDRAWAL", "DECLINED", true);
+        ReportRow rev = new ReportRow(4, "4444", 1, 20, 50_00, 3_50, 0L, 50_00, 0L, "", "", null, null, "WITHDRAWAL", "DECLINED", true);
         DetailReport.Summary s = DetailReport.summarize(Arrays.asList(rev));
         assertEquals(0, s.declined);
         assertEquals(1, s.reversed);
@@ -164,7 +164,7 @@ public class DetailReportTest {
                 wd(1, "2803", 3, 30, 12345_67, 99_99, "ABCDEF", "673100000012", "12345678", "INV-1234567890")));
         for (String l : lines(out)) assertTrue("[" + l + "]", l.length() <= 32);
         assertTrue(out, out.contains("CWDR CR  S"));
-        assertTrue(out, out.contains(" AMT $12345.67   FEE    $99.99\n"));
+        assertTrue(out, out.contains(" SALE $12345.67   FEE    $99.99\n"));
         assertTrue(out, out.contains("SUMMARY  (CREDIT)\n"));
     }
 
@@ -172,5 +172,44 @@ public class DetailReportTest {
     public void footer_saysProcessorTotalsGovern() {
         String out = DetailReport.render(header(), new ArrayList<ReportRow>());
         assertTrue(out, out.contains("Terminal record - processor\ntotals govern\n"));
+    }
+
+    // ---- TIP-01 (6.2.14): sale and cash back -------------------------------------------------
+
+    @Test
+    public void aTippedWithdrawal_printsSaleFeeThenTipTotal_withTotalBeingWithdrawalPlusFee() {
+        // sale 10.00, tip 1.00, withdrawal 20.00 (cash back 9.00), fee 3.50 → TOTAL 23.50 (not 24.50)
+        ReportRow r = new ReportRow(7, "1111", 2, 20, 20_00, 3_50, 1_00, 10_00, 9_00, "A1", "r7", null, null,
+                "WITHDRAWAL", "APPROVED", false);
+        String out = DetailReport.render(header(), Arrays.asList(r));
+        assertTrue(out, out.contains(" SALE    $10.00   FEE     $3.50\n"));
+        assertTrue(out, out.contains(" TIP     $1.00  TOTAL   $23.50\n"));
+        assertFalse(out, out.contains(" AMT "));
+    }
+
+    @Test
+    public void anOldRow_withNoSaleRecorded_printsTheAmountAsTheSale() {
+        ReportRow r = new ReportRow(8, "2222", 1, 20, 5_00, 3_50, 0L, 0L, 0L, "A2", "r8", null, null,
+                "WITHDRAWAL", "APPROVED", false);
+        String out = DetailReport.render(header(), Arrays.asList(r));
+        assertTrue(out, out.contains(" SALE     $5.00   FEE     $3.50\n"));
+        assertTrue(out, out.contains(" TIP     $0.00  TOTAL    $8.50\n"));
+    }
+
+    @Test
+    public void summary_listsCashBack_andTotalIsAmountPlusFee() {
+        ReportRow a = new ReportRow(1, "1111", 1, 20, 20_00, 3_50, 1_00, 10_00, 9_00, "A", "r1", null, null, "WITHDRAWAL", "APPROVED", false);
+        ReportRow b = new ReportRow(2, "2222", 1, 20, 40_00, 3_50, 0L, 32_50, 7_50, "B", "r2", null, null, "WITHDRAWAL", "APPROVED", false);
+        String out = DetailReport.render(header(), Arrays.asList(a, b));
+        assertTrue(out, lineStartingWith(out, "Withdrawals").endsWith("$60.00"));
+        assertTrue(out, lineStartingWith(out, " Fees").endsWith("$7.00"));
+        assertTrue(out, lineStartingWith(out, " Tips").endsWith("$1.00"));
+        assertTrue(out, lineStartingWith(out, " Cash back").endsWith("$16.50"));
+        assertTrue(out, lineStartingWith(out, "Total").endsWith("$67.00"));      // 60.00 + 7.00; the tip is inside
+    }
+
+    private static String lineStartingWith(String out, String prefix) {
+        for (String l : lines(out)) if (l.startsWith(prefix)) return l;
+        throw new AssertionError("no line starting with \"" + prefix + "\" in:\n" + out);
     }
 }

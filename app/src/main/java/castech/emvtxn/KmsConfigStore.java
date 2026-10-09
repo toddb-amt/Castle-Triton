@@ -53,6 +53,8 @@ public final class KmsConfigStore {
                     "processor_type=" + nz(GlobalPara.atmProcessorType)  + "\n" +
                     "protocol_type="  + nz(GlobalPara.atmProtocolType)   + "\n" +
                     "use_flat_fee="   + GlobalPara.atmUseFlatFee         + "\n" +
+                    "tips_enabled="   + GlobalPara.atmTipsEnabled        + "\n" +
+                    "swipe_enabled="  + GlobalPara.atmSwipeEnabled       + "\n" +
                     "flat_fee="       + GlobalPara.atmFlatFeeAmount      + "\n" +
                     "percentage_fee=" + GlobalPara.atmPercentageFee      + "\n" +
                     "min_amount="     + GlobalPara.atmMinAmount          + "\n" +
@@ -144,6 +146,8 @@ public final class KmsConfigStore {
                     case "processor_type": GlobalPara.atmProcessorType = v; break;
                     case "protocol_type":  GlobalPara.atmProtocolType = v; break;
                     case "use_flat_fee":   GlobalPara.atmUseFlatFee = Boolean.parseBoolean(v.trim()); break;
+                    case "tips_enabled":   GlobalPara.atmTipsEnabled = parseBool(k, v, GlobalPara.atmTipsEnabled); break;
+                    case "swipe_enabled":  GlobalPara.atmSwipeEnabled = parseBool(k, v, GlobalPara.atmSwipeEnabled); break;
                     // Money values must be >= 0: AmountBreakdown refuses a negative fee loudly, so a
                     // negative value here would end every transaction (6.2.13 review I4). Keep the
                     // previous value and say so.
@@ -157,6 +161,15 @@ public final class KmsConfigStore {
                 // Skip any malformed line rather than fail the whole restore
             }
         }
+    }
+
+    /** true/false/1/0 (case-insensitive); anything else is logged and the current value kept. */
+    private static boolean parseBool(String key, String raw, boolean current) {
+        String t = raw.trim().toLowerCase(java.util.Locale.US);
+        if (t.equals("true") || t.equals("1")) return true;
+        if (t.equals("false") || t.equals("0")) return false;
+        Log.w(TAG, "Config " + key + "=" + raw.trim() + " rejected (not a boolean) — keeping " + current);
+        return current;
     }
 
     /** Parses a money/limit value; a negative (or unparsable) value is logged and the current value kept. */

@@ -165,6 +165,16 @@ public class Track2PanExtractorTest {
     }
 
     @Test
+    public void toHostTrack2_plainReaderSwipe_startSentinelNoEndSentinel() {
+        // MSR-01: the plain CtMSR reader (S1F4 PRO, 2026-10-09 probe) returns 36 bytes: ';' + PAN + '=' + data,
+        // without the end sentinel. The end sentinel is put back; the LRC never appears.
+        String swiped = ";4111111111111111=290310125430000012";       // 1 + 16 + 1 + 18 = 36, as the probe measured
+        byte[] t2 = swiped.getBytes(StandardCharsets.US_ASCII);
+        assertEquals(36, t2.length);
+        assertEquals(swiped + "?", Track2PanExtractor.toHostTrack2(t2, t2.length));
+    }
+
+    @Test
     public void toHostTrack2_bcdPacked_turnsSeparatorIntoEqualsAndDropsPadding() {
         byte[] t2 = bcdTrack2(PAN); // 4111111111111111 D 2903101254300000 F
         assertEquals(HOST_TRACK2, Track2PanExtractor.toHostTrack2(t2, t2.length));

@@ -157,16 +157,15 @@ public final class AtmHostServiceGateway implements PosTerminalGateway {
         // fragment's writes.
         GlobalPara.atmBalanceInquiryMode = balanceInquiry;
         GlobalPara.atmAccountType = acctTypeCode;
-        // AMT-03: one breakdown. D7 stands: the register's surcharge is advisory; the terminal's
-        // fee configuration governs. 6.2.13 keeps register sales EXACT (roundToStep = false) —
-        // identical charges to 6.2.12; 6.2.14 turns rounding on together with tips.
+        // One breakdown (AMT-03). D7 stands: the register's surcharge is advisory; the terminal's
+        // fee configuration governs. From 6.2.14 a register sale ROUNDS to the step like a walk-up
+        // custom amount (T5): $12.50 → $20.00 withdrawal, $7.50 cash back.
         final castech.emvtxn.AmountBreakdown amounts;
         if (balanceInquiry) {
             amounts = castech.emvtxn.AmountBreakdown.balanceInquiry();
         } else {
             try {
-                amounts = castech.emvtxn.AmountBreakdown.of(amountCents, 0L,
-                        castech.emvtxn.Money.toCents(GlobalPara.atmMinAmount), false,
+                amounts = RegisterAmounts.of(amountCents, castech.emvtxn.Money.toCents(GlobalPara.atmMinAmount),
                         GlobalPara.atmUseFlatFee, GlobalPara.atmFlatFeeAmount, GlobalPara.atmPercentageFee);
             } catch (IllegalArgumentException bad) {
                 // Fee configuration that cannot be charged (review I4): answer the register, never crash.
@@ -174,22 +173,27 @@ public final class AtmHostServiceGateway implements PosTerminalGateway {
                 callback.onError(PosWire.ERR_INTERNAL, "terminal fee configuration invalid: " + bad.getMessage());
                 return;
             }
+            // T6: the maximum applies to the withdrawal (review 6.2.14 #2) — refuse, never charge over the cap
+            String over = RegisterAmounts.overMaximum(amounts, castech.emvtxn.Money.toCents(GlobalPara.atmMaxAmount),
+                    castech.emvtxn.Money.toCents(GlobalPara.atmMinAmount));
+            if (over != null) {
+                // Its own code (not invalid_request): the proxy maps a clean business refusal to a
+                // "fix the amount, don't retry" response, and a malformed exchange to a terminal error.
+                Log.w(TAG, "POS sale refused: " + over);
+                callback.onError(PosWire.ERR_AMOUNT_EXCEEDS_MAXIMUM, over);
+                return;
+            }
             if (surchargeCents > 0 && surchargeCents != amounts.fee) {
                 Log.w(TAG, "POS sent surcharge=" + surchargeCents + " cents; terminal fee config governs: "
                         + amounts.fee + " cents (reply carries the applied value)");
             }
         }
-        final long appliedSurchargeCents = amounts.fee;
-        final long appliedTotalCents = amounts.total;
-        GlobalPara.atmAmounts = amounts;
-        GlobalPara.atmSelectedAmount = castech.emvtxn.Money.dollars(amounts.withdrawal);
-        GlobalPara.atmFee = castech.emvtxn.Money.dollars(amounts.fee);
-        GlobalPara.atmTotal = castech.emvtxn.Money.dollars(amounts.total);
-        GlobalPara.strAmount = balanceInquiry ? "0" : amounts.chipAmountCents();
+        final castech.emvtxn.AmountBreakdown armed = amounts;
+        GlobalPara.applyAmounts(amounts);   // every mirror + the chip amount ("0" for a BI) from the one breakdown
 
         Log.d(TAG, "POS txn arming: balanceInquiry=" + balanceInquiry
-                + " amt=" + amountCents + " surcharge(applied)=" + appliedSurchargeCents
-                + " total=" + appliedTotalCents + " acct=" + acctTypeCode);
+                + " amt=" + amountCents + " surcharge(applied)=" + amounts.fee
+                + " total=" + amounts.total + " acct=" + acctTypeCode);
 
         // Arm the observer. The bridge below fires the executor's TransactionCallback
         // when the existing listener path completes.
@@ -198,10 +202,14 @@ public final class AtmHostServiceGateway implements PosTerminalGateway {
             public void onApproved(String responseCode, String referenceNumber,
                                     String authDate, String authTime,
                                     long acctBal, long availBal, String displayMessage) {
+                // The tip screen (6.2.14) may have changed the breakdown after arming: report what
+                // was charged — the same breakdown the journal and the push read at completion.
+                castech.emvtxn.AmountBreakdown done = GlobalPara.atmAmounts;
+                if (done == null || done.sale <= 0) done = armed;
                 callback.onApproved(new PosTerminalGateway.TransactionResult(
                         responseCode, referenceNumber, /* authCode */ "",
                         authDate, authTime, acctBal, availBal, displayMessage,
-                        appliedSurchargeCents, appliedTotalCents));
+                        done.fee, done.total, done.tip, done.cashBack));
             }
             @Override
             public void onDeclined(String responseCode, String responseMessage, boolean retainCard) {
@@ -213,9 +221,13 @@ public final class AtmHostServiceGateway implements PosTerminalGateway {
             }
         });
 
-        // Kick the UI flow — this hops to the main thread and navigates to the
-        // transaction page, which auto-starts card detection.
-        ui.runOnUi(ui::navigateToTransactionPage);
+        // Kick the UI flow on the main thread: the tip screen when it applies (T2, 6.2.14), else the
+        // transaction page, which auto-starts card detection. The POS slot is armed either way;
+        // Cancel on the tip screen answers user_cancelled through it, the watchdog covers it.
+        final boolean tip = castech.emvtxn.TipQuote.offer(GlobalPara.atmTipsEnabled, balanceInquiry, amounts,
+                castech.emvtxn.Money.toCents(GlobalPara.atmMinAmount), castech.emvtxn.Money.toCents(GlobalPara.atmMaxAmount),
+                GlobalPara.atmUseFlatFee, GlobalPara.atmFlatFeeAmount, GlobalPara.atmPercentageFee);
+        ui.runOnUi(tip ? ui::navigateToTipPage : ui::navigateToTransactionPage);
     }
 
     // ---- Reversal (no card read required) -------------------------------------
@@ -353,5 +365,7 @@ public final class AtmHostServiceGateway implements PosTerminalGateway {
 
         /** Navigate to the TRANSACTION page; equivalent to GlobalPara.mainActivity.navigateToPage(d_PAGE_TRANSACTION). */
         void navigateToTransactionPage();
+        /** Navigate to the TIP page (6.2.14); the page itself continues to the transaction page. */
+        void navigateToTipPage();
     }
 }

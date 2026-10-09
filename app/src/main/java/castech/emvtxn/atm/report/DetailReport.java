@@ -30,9 +30,9 @@ public final class DetailReport {
 
     public static final class Summary {
         public int withdrawals, declined, cancelled, balanceInquiries, reversed;
-        public long amountCents, feeCents, tipCents;
+        public long amountCents, feeCents, tipCents, cashBackCents;
         // per card type, for the optional second group
-        public int creditWithdrawals; public long creditAmountCents, creditFeeCents, creditTipCents;
+        public int creditWithdrawals; public long creditAmountCents, creditFeeCents, creditTipCents, creditCashBackCents;
     }
 
     public static Summary summarize(List<ReportRow> rows) {
@@ -44,8 +44,8 @@ public final class DetailReport {
             if ("BALANCE_INQUIRY".equals(r.type)) { s.balanceInquiries++; continue; }
             if (!"WITHDRAWAL".equals(r.type)) continue;
             if ("APPROVED".equals(r.result)) {
-                s.withdrawals++; s.amountCents += r.amountCents; s.feeCents += r.feeCents; s.tipCents += r.tipCents;
-                if (r.accountType == 30) { s.creditWithdrawals++; s.creditAmountCents += r.amountCents; s.creditFeeCents += r.feeCents; s.creditTipCents += r.tipCents; }
+                s.withdrawals++; s.amountCents += r.amountCents; s.feeCents += r.feeCents; s.tipCents += r.tipCents; s.cashBackCents += r.cashBackCents;
+                if (r.accountType == 30) { s.creditWithdrawals++; s.creditAmountCents += r.amountCents; s.creditFeeCents += r.feeCents; s.creditTipCents += r.tipCents; s.creditCashBackCents += r.cashBackCents; }
             } else if ("CANCELLED".equals(r.result)) {
                 s.cancelled++;
             } else {
@@ -84,8 +84,10 @@ public final class DetailReport {
                     }
                 }
                 line(b, String.format(Locale.US, " AUTH %-6s   REF %s", notBlank(r.authCode) ? cut(r.authCode, 6) : "--", nz(r.rrn)));
-                line(b, " AMT " + right(money(r.amountCents), 9) + "   FEE " + right(money(r.feeCents), 9));
-                line(b, " TIP " + right(money(r.tipCents), 9) + "  TOTAL " + right(money(r.amountCents + r.feeCents + r.tipCents), 8));
+                // TIP-01 (6.2.14): SALE is what the customer asked for; TOTAL = withdrawal + fee (the tip is
+                // inside the withdrawal). Rows journaled before the sale column existed show the amount.
+                line(b, " SALE " + right(money(r.saleCents > 0 ? r.saleCents : r.amountCents), 9) + "   FEE " + right(money(r.feeCents), 9));
+                line(b, " TIP " + right(money(r.tipCents), 9) + "  TOTAL " + right(money(r.amountCents + r.feeCents), 8));
                 if (i < approved.size() - 1) line(b, THIN);
             }
         }
@@ -95,19 +97,20 @@ public final class DetailReport {
         boolean allCredit = s.creditWithdrawals > 0 && s.creditWithdrawals == s.withdrawals;
         boolean twoGroups = s.creditWithdrawals > 0 && s.creditWithdrawals < s.withdrawals;
         if (allCredit) {
-            group(b, "CREDIT", s.withdrawals, s.amountCents, s.feeCents, s.tipCents);
+            group(b, "CREDIT", s.withdrawals, s.amountCents, s.feeCents, s.tipCents, s.cashBackCents);
         } else {
             group(b, "DEBIT", s.withdrawals - s.creditWithdrawals, s.amountCents - s.creditAmountCents,
-                    s.feeCents - s.creditFeeCents, s.tipCents - s.creditTipCents);
+                    s.feeCents - s.creditFeeCents, s.tipCents - s.creditTipCents, s.cashBackCents - s.creditCashBackCents);
             if (twoGroups) {
                 line(b, THIN);
-                group(b, "CREDIT", s.creditWithdrawals, s.creditAmountCents, s.creditFeeCents, s.creditTipCents);
+                group(b, "CREDIT", s.creditWithdrawals, s.creditAmountCents, s.creditFeeCents, s.creditTipCents, s.creditCashBackCents);
                 line(b, THIN);
                 line(b, "GRAND TOTALS");
                 line(b, sum("Withdrawals", s.withdrawals, s.amountCents));
                 line(b, sum(" Fees", -1, s.feeCents));
                 line(b, sum(" Tips", -1, s.tipCents));
-                line(b, sum("Grand Total", s.withdrawals, s.amountCents + s.feeCents + s.tipCents));
+                line(b, sum(" Cash back", -1, s.cashBackCents));
+                line(b, sum("Grand Total", s.withdrawals, s.amountCents + s.feeCents));
             }
         }
         line(b, THIN);
@@ -122,12 +125,13 @@ public final class DetailReport {
         return b.toString();
     }
 
-    private static void group(StringBuilder b, String name, int count, long amt, long fee, long tip) {
+    private static void group(StringBuilder b, String name, int count, long amt, long fee, long tip, long cashBack) {
         line(b, "SUMMARY  (" + name + ")");
         line(b, sum("Withdrawals", count, amt));
         line(b, sum(" Fees", -1, fee));
         line(b, sum(" Tips", -1, tip));
-        line(b, sum("Total", count, amt + fee + tip));
+        line(b, sum(" Cash back", -1, cashBack));
+        line(b, sum("Total", count, amt + fee));     // the tip is inside the withdrawal (TIP-01)
     }
 
     /** label (12) + count (4, or blank) + amount right-aligned in 14 = 30 (spec layout). */

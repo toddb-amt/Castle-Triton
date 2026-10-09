@@ -9,7 +9,6 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * ATM Transaction Manager
@@ -37,7 +36,7 @@ public class AtmTransactionManager {
     private ReversalPersistenceManager reversalManager;
 
     // State
-    private final AtomicInteger sequenceNumber;
+    private final SequenceCounter sequenceNumber;   // SEQ-01: continues across restarts
     private TransactionRequest currentRequest;
     private TransactionResponse currentResponse;
     private final java.util.concurrent.atomic.AtomicBoolean transactionInProgress = new java.util.concurrent.atomic.AtomicBoolean(false);
@@ -89,13 +88,20 @@ public class AtmTransactionManager {
      * @param keyManager Key manager for PIN encryption
      */
     public AtmTransactionManager(ProcessorConfig config, CastleKeyManager keyManager) {
+        this(config, keyManager, SequenceCounter.inMemory());
+    }
+
+    /**
+     * @param sequenceCounter the STD1 terminal sequence source; {@link SequenceCounter#persistent} in the app
+     */
+    public AtmTransactionManager(ProcessorConfig config, CastleKeyManager keyManager, SequenceCounter sequenceCounter) {
         this.config = config;
         this.keyManager = keyManager;
         this.connection = new AtmHostConnection(config);
         this.builder = config.createMessageBuilder();
         this.parser = config.createMessageParser();
         this.emvTagEnhancer = new EmvTagEnhancer();
-        this.sequenceNumber = new AtomicInteger(1);
+        this.sequenceNumber = sequenceCounter;
         this.executor = Executors.newSingleThreadExecutor();
         this.mainHandler = new Handler(Looper.getMainLooper());
         this.transactionInProgress.set(false);
@@ -288,8 +294,8 @@ public class AtmTransactionManager {
      * Gets the next sequence number (1-9999, wraps).
      */
     private int getNextSequenceNumber() {
-        // W3 fix: atomic wrap-around using getAndUpdate
-        return sequenceNumber.getAndUpdate(n -> n >= 9999 ? 1 : n + 1);
+        // W3 fix kept (atomic, wraps 9999 → 1); SEQ-01: the counter now persists between runs
+        return sequenceNumber.next();
     }
 
     // =========================================================================

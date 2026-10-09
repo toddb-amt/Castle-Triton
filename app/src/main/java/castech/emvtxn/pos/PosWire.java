@@ -82,7 +82,9 @@ public final class PosWire {
     public static final String RSP_AVAILABLE_BALANCE_CENTS = "available_balance_cents";
     public static final String RSP_DISPLAY_MESSAGE         = "display_message";
     public static final String RSP_RETAIN_CARD             = "retain_card";
-    public static final String RSP_TOTAL_CENTS             = "total_cents";  // amount + applied surcharge, as charged to the cardholder (sale only)
+    public static final String RSP_TOTAL_CENTS             = "total_cents";  // withdrawal + applied surcharge, as charged to the cardholder (sale only)
+    public static final String RSP_TIP_CENTS               = "tip_cents";        // 6.2.14: tip chosen at the terminal (0 when none / tips off)
+    public static final String RSP_CASH_BACK_CENTS         = "cash_back_cents";  // 6.2.14: withdrawal − amount − tip (rounding to the step)
 
     // ---- Standard error codes (resource error.code) ---------------------------
 
@@ -95,6 +97,7 @@ public final class PosWire {
     public static final String ERR_PIN_ENTRY_FAILED  = "pin_entry_failed";
     public static final String ERR_REVERSAL_PENDING  = "reversal_pending";
     public static final String ERR_INVALID_REQUEST   = "invalid_request";
+    public static final String ERR_AMOUNT_EXCEEDS_MAXIMUM = "amount_exceeds_maximum";  // 6.2.14: business refusal, nothing charged — not a malformed exchange (proxy team 2026-10-09)
     public static final String ERR_INTERNAL          = "internal_error";
 
     // Registration-specific error codes

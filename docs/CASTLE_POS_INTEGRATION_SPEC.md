@@ -224,14 +224,29 @@ Registration error codes:
     "display_message": "APPROVED",
     "amount": 5000,
     "surcharge": 350,
-    "total_cents": 5350
+    "total_cents": 5350,
+    "tip_cents": 0,
+    "cash_back_cents": 0
   }
 }
 ```
 
-- `amount` — the cash amount requested
+- `amount` — the cash amount requested (the register's sale; unchanged by the terminal)
 - `surcharge` — the surcharge the **terminal** applied (its fee configuration), not the request's value
-- `total_cents` — `amount + surcharge`, what the cardholder was charged (6.2.8+)
+- `total_cents` — what the cardholder was charged: `withdrawal + surcharge` (6.2.8+). Up to 6.2.13 the
+  withdrawal equalled `amount`; from 6.2.14 it may be larger (see the two fields below).
+- `tip_cents` — **6.2.14+**: the tip the customer chose at the terminal; `0` when none or when tips are
+  off for the merchant. The terminal prompts for a tip (10% / 15% / 20% / custom / no tip, 30 s idle =
+  no tip) before the card prompt when the merchant has tips enabled; the register does not send a tip.
+- `cash_back_cents` — **6.2.14+**: `withdrawal − amount − tip_cents`. From 6.2.14 the terminal rounds a
+  sale **up to its `min_amount` step** (as a walk-up custom amount always did): a $12.50 sale becomes a
+  $20.00 withdrawal and the customer receives $7.50 back. Both fields are always present on an
+  approved sale (additive; the request format is unchanged).
+- **Maximum (6.2.14+):** the terminal's `max_amount` applies to the rounded withdrawal. A sale whose
+  rounded withdrawal would exceed it — including a sale already above the maximum — is answered
+  `error amount_exceeds_maximum` with a message such as `withdrawal $510.00 exceeds the terminal's
+  maximum $500.00 after rounding $490.00 up to the $30.00 step`. Nothing is charged. (Its own code,
+  at the proxy team's request, so a clean business refusal is never mapped like a malformed exchange.)
 
 **Response (declined):**
 ```json
@@ -442,6 +457,7 @@ Sent in the `error.code` field. Stable identifiers — never localized; pair wit
 | `pin_entry_failed`    | PIN pad collection failed                                        |
 | `reversal_pending`    | Cannot start new txn until pending reversals drain               |
 | `invalid_request`     | Required field missing or invalid value                          |
+| `amount_exceeds_maximum` | 6.2.14+: the sale's rounded withdrawal exceeds the terminal's `max_amount`; nothing charged. A business refusal: show the message to the cashier, do not retry unchanged |
 | `internal_error`      | Unexpected internal failure (logged on terminal)                 |
 | `unknown_terminal`    | (Registration only) Proxy doesn't recognize this `tsn`           |
 | `invalid_credentials` | (Registration only) Bad `terminal_access_key`                    |
@@ -499,7 +515,8 @@ an unknown outcome, exactly like a caller-side timeout — query before retrying
 - This spec is **Draft 1.0**. Once both sides are in production, changes
   go through normal versioning (semver) and the path prefix bumps:
   `/castle/v2/...`.
-- Adding new optional response fields is non-breaking.
+- Adding new optional response fields is non-breaking. Added so far: `surcharge`/`total_cents` on the
+  approved sale (6.2.8), `tip_cents`/`cash_back_cents` (6.2.14, 2026-10-08).
 - Adding new commands is non-breaking (terminals can return `not_supported`).
 - Renaming/removing fields, changing field types, or removing commands
   is breaking — bump the version path.

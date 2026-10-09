@@ -117,8 +117,12 @@ public interface PosTerminalGateway {
         public final String displayMessage;
         /** Surcharge actually applied by the terminal (D7: terminal fee config, not the register's value); 0 for BI. */
         public final long   surchargeCents;
-        /** amount + surchargeCents as charged to the cardholder; 0 for BI. */
+        /** withdrawal + surchargeCents as charged to the cardholder; 0 for BI. */
         public final long   totalCents;
+        /** 6.2.14: tip chosen at the terminal; 0 when none. */
+        public final long   tipCents;
+        /** 6.2.14: withdrawal − sale − tip (the rounding remainder the customer receives). */
+        public final long   cashBackCents;
 
         public TransactionResult(String responseCode, String referenceNumber, String authCode,
                                  String authDate, String authTime,
@@ -132,6 +136,16 @@ public interface PosTerminalGateway {
                                  long accountBalanceCents, long availableBalanceCents,
                                  String displayMessage,
                                  long surchargeCents, long totalCents) {
+            this(responseCode, referenceNumber, authCode, authDate, authTime, accountBalanceCents, availableBalanceCents,
+                    displayMessage, surchargeCents, totalCents, 0L, 0L);
+        }
+
+        public TransactionResult(String responseCode, String referenceNumber, String authCode,
+                                 String authDate, String authTime,
+                                 long accountBalanceCents, long availableBalanceCents,
+                                 String displayMessage,
+                                 long surchargeCents, long totalCents,
+                                 long tipCents, long cashBackCents) {
             this.responseCode = nz(responseCode);
             this.referenceNumber = nz(referenceNumber);
             this.authCode = nz(authCode);
@@ -142,6 +156,8 @@ public interface PosTerminalGateway {
             this.displayMessage = nz(displayMessage);
             this.surchargeCents = surchargeCents;
             this.totalCents = totalCents;
+            this.tipCents = tipCents;
+            this.cashBackCents = cashBackCents;
         }
         private static String nz(String s) { return s == null ? "" : s; }
     }

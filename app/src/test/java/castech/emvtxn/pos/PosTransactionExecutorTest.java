@@ -63,6 +63,34 @@ public class PosTransactionExecutorTest {
     }
 
     @Test
+    public void approvedSale_reportsTipCashBack_andTotalIsWithdrawalPlusFee() throws Exception {
+        // Review Focus 4 (6.2.14): register asked $12.50; terminal rounded to $40.00 after a $1.25 tip
+        // (cash back $26.25); the card was charged withdrawal + fee, and the reply says so.
+        gateway.nextSaleResult = (cb) -> cb.onApproved(new PosTerminalGateway.TransactionResult(
+                "00", "RRN77777", "", "2026/10/08", "14:30:00", 0L, 0L, "APPROVED",
+                /* surcharge */ 350L, /* total */ 4350L, /* tip */ 125L, /* cashBack */ 2625L));
+        PosEnvelope req = saleRequest(1250, 0, "checking");
+        exec.onSale(req.getFlowId(), req.getResource());
+        JSONObject r = sender.sent.get(0).getResource();
+        assertEquals(1250L, r.getLong(PosWire.TXN_AMOUNT));            // the register's sale, unchanged
+        assertEquals(350L,  r.getLong(PosWire.TXN_SURCHARGE));
+        assertEquals(125L,  r.getLong(PosWire.RSP_TIP_CENTS));
+        assertEquals(2625L, r.getLong(PosWire.RSP_CASH_BACK_CENTS));
+        assertEquals(4350L, r.getLong(PosWire.RSP_TOTAL_CENTS));       // withdrawal 40.00 + fee 3.50
+    }
+
+    @Test
+    public void approvedSale_withoutATip_stillCarriesTheTwoFieldsAsZero() throws Exception {
+        gateway.nextSaleResult = (cb) -> cb.onApproved(new PosTerminalGateway.TransactionResult(
+                "00", "RRN77778", "", "2026/10/08", "14:31:00", 0L, 0L, "APPROVED", 350L, 2350L));
+        PosEnvelope req = saleRequest(2000, 0, "checking");
+        exec.onSale(req.getFlowId(), req.getResource());
+        JSONObject r = sender.sent.get(0).getResource();
+        assertEquals(0L, r.getLong(PosWire.RSP_TIP_CENTS));
+        assertEquals(0L, r.getLong(PosWire.RSP_CASH_BACK_CENTS));
+    }
+
+    @Test
     public void declinedSaleBuildsDeclinedResponseEnvelope() throws Exception {
         gateway.nextSaleResult = (cb) -> cb.onDeclined("51", "INSUFFICIENT FUNDS", false);
 

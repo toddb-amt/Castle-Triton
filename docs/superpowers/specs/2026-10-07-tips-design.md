@@ -86,7 +86,10 @@ TipQuote.percentOf(saleCents, percent) → cents, half-up
 ```
 
 All breakdowns come from `AmountBreakdown.of(sale, tip, step, roundToStep = true, feeConfig)` — in
-6.2.14 `roundToStep` is true for register sales as well (T5).
+6.2.14 `roundToStep` is true for register sales as well (T5). The **No Tip** choice keeps the breakdown
+the caller built, so a walk-up preset with no tip stays exact (6.2.13 review C1); every tipped option
+rounds, because the tip changed the amount. A custom tip above the limit is refused before any
+arithmetic (an absurd keypad value must never reach `sale + tip`).
 
 ## 6. Where the numbers go
 
