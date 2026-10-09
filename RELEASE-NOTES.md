@@ -85,13 +85,42 @@ withdrawals + fees. Rows journaled before 6.2.13 show their amount as the sale.
 withdrawal + fee. The request format is unchanged. `docs/CASTLE_POS_INTEGRATION_SPEC.md` updated;
 the proxy team should be told.
 
+**Swipes now reach the processor (MSR-01).** Every swipe since v5.3 had died inside the SDK: the EMV
+stripe reader refuses to release tracks without an encryption setting (`0x61000009`), so the 6.2.12
+"Swipe not supported" decline was never even reached and customers got three retries and "swipe
+failed". The plain reader (`CtMSR`) returns the tracks on the S1F4 PRO (bench probe 2026-10-09),
+so the terminal now reads swipes and sends Track 2 to the processor in Field 6, PIN as every other
+mode, no EMV data. **The chip rule (technical fallback):** the service code on the stripe says
+whether the card has a chip (first digit 2 or 6); a chip card swiped cold is told "This card has a
+chip, please insert it" (three times, then a decline); after a **failed chip read in the same
+transaction** the swipe is accepted — the five chip failure points (app select, candidate list, no
+candidate, application selection, chip crash) now say "Chip could not be read, remove the card,
+then swipe it or try again", wait for the card to come out, and continue the same transaction, at
+most twice. Cards without a chip are accepted at once. **Kill switch:** `swipe_enabled`, default
+on; off → "Swipe not accepted here, please tap or insert" and back to the card prompt. Verified at
+EFX 2026-10-09: taped chip → fallback swipe → balance inquiry approved (the first stripe
+transaction this app has sent). STD1 carries no fallback indicator; the processor sees a stripe
+transaction on a chip card and the issuer applies its fallback rules — raised with EFX (`MSR-03`).
+
+**Terminal sequence continues across restarts (SEQ-01).** The STD1 sequence (Field 4) restarted
+at 1 on every app start, so a day's rows after a restart repeated the morning's numbers and the
+portal, which keys duplicates on terminal id + sequence, kept only the first of each pair. The
+next number is now persisted before it is handed out; assignment (next, +1, wrap 9999 → 1) is
+unchanged. The first transaction on this build is sequence 1 once more; from then on it continues.
+
 ### Parameters
 
 | Key | Default | Effect |
 |---|---|---|
+| `swipe_enabled` | `true` | `true`/`false`/`1`/`0`. Off refuses every swipe at the terminal with a prompt to tap or insert. Fleet-wide kill switch if a processor mishandles stripe transactions. Shown as `Swipe: on/off` on the Admin card. |
 | `tips_enabled` | `false` | `true`/`false`/`1`/`0`. Enables the tip screen in both flows on the next transaction; shown as `Tips: on/off` on the Admin managed-configuration card. Invalid values are ignored. |
 
-### Device pass (2026-10-09, bench unit MP001194 on EFX — steps 1–7 passed; 8 and 9 optional, parameter changes needed)
+### Device pass (2026-10-09, bench unit MP001194 on EFX — tips steps 1–7 passed; 8 and 9 optional, parameter changes needed)
+
+Swipe (MSR-01): chip card swiped cold → "please insert it" ✓; `swipe_enabled=false` → prompt and back to the card prompt ✓;
+taped chip → "Chip could not be read…" → swipe accepted → PIN → **EFX approved** (balance inquiry) ✓; sequence continued
+(3 → 4) across a reinstall ✓. Not exercised: a stripe-only card (no chip dance), a swiped withdrawal with an amount (same
+path as the approved inquiry), reporting offline drain and wrong-key tests (6.2.13 list).
 
 1. `tips_enabled` absent → no tip screen in either flow; set it `true` in CasHUB → screen appears on the next transaction without restart; `false` removes it again.
 2. Walk-up tap and chip insert: each of 10% / 15% / 20% / Custom / No Tip; receipt block; Detail Report lines; MyView shows `TipAmount` / `CashBackAmount` after the push.
@@ -123,8 +152,9 @@ the proxy team should be told.
   $30, max $500, sale $490 → $510) — the register is now answered `amount_exceeds_maximum` with the reason (its own code at the proxy team's request, 2026-10-09),
   and a register amount already above the maximum is refused the same way (T6). Seven minors deferred
   in `docs/CODE-REVIEW-BACKLOG.md`.
-- Unit suite: **431** tests (43 new: TipQuote ×15, tips parameter ×5, register amounts ×7, screen
-  guard ×4, POS reply ×2, receipt block ×5, Detail Report ×3, GlobalPara ×2). Each new behaviour was
+- Unit suite: **457** tests (69 new: TipQuote ×16, tips parameter ×5, register amounts ×7, screen
+  guard ×4, POS reply ×2, receipt block ×5, Detail Report ×3, GlobalPara ×2, SwipePolicy ×9,
+  OnlineRoute swipe ×3, swipe parameter ×5, Track 2 plain-reader ×1, SequenceCounter ×6, wire code ×1). Each new behaviour was
   watched failing first. The same three pre-existing failures remain (`TEST-01`).
 
 ## 6.2.13 — 2026-10-08 · PR #9 · base 6.2.12 · versionCode 75

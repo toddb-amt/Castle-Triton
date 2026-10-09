@@ -124,3 +124,9 @@ Reviewed; the design works for us. Status on our side, one change request, and o
 So the end-to-end worst case grows by exactly the tip screen's 30 seconds; a typical approved sale grows by the few seconds a customer takes to tap a percentage. Your 2026-10-05 request to cap the processor leg of POS-driven transactions at or below 60 seconds is **still open** on our side — it was not part of 6.2.12–6.2.14 — and is the lever if the 90-second register budget is to be met in the busy-MUX worst case. We would rather decide that one with you deliberately than fold it into the tips release.
 
 **§7 — agreed.** Same-day mirror from the register side against the bench unit; propose a window and we will have `tips_enabled` on for tests 2, 4 and 5 and off for test 1.
+
+---
+
+## Also in 6.2.14: swipes (terminal team, 2026-10-09, later the same day)
+
+Magnetic-stripe swipes now reach the processor (they never had: an SDK configuration defect since v5.3). **No wire change for the proxy**: a swiped sale is an ordinary `sale` with the same reply; the terminal's receipt and MyView push carry entry mode `MSR`. Behaviour at the terminal: a card whose stripe says it has a chip is asked to insert it; after a failed chip read in the same transaction the swipe is accepted (technical fallback); cards without a chip are swiped at once; `swipe_enabled=false` (CasHUB) turns swipes off fleet-wide. Timing is unchanged. Verified at EFX 2026-10-09.
