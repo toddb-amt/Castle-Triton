@@ -68,7 +68,11 @@ no site uses it); the panel's gear icon still exposes it per network for anyone 
   keeps only a salted PBKDF2 hash of each (per-terminal random salt, 50 000 rounds, constant-time
   compare). Rotation takes effect the moment the parameter lands. **There is no fallback PIN:** a
   terminal with no `admin_pin` pushed refuses Admin with "Admin PIN not configured — push admin_pin
-  from CasHUB" — so **push the two parameters before pushing this build.** The existing lockout
+  from CasHUB". **Rollout order: push this build first, then the two PIN parameters** — a 6.2.14
+  terminal ignores the keys but its provider dump would log them in clear; a 6.2.15 terminal applies
+  them live within the agent's sync interval, and Admin opens without a restart. Once received, the
+  PINs are checked entirely on the terminal: no network is needed to enter Admin, and an outage only
+  delays a PIN *change* until the agent next syncs. The existing lockout
   (three wrong attempts, five minutes) stays. The Admin card shows `Admin PIN: configured / NOT
   configured`, never a value; both keys are masked in every log and provider dump and kept out of
   the host-config payload and the KMS backup.
