@@ -3,18 +3,17 @@ package castech.emvtxn;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.Set;
 
 import org.json.JSONException;
 import org.json.JSONObject;
 
 /**
- * Masks every secret CasHUB parameter before provider content is logged (security review
- * 2026-10-10, parser differential). The merge in {@code CasHubParams} reads parameters with
- * org.json; masking used to run separate regexes over the raw text, and anywhere the two parsers
- * disagreed — a unicode-escaped key, an escaped quote in a value, a bare number — the secret
- * reached the log. Masking now goes through the SAME parser: parse, replace the secret keys,
- * re-serialise. The line masks remain only for text org.json rejects (which the merge skips too).
+ * What the CasHUB provider dump may log (security review 2026-10-10, parser differential):
+ * NEVER a value. Key names, value lengths and a [secret] marker, read through the same org.json
+ * parser the merge uses; content that parser rejects is logged as its length only. There is no
+ * masking step left to disagree with the merge.
  */
 public final class ParamLogMask {
 
@@ -26,27 +25,27 @@ public final class ParamLogMask {
             castech.emvtxn.admin.AdminPinParams.KEY_ADMIN,
             castech.emvtxn.admin.AdminPinParams.KEY_SUPER)));
 
-    private static final String MASK = "[masked]";
-
     private ParamLogMask() {}
 
-    public static String mask(String content) {
+    public static String summarize(String content) {
         if (content == null) return "[null]";
         String t = content.trim();
-        if (t.startsWith("{")) {
-            try {
-                JSONObject o = new JSONObject(t);
-                for (String k : SECRET_KEYS) if (o.has(k)) o.put(k, MASK);
-                return o.toString();
-            } catch (JSONException notJson) {
-                // fall through: the merge would have skipped this content as well
+        if (t.isEmpty()) return "<empty>";
+        try {
+            JSONObject o = new JSONObject(t);
+            StringBuilder b = new StringBuilder("keys: ");
+            boolean first = true;
+            for (Iterator<String> it = o.keys(); it.hasNext(); ) {
+                String k = it.next();
+                if (!first) b.append(", ");
+                first = false;
+                b.append(k);
+                if (SECRET_KEYS.contains(k)) b.append("[secret]");
+                else b.append('(').append(String.valueOf(o.opt(k)).length()).append(')');
             }
+            return b.toString();
+        } catch (JSONException notJson) {
+            return "<non-JSON " + content.length() + " chars>";
         }
-        String s = content;
-        for (String k : SECRET_KEYS) {
-            s = s.replaceAll("(?m)^(\\s*" + k + "\\s*=\\s*)[^\\n]*", "$1" + MASK);
-            s = s.replaceAll("(\"" + k + "\"\\s*:\\s*)(\"[^\"]*\"|[^,}\\s\\]]+)", "$1\"" + MASK + "\"");
-        }
-        return s;
     }
 }

@@ -324,8 +324,7 @@ public final class CasHubParams {
                         } catch (Throwable t) {
                             v = "<non-string type>";
                         }
-                        if (v != null) v = ParamLogMask.mask(v);   // every secret key, through the same JSON parser as the merge
-                        if (v != null && v.length() > 300) v = v.substring(0, 300) + "...(" + v.length() + ")";
+                        if (v != null) v = ParamLogMask.summarize(v);   // key names + lengths only, never a value
                         sb.append(c.getColumnName(i)).append('=').append(v).append(" | ");
                     }
                     Log.w(TAG, "  row" + row + ": " + sb);

@@ -46,27 +46,10 @@ public class AdminPinParamsTest {
     }
 
     @Test
-    public void describe_andMaskForLog_neverShowAPin() {
+    public void describe_neverShowsAPin() {
         AdminPinParams p = AdminPinParams.parse(map("admin_pin", "246810"));
         assertEquals("admin pins: admin=[set] super=[unchanged]", p.describe());
-        String json = "{\"admin_pin\":\"246810\",\"super_admin_pin\":\"13579246\",\"host_port\":\"9020\"}";
-        String masked = AdminPinParams.maskForLog(json);
-        assertFalse(masked.contains("246810"));
-        assertFalse(masked.contains("13579246"));
-        assertTrue(masked.contains("9020"));
-        String kv = "admin_pin=246810\nhost_port=9020\n";
-        assertFalse(AdminPinParams.maskForLog(kv).contains("246810"));
-    }
-
-    @Test
-    public void maskForLog_alsoHidesUnquotedNumbers_asCasHubMayStoreThem() {
-        // Security review 2026-10-10: a PIN entered as a JSON number is not a quoted string
-        String json = "{\"admin_pin\": 246810, \"super_admin_pin\":13579246,\"host_port\":9020}";
-        String masked = AdminPinParams.maskForLog(json);
-        assertFalse(masked, masked.contains("246810"));
-        assertFalse(masked, masked.contains("13579246"));
-        assertTrue(masked, masked.contains("9020"));
-        assertFalse(AdminPinParams.maskForLog("admin_pin = 246810").contains("246810"));
+        assertFalse(p.describe().contains("246810"));
     }
 
     @Test

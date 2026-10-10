@@ -16,8 +16,8 @@ import java.util.Set;
  *   <li>{@code super_admin_pin} — TFI's PIN (top level); 6–8 digits.</li>
  * </ul>
  * Invalid values are a problem and leave the stored hash alone. Absent keys are not managed by
- * CasHUB: the stored hash stands. The values are credentials: never logged ({@link #maskForLog}),
- * never in the host-config payload or the KMS backup.
+ * CasHUB: the stored hash stands. The values are credentials: the provider dump logs key names
+ * only ({@code ParamLogMask}), and both keys stay out of the host-config payload and the KMS backup.
  */
 public final class AdminPinParams {
 
@@ -62,20 +62,5 @@ public final class AdminPinParams {
         return "admin pins: admin=" + (adminPin != null ? "[set]" : "[unchanged]")
                 + " super=" + (superPin != null ? "[set]" : "[unchanged]")
                 + (problems.isEmpty() ? "" : " problems=" + problems);
-    }
-
-    /**
-     * Masks both PINs in raw parameter content so provider rows can be logged: JSON with the value
-     * quoted OR bare (CasHUB may store a PIN typed into a numeric field as a JSON number — security
-     * review 2026-10-10), and key=value lines with or without spaces around '='.
-     */
-    public static String maskForLog(String content) {
-        if (content == null) return "[null]";
-        String s = content;
-        for (String k : KEYS) {
-            s = s.replaceAll("(\"" + k + "\"\\s*:\\s*)(\"[^\"]*\"|[^,}\\s\\]]+)", "$1\"[masked]\"");
-            s = s.replaceAll("(?m)^(\\s*" + k + "\\s*=\\s*)[^\\n]*", "$1[masked]");
-        }
-        return s;
     }
 }
