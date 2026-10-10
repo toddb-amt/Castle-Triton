@@ -43,12 +43,12 @@ public class Fragment_page_admin_atm extends Fragment {
     private static final int MAX_FAILED_ATTEMPTS = 3;
     private static final long LOCKOUT_DURATION_MS = 5 * 60 * 1000; // 5 minutes
 
-    // Fixed admin passwords — only TFI changes these (by shipping a new build).
-    // The old user-changeable stored-hash / "Change Default PIN" flow was
-    // removed 2026-09-11. Super Admin sees everything; Normal Admin is limited
-    // to Reversal Management, View Transaction History, WiFi, and Diagnostics.
-    private static final String SUPER_ADMIN_PIN = "8675309";
-    private static final String NORMAL_ADMIN_PIN = "123456";
+    // Admin PINs (SEC-03, 6.2.15): pushed from CasHUB (`admin_pin` per merchant/terminal,
+    // `super_admin_pin` for TFI), kept only as salted hashes in AdminPinStore. Until 6.2.14 both
+    // were constants in this file — identical on every terminal and readable from the APK.
+    // Super Admin sees everything; Normal Admin is limited to Reversal Management, View
+    // Transaction History, WiFi, and Diagnostics. No fallback PIN: an unconfigured terminal
+    // refuses Admin until CasHUB pushes one (CasHUB has been mandatory since 6.2.9).
 
     // Access tiers returned by verifyPinTier().
     private static final int ACCESS_NONE = 0;
@@ -439,6 +439,17 @@ public class Fragment_page_admin_atm extends Fragment {
             return;
         }
 
+        if (!adminPinConfigured()) {
+            new AlertDialog.Builder(getContext())
+                    .setTitle("Admin PIN not configured")
+                    .setMessage("No Admin PIN has been pushed to this terminal.\nPush admin_pin (and super_admin_pin) from CasHUB, then try again.")
+                    .setPositiveButton("OK", (d, w) -> exitAdmin())
+                    .setCancelable(false)
+                    .show();
+            Log.w(TAG, "Admin refused: no PIN configured (SEC-03)");
+            return;
+        }
+
         AlertDialog.Builder builder = new AlertDialog.Builder(getContext());
         builder.setTitle("Admin PIN Required");
 
@@ -497,9 +508,18 @@ public class Fragment_page_admin_atm extends Fragment {
      * version) — there is no on-terminal PIN change.
      */
     private int verifyPinTier(String enteredPin) {
-        if (SUPER_ADMIN_PIN.equals(enteredPin)) return ACCESS_SUPER;
-        if (NORMAL_ADMIN_PIN.equals(enteredPin)) return ACCESS_NORMAL;
+        if (getContext() == null) return ACCESS_NONE;
+        int tier = new castech.emvtxn.admin.AdminPinStore(getContext()).check(enteredPin);
+        if (tier == castech.emvtxn.admin.AdminPins.TIER_SUPER) return ACCESS_SUPER;
+        if (tier == castech.emvtxn.admin.AdminPins.TIER_NORMAL) return ACCESS_NORMAL;
         return ACCESS_NONE;
+    }
+
+    /** SEC-03: true when CasHUB has pushed at least one PIN to this terminal. */
+    private boolean adminPinConfigured() {
+        if (getContext() == null) return false;
+        castech.emvtxn.admin.AdminPinStore st = new castech.emvtxn.admin.AdminPinStore(getContext());
+        return st.isAdminConfigured() || st.isSuperConfigured();
     }
 
     /** Any valid admin password (used by the kiosk-apply re-confirmation). */
@@ -511,8 +531,8 @@ public class Fragment_page_admin_atm extends Fragment {
      * Enables/greys admin sections by access tier — restricted sections stay
      * VISIBLE but are disabled and dimmed, not hidden.
      * <ul>
-     *   <li>Super Admin ({@code 8675309}) — everything active.</li>
-     *   <li>Normal Admin ({@code 123456}) — only Reversal Management,
+     *   <li>Super Admin (CasHUB {@code super_admin_pin}) — everything active.</li>
+     *   <li>Normal Admin (CasHUB {@code admin_pin}) — only Reversal Management,
      *       View Transaction History, WiFi Configuration, and Diagnostics are
      *       active; all other sections are greyed out. The destructive "Clear"
      *       buttons stay Super-only (greyed for Normal).</li>
@@ -727,8 +747,11 @@ public class Fragment_page_admin_atm extends Fragment {
             String fee = GlobalPara.atmUseFlatFee
                     ? "Flat fee: $" + Money.dollars(Money.toCents(GlobalPara.atmFlatFeeAmount))
                     : "Percentage fee: " + String.format(java.util.Locale.US, "%.2f", GlobalPara.atmPercentageFee) + " %";
+            castech.emvtxn.admin.AdminPinStore pinStore = getContext() != null ? new castech.emvtxn.admin.AdminPinStore(getContext()) : null;
             txvFeeConfig.setText(fee + "\nTips: " + (GlobalPara.atmTipsEnabled ? "on" : "off")
-                    + "  ·  Swipe: " + (GlobalPara.atmSwipeEnabled ? "on" : "off"));
+                    + "  ·  Swipe: " + (GlobalPara.atmSwipeEnabled ? "on" : "off")
+                    + "\nAdmin PIN: " + (pinStore != null && pinStore.isAdminConfigured() ? "configured" : "NOT configured")
+                    + "  ·  Super PIN: " + (pinStore != null && pinStore.isSuperConfigured() ? "configured" : "not configured"));
         }
         if (txvLimits != null) {
             txvLimits.setText("Minimum: $" + Money.dollars(Money.toCents(GlobalPara.atmMinAmount))

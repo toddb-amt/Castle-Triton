@@ -203,6 +203,15 @@ public final class CasHubParams {
             else if (tz.changeFrom(java.util.TimeZone.getDefault().getID()) == null) Log.w(TAG, "Applied CasHUB " + tz.describe() + " (unchanged)");
             else TimeZoneApplier.applyIfChangedAsync(tz);
         }
+        // Admin PINs (SEC-03, 6.2.15) → hashed into AdminPinStore; never logged, never into the host payload / KMS backup
+        castech.emvtxn.admin.AdminPinParams pins = castech.emvtxn.admin.AdminPinParams.parse(merged);
+        if (pins.isPresent()) {
+            for (String problem : pins.problems) Log.w(TAG, "CasHUB admin pin param ignored — " + problem);
+            castech.emvtxn.admin.AdminPinStore store = new castech.emvtxn.admin.AdminPinStore(ctx);
+            if (pins.adminPin != null) store.setAdminPin(pins.adminPin);
+            if (pins.superPin != null) store.setSuperPin(pins.superPin);
+            Log.w(TAG, "Applied CasHUB " + pins.describe());
+        }
         // Reporting keys (6.2.13) → ReportingConfig; never into the host payload / KMS backup
         boolean reportingChanged = false;
         castech.emvtxn.reporting.ReportingParams rp = castech.emvtxn.reporting.ReportingParams.parse(merged);
@@ -221,6 +230,7 @@ public final class CasHubParams {
             if (castech.emvtxn.net.ApnParams.KEYS.contains(e.getKey())) continue;
             if (castech.emvtxn.reporting.ReportingParams.KEYS.contains(e.getKey())) continue;
             if (TimeZoneParam.KEY.equals(e.getKey())) continue;
+            if (castech.emvtxn.admin.AdminPinParams.KEYS.contains(e.getKey())) continue;
             payload.append(e.getKey()).append('=').append(e.getValue()).append('\n');
         }
         KmsConfigStore.applyPayload(payload.toString());
@@ -316,7 +326,8 @@ public final class CasHubParams {
                         }
                         if (v != null) v = castech.emvtxn.pos.PosParams.maskForLog(v);   // never log the access key
                         if (v != null) v = castech.emvtxn.net.ApnParams.maskForLog(v);   // nor the APN password
-                        if (v != null) v = castech.emvtxn.reporting.ReportingParams.maskForLog(v);   // nor the reporting key
+                        if (v != null) v = castech.emvtxn.reporting.ReportingParams.maskForLog(v);
+                        if (v != null) v = castech.emvtxn.admin.AdminPinParams.maskForLog(v);   // nor the reporting key
                         if (v != null && v.length() > 300) v = v.substring(0, 300) + "...(" + v.length() + ")";
                         sb.append(c.getColumnName(i)).append('=').append(v).append(" | ");
                     }
