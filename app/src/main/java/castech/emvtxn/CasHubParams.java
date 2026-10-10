@@ -324,10 +324,7 @@ public final class CasHubParams {
                         } catch (Throwable t) {
                             v = "<non-string type>";
                         }
-                        if (v != null) v = castech.emvtxn.pos.PosParams.maskForLog(v);   // never log the access key
-                        if (v != null) v = castech.emvtxn.net.ApnParams.maskForLog(v);   // nor the APN password
-                        if (v != null) v = castech.emvtxn.reporting.ReportingParams.maskForLog(v);
-                        if (v != null) v = castech.emvtxn.admin.AdminPinParams.maskForLog(v);   // nor the reporting key
+                        if (v != null) v = ParamLogMask.mask(v);   // every secret key, through the same JSON parser as the merge
                         if (v != null && v.length() > 300) v = v.substring(0, 300) + "...(" + v.length() + ")";
                         sb.append(c.getColumnName(i)).append('=').append(v).append(" | ");
                     }
