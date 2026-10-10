@@ -64,13 +64,17 @@ public final class AdminPinParams {
                 + (problems.isEmpty() ? "" : " problems=" + problems);
     }
 
-    /** Masks both PINs in raw parameter content (JSON or key=value) so provider rows can be logged. */
+    /**
+     * Masks both PINs in raw parameter content so provider rows can be logged: JSON with the value
+     * quoted OR bare (CasHUB may store a PIN typed into a numeric field as a JSON number — security
+     * review 2026-10-10), and key=value lines with or without spaces around '='.
+     */
     public static String maskForLog(String content) {
         if (content == null) return "[null]";
         String s = content;
         for (String k : KEYS) {
-            s = s.replaceAll("(\"" + k + "\"\\s*:\\s*\")[^\"]*(\")", "$1[masked]$2");
-            s = s.replaceAll("(?m)^(" + k + "=)[^\\n]*", "$1[masked]");
+            s = s.replaceAll("(\"" + k + "\"\\s*:\\s*)(\"[^\"]*\"|[^,}\\s\\]]+)", "$1\"[masked]\"");
+            s = s.replaceAll("(?m)^(\\s*" + k + "\\s*=\\s*)[^\\n]*", "$1[masked]");
         }
         return s;
     }
