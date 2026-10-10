@@ -48,6 +48,22 @@ Template:
 
 ---
 
+## 6.2.15 — 2026-10-10 · Wi‑Fi through Android's own panel (ADM-09)
+
+One change, for the sites that struggled with the typed Wi‑Fi form. The Admin screen's Wi‑Fi card is
+now a status line and one button, **Wi‑Fi settings**, which opens Android's Wi‑Fi panel over our screen:
+the on/off toggle, the list of networks in range, the password prompt, **DONE** to come back. Gone: the
+typed SSID, password and security-type fields, the scan pick-list and the power switch (6.2.10), all of
+which the panel does better. Static IP addressing was dropped with the form (owner's decision 2026-10-10:
+no site uses it); the panel's gear icon still exposes it per network for anyone who does.
+
+- The panel is Android's (`Settings.Panel.ACTION_WIFI`); if a build had none, the full Wi‑Fi settings
+  page opens instead. Its SETTINGS button reaches the full Settings app — the same exposure as an
+  operator holding the Admin PIN today, which is why the card lives only behind that PIN.
+- Status is refreshed when the operator comes back from the panel.
+- No new parameters, no migration, no change to any transaction path. Unit suite 459 tests
+  (2 new, documenting the entry points); bench-verified on the S1F4 PRO 2026-10-10.
+
 ## 6.2.14 — Tips at the terminal (TIP-01)
 
 **What the customer sees.** When the merchant has tips enabled, a tip screen appears between the

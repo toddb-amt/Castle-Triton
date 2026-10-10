@@ -386,105 +386,20 @@
                 android:paddingBottom="8dp"/>
 
             <Button
-                android:id="@+id/btnWifiScan"
+                android:id="@+id/btnWifiSettings"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="Scan for Networks"
+                android:text="Wi-Fi settings"
                 android:textSize="16sp"
                 android:layout_marginBottom="8dp"/>
 
-            <LinearLayout
+            <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:paddingBottom="8dp">
-
-                <TextView
-                    android:layout_width="120dp"
-                    android:layout_height="wrap_content"
-                    android:text="SSID:"
-                    android:textSize="16sp"
-                    android:layout_gravity="center_vertical"/>
-
-                <EditText
-                    android:id="@+id/edtWifiSsid"
-                    android:layout_width="0dp"
-                    android:layout_weight="1"
-                    android:layout_height="wrap_content"
-                    android:inputType="text"
-                    android:hint="Network name"/>
-            </LinearLayout>
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:paddingBottom="8dp">
-
-                <TextView
-                    android:layout_width="120dp"
-                    android:layout_height="wrap_content"
-                    android:text="Password:"
-                    android:textSize="16sp"
-                    android:layout_gravity="center_vertical"/>
-
-                <EditText
-                    android:id="@+id/edtWifiPassword"
-                    android:layout_width="0dp"
-                    android:layout_weight="1"
-                    android:layout_height="wrap_content"
-                    android:inputType="textPassword"
-                    android:hint="Password"/>
-            </LinearLayout>
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:paddingBottom="8dp">
-
-                <TextView
-                    android:layout_width="120dp"
-                    android:layout_height="wrap_content"
-                    android:text="Security:"
-                    android:textSize="16sp"
-                    android:layout_gravity="center_vertical"/>
-
-                <Spinner
-                    android:id="@+id/spinnerWifiSecurity"
-                    android:layout_width="0dp"
-                    android:layout_weight="1"
-                    android:layout_height="48dp"
-                    android:background="@android:drawable/btn_dropdown"
-                    android:spinnerMode="dropdown"/>
-            </LinearLayout>
-
-            <!-- Row 1: Connect WiFi + WiFi power toggle (6.2.10). Row 2: Refresh Status with a
-                 spacer the width of the toggle, so both buttons are exactly the same size. -->
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:gravity="center_vertical"
-                android:paddingBottom="4dp">
-
-                <Button
-                    android:id="@+id/btnWifiConnect"
-                    android:layout_width="0dp"
-                    android:layout_weight="1"
-                    android:layout_height="wrap_content"
-                    android:text="Connect WiFi"
-                    android:textSize="14sp"
-                    android:layout_marginEnd="8dp"/>
-
-                <Switch
-                    android:id="@+id/swWifiPower"
-                    android:layout_width="120dp"
-                    android:layout_height="wrap_content"
-                    android:text="WiFi"
-                    android:textSize="14sp"
-                    android:gravity="center_vertical"/>
-            </LinearLayout>
+                android:text="Opens the terminal's Wi-Fi list: pick a network, enter its password, press DONE."
+                android:textSize="12sp"
+                android:textColor="#666666"
+                android:paddingBottom="8dp"/>
 
             <LinearLayout
                 android:layout_width="match_parent"
