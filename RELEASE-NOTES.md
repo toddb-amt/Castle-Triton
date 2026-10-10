@@ -48,9 +48,9 @@ Template:
 
 ---
 
-## 6.2.15 — 2026-10-10 · Wi‑Fi through Android's own panel (ADM-09)
+## 6.2.15 — 2026-10-10 · Wi‑Fi through Android's own panel (ADM-09) · Admin PINs from CasHUB (SEC-03)
 
-One change, for the sites that struggled with the typed Wi‑Fi form. The Admin screen's Wi‑Fi card is
+Two changes. First, for the sites that struggled with the typed Wi‑Fi form. The Admin screen's Wi‑Fi card is
 now a status line and one button, **Wi‑Fi settings**, which opens Android's Wi‑Fi panel over our screen:
 the on/off toggle, the list of networks in range, the password prompt, **DONE** to come back. Gone: the
 typed SSID, password and security-type fields, the scan pick-list and the power switch (6.2.10), all of
@@ -61,8 +61,27 @@ no site uses it); the panel's gear icon still exposes it per network for anyone 
   page opens instead. Its SETTINGS button reaches the full Settings app — the same exposure as an
   operator holding the Admin PIN today, which is why the card lives only behind that PIN.
 - Status is refreshed when the operator comes back from the panel.
-- No new parameters, no migration, no change to any transaction path. Unit suite 459 tests
-  (2 new, documenting the entry points); bench-verified on the S1F4 PRO 2026-10-10.
+- **Admin PINs come from CasHUB (SEC-03).** Until 6.2.14 the two Admin PINs were constants in the
+  app, identical on every terminal and readable from the APK — a weak gate once the Wi‑Fi panel
+  can reach Android Settings. Now `admin_pin` (merchant or terminal level, the merchant's staff) and
+  `super_admin_pin` (top level, TFI) are pushed from CasHUB, six to eight digits, and the terminal
+  keeps only a salted PBKDF2 hash of each (per-terminal random salt, 50 000 rounds, constant-time
+  compare). Rotation takes effect the moment the parameter lands. **There is no fallback PIN:** a
+  terminal with no `admin_pin` pushed refuses Admin with "Admin PIN not configured — push admin_pin
+  from CasHUB" — so **push the two parameters before pushing this build.** The existing lockout
+  (three wrong attempts, five minutes) stays. The Admin card shows `Admin PIN: configured / NOT
+  configured`, never a value; both keys are masked in every log and provider dump and kept out of
+  the host-config payload and the KMS backup.
+
+### Parameters
+
+| Key | Default | Effect |
+|---|---|---|
+| `admin_pin` | none — Admin refused until pushed | 6–8 digits; the merchant's Admin PIN (Reversal Management, History, Wi‑Fi, Diagnostics) |
+| `super_admin_pin` | none | 6–8 digits; TFI's PIN (everything). Set once at the top level. |
+
+- No migration, no change to any transaction path. Unit suite 468 tests (11 new: PIN hashing
+  and tiers ×4, PIN parameters ×5, Wi‑Fi entry points ×2); bench-verified on the S1F4 PRO 2026-10-10.
 
 ## 6.2.14 — Tips at the terminal (TIP-01)
 
