@@ -1,68 +1,67 @@
 package castech.emvtxn;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 
 import java.util.List;
 
 import org.junit.Test;
 
-/** Spec section 6: unchanged when tip and cash back are 0; the split otherwise. 32-column printer. */
+/**
+ * RCPT-01 (6.2.16, owner decision 2026-10-12): the customer receipt holds only the ATM transaction.
+ * Tip, sale and cash back never print, whatever the breakdown holds; the block is always
+ * Withdrawal Amount / Service Fee / rule / Total Charged, 32-column printer.
+ * (6.2.14 printed a Sale / Tip / Cash Back split when a tip or rounding was involved.)
+ */
 public class ReceiptMoneyBlockTest {
 
     private static AmountBreakdown plain()    { return AmountBreakdown.of(20_00, 0L, 20_00, false, true, 3.50, 0.0); }
     private static AmountBreakdown rounded()  { return AmountBreakdown.of(12_50, 0L, 20_00, true,  true, 3.50, 0.0); }
     private static AmountBreakdown tipped()   { return AmountBreakdown.of(10_00, 1_00, 20_00, true, true, 3.50, 0.0); }
 
+    private static final String ATM_BLOCK =
+            "Withdrawal Amount: $20.00\n" +
+            "Service Fee:       $3.50\n" +
+            "--------------------------------\n" +
+            "Total Charged:     $23.50\n" +
+            "\n";
+
     @Test
     public void noTipNoCashBack_isExactlyTodaysReceipt() {
-        String expected =
-                "Withdrawal Amount: $20.00\n" +
-                "Service Fee:       $3.50\n" +
-                "--------------------------------\n" +
-                "Total Charged:     $23.50\n" +
-                "\n";
-        assertEquals(expected, ReceiptMoneyBlock.printed(plain()));
+        assertEquals(ATM_BLOCK, ReceiptMoneyBlock.printed(plain()));
     }
 
     @Test
-    public void aTip_showsTheFullSplit() {
-        String expected =
-                "Sale:              $10.00\n" +
-                "Tip:               $1.00\n" +
-                "Cash Back:         $9.00\n" +
-                "Withdrawal:        $20.00\n" +
-                "Service Fee:       $3.50\n" +
-                "--------------------------------\n" +
-                "Total Charged:     $23.50\n" +
-                "\n";
-        assertEquals(expected, ReceiptMoneyBlock.printed(tipped()));
+    public void aTip_printsOnlyTheAtmTransaction() {
+        assertEquals(ATM_BLOCK, ReceiptMoneyBlock.printed(tipped()));
     }
 
     @Test
-    public void roundingOnly_showsNoTipLine() {
-        String expected =
-                "Sale:              $12.50\n" +
-                "Cash Back:         $7.50\n" +
-                "Withdrawal:        $20.00\n" +
-                "Service Fee:       $3.50\n" +
-                "--------------------------------\n" +
-                "Total Charged:     $23.50\n" +
-                "\n";
-        assertEquals(expected, ReceiptMoneyBlock.printed(rounded()));
+    public void roundingOnly_printsOnlyTheAtmTransaction() {
+        assertEquals(ATM_BLOCK, ReceiptMoneyBlock.printed(rounded()));
     }
 
     @Test
-    public void lines_carryLabelsAndCents_forTheScreen() {
-        List<ReceiptMoneyBlock.Line> l = ReceiptMoneyBlock.lines(tipped());
-        assertEquals(7, l.size());
-        assertEquals("Sale:", l.get(0).label);        assertEquals(10_00, l.get(0).cents);
-        assertEquals("Tip:", l.get(1).label);         assertEquals(1_00, l.get(1).cents);
-        assertEquals("Cash Back:", l.get(2).label);   assertEquals(9_00, l.get(2).cents);
-        assertEquals("Withdrawal:", l.get(3).label);  assertEquals(20_00, l.get(3).cents);
-        assertEquals("Service Fee:", l.get(4).label);
-        assertEquals(true, l.get(5).rule);
-        assertEquals("Total Charged:", l.get(6).label); assertEquals(23_50, l.get(6).cents);
-        assertEquals(4, ReceiptMoneyBlock.lines(plain()).size());
+    public void printedBlock_neverMentionsSaleTipOrCashBack() {
+        for (AmountBreakdown a : new AmountBreakdown[] { plain(), rounded(), tipped() }) {
+            String out = ReceiptMoneyBlock.printed(a);
+            assertFalse(out, out.contains("Sale"));
+            assertFalse(out, out.contains("Tip"));
+            assertFalse(out, out.contains("Cash Back"));
+        }
+    }
+
+    @Test
+    public void lines_areAlwaysTheFourAtmLines_forTheScreen() {
+        for (AmountBreakdown a : new AmountBreakdown[] { plain(), rounded(), tipped() }) {
+            List<ReceiptMoneyBlock.Line> l = ReceiptMoneyBlock.lines(a);
+            assertEquals(4, l.size());
+            assertEquals("Withdrawal Amount:", l.get(0).label); assertEquals(20_00, l.get(0).cents);
+            assertEquals("Service Fee:", l.get(1).label);       assertEquals(3_50, l.get(1).cents);
+            assertTrue(l.get(2).rule);
+            assertEquals("Total Charged:", l.get(3).label);     assertEquals(23_50, l.get(3).cents);
+        }
     }
 
     @Test

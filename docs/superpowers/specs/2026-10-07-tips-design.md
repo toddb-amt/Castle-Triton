@@ -105,6 +105,11 @@ arithmetic (an absurd keypad value must never reach `sale + tip`).
 | Register reply (`approved` resource) | adds `tip_cents` and `cash_back_cents` beside `surcharge` and `total_cents`; `amount` stays the register's sale. Additive; request format unchanged. `docs/CASTLE_POS_INTEGRATION_SPEC.md` updated and the proxy team told. |
 | Admin managed-config card | `Tips: on/off` |
 
+> **Superseded 2026-10-12 (RCPT-01, 6.2.16), owner decision:** the *Customer receipt* row above no longer
+> applies. The paper receipt and the on-screen receipt show only the ATM transaction, always
+> `Withdrawal Amount / Service Fee / Total Charged`; Sale, Tip and Cash Back never print. Every other row
+> (journal, push, Detail Report, register reply) is unchanged.
+
 ## 7. Edge cases
 
 - `tips_enabled` flips while a transaction is in progress: the current transaction keeps the flow it

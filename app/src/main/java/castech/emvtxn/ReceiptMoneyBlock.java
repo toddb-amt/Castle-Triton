@@ -6,9 +6,12 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * The money block of the customer receipt (TIP-01, 6.2.14; spec section 6). Pure Java.
- * When tip and cash back are both 0 the block is byte-for-byte what 6.2.13 printed; otherwise
- * it shows the split. Labels are padded to 19 columns like today's receipt; the rule is 32 dashes.
+ * The money block of the customer receipt. Pure Java. RCPT-01 (6.2.16, owner decision 2026-10-12):
+ * the receipt holds only the ATM transaction, so the block is always Withdrawal Amount / Service Fee /
+ * rule / Total Charged, whatever the breakdown holds. Tip, sale and cash back stay in the journal,
+ * the MyView push, the register reply and the Detail Report, but never print for the customer.
+ * (6.2.14 printed a Sale / Tip / Cash Back split when a tip or rounding was involved.)
+ * Labels are padded to 19 columns like today's receipt; the rule is 32 dashes.
  */
 public final class ReceiptMoneyBlock {
 
@@ -24,16 +27,8 @@ public final class ReceiptMoneyBlock {
     private ReceiptMoneyBlock() {}
 
     public static List<Line> lines(AmountBreakdown a) {
-        List<Line> out = new ArrayList<>(7);
-        boolean split = a.tip > 0 || a.cashBack > 0;
-        if (split) {
-            out.add(new Line("Sale:", a.sale, false));
-            if (a.tip > 0) out.add(new Line("Tip:", a.tip, false));
-            out.add(new Line("Cash Back:", a.cashBack, false));
-            out.add(new Line("Withdrawal:", a.withdrawal, false));
-        } else {
-            out.add(new Line("Withdrawal Amount:", a.withdrawal, false));
-        }
+        List<Line> out = new ArrayList<>(4);
+        out.add(new Line("Withdrawal Amount:", a.withdrawal, false));
         out.add(new Line("Service Fee:", a.fee, false));
         out.add(new Line("", 0, true));
         out.add(new Line("Total Charged:", a.total, false));

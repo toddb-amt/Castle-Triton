@@ -48,7 +48,7 @@ Template:
 
 ---
 
-## 6.2.16 — 2026-10-12 · Transaction history in Admin (HIST-01) · base 6.2.15 · versionCode 78
+## 6.2.16 — 2026-10-12 · Transaction history in Admin (HIST-01) · Receipt holds only the ATM transaction (RCPT-01) · base 6.2.15 · versionCode 78
 
 The Admin screen's **Transaction History** card now works. Since the baseline its **View Transaction
 History** button had no handler and its count line was fixed layout text ("Total Transactions: 0"), so
@@ -56,7 +56,13 @@ an operator looking for past transactions in Admin saw nothing even when the jou
 journal itself was never the problem: it is the same store the Detail Report prints and the MyView push
 drains. Both Admin tiers can use the card; Clear stays Super Admin only.
 
-### What operators will notice
+Second, by the owner's decision of 2026-10-12, **the customer receipt holds only the ATM transaction.**
+6.2.14 printed a `Sale / Tip / Cash Back / Withdrawal` split whenever a tip or rounding was involved; from
+this release the money block is always `Withdrawal Amount / Service Fee / Total Charged`, on paper and on
+the on-screen receipt, whatever the customer chose. Nothing else moves: the tip and cash back are still
+collected, charged, journaled, pushed to MyView, returned to the register and shown on the Detail Report.
+
+### What operators and customers will notice
 
 - The card's count line reads **Total Transactions: N   (open batch 00X)**, counted across every
   batch still on the terminal, refreshed when Admin opens and after Clear.
@@ -72,11 +78,17 @@ drains. Both Admin tiers can use the card; Clear stays Super Admin only.
   sales. A row that never got card data reads `no card` in place of the digits.
 - Read-only and offline: no printer, no host contact. The Detail Report (⋮ menu) is unchanged and
   remains the printable, per-batch view with totals.
+- **Receipts no longer show Sale, Tip or Cash Back.** A $10 sale with a $1 tip that became a $20
+  withdrawal prints `Withdrawal Amount: $20.00 / Service Fee: $3.50 / Total Charged: $23.50`, exactly the
+  6.2.13 receipt. The on-screen receipt shows the same three rows. Balance-inquiry receipts are unchanged.
 
 ### Fixes
 
 **Admin** · The View Transaction History button did nothing and the count never moved; both were
 never wired after the baseline (`HIST-01`).
+
+**Transaction** · Receipt money block reduced to the ATM transaction; the 6.2.14 Sale / Tip / Cash Back
+rows are removed from the paper receipt and the receipt screen (`RCPT-01`, owner decision).
 
 ### Security / PCI
 
@@ -95,6 +107,9 @@ never wired after the baseline (`HIST-01`).
   the live data drove two refinements (terminal-made decline codes such as `MSR_NA` were clipped to four
   characters, cardless rows read `****----`). **Not exercised:** the count line after Clear (Super,
   destructive on the bench journal).
+- `ReceiptMoneyBlockTest` (6) rewritten to the ATM-only rule: plain, rounded and tipped breakdowns all print
+  the same three rows; no printed line mentions Sale, Tip or Cash Back. **Bench 2026-10-12:** the owner ran a
+  card transaction on the S1F4 PRO with this build and confirmed the receipt shows only the three ATM rows.
 - Build note: use JDK 17 (`JAVA_HOME=/opt/homebrew/opt/openjdk@17`). Android Studio's bundled JDK 21
   compiles, but AGP 7.4.2's D8 then crashes on anonymous classes (`NullPointerException` in
   `dexBuilderMkskDebug`); the Temurin 8 under /Library/Java is x86_64 and does not run on this Mac.
