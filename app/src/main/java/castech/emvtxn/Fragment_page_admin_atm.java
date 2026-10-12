@@ -91,6 +91,8 @@ public class Fragment_page_admin_atm extends Fragment {
     private Button btnTestCardReader;
     private Button btnSaveSettings;
     private Button btnClearHistory;
+    private Button btnViewHistory;            // HIST-01 (6.2.16)
+    private TextView txvTransactionStats;     // HIST-01 (6.2.16)
     private Button btnExit;
 
     // UI Elements - Reversal Management
@@ -238,6 +240,8 @@ public class Fragment_page_admin_atm extends Fragment {
         btnTestCardReader = rootView.findViewById(R.id.btnTestCardReader);
         btnSaveSettings = rootView.findViewById(R.id.btnSaveSettings);
         btnClearHistory = rootView.findViewById(R.id.btnClearHistory);
+        btnViewHistory = rootView.findViewById(R.id.btnViewHistory);
+        txvTransactionStats = rootView.findViewById(R.id.txvTransactionStats);
         btnExit = rootView.findViewById(R.id.btnExit);
 
         // POS Mode controls
@@ -388,6 +392,8 @@ public class Fragment_page_admin_atm extends Fragment {
         btnSaveSettings.setOnClickListener(v -> saveSettings());
         // Clear Transaction History (6.2.11): closed batches only, Super
         if (btnClearHistory != null) btnClearHistory.setOnClickListener(v -> clearClosedBatches());
+        // View Transaction History (HIST-01, 6.2.16): both tiers, read-only
+        if (btnViewHistory != null) btnViewHistory.setOnClickListener(v -> viewTransactionHistory());
 
         // Exit button
         btnExit.setOnClickListener(v -> exitAdmin());
@@ -570,6 +576,7 @@ public class Fragment_page_admin_atm extends Fragment {
         renderManagedConfig();
         renderNetworkCard();
         renderReportingLine();
+        updateHistoryStats();
     }
 
     /** RPT-02: one line from the pusher's last published status; Retry now for Super only. */
@@ -915,12 +922,74 @@ public class Fragment_page_admin_atm extends Fragment {
                         msg = "Clear failed: " + t.getMessage();
                     }
                     final String m = msg;
-                    if (getActivity() != null) getActivity().runOnUiThread(() ->
-                            Toast.makeText(getContext(), m, Toast.LENGTH_SHORT).show());
+                    if (getActivity() != null) getActivity().runOnUiThread(() -> {
+                        Toast.makeText(getContext(), m, Toast.LENGTH_SHORT).show();
+                        updateHistoryStats();
+                    });
                 }, "ClearHistory").start();
             })
             .setNegativeButton("Cancel", null)
             .show();
+    }
+
+    // ==================== Transaction History (HIST-01, 6.2.16) ====================
+
+    /** Admin card line: row count across every batch still on the terminal, plus the open batch number. */
+    private void updateHistoryStats() {
+        if (txvTransactionStats == null || getContext() == null) return;
+        final Context app = getContext().getApplicationContext();
+        new Thread(() -> {
+            String line;
+            try {
+                castech.emvtxn.atm.TransactionLogManager m = castech.emvtxn.atm.TransactionLogManager.getInstance(app);
+                line = castech.emvtxn.atm.report.HistoryReport.statsLine(m.getTransactionCount(), m.currentBatchId());
+            } catch (Throwable t) {
+                Log.w(TAG, "history stats unavailable: " + t.getMessage());
+                line = "Total Transactions: unavailable";
+            }
+            final String l = line;
+            if (getActivity() != null) getActivity().runOnUiThread(() -> {
+                if (txvTransactionStats != null) txvTransactionStats.setText(l);
+            });
+        }, "HistoryStats").start();
+    }
+
+    /**
+     * Both tiers. Newest first, every batch still on the terminal (closed batches stay until a
+     * Super clears them), capped at {@link castech.emvtxn.atm.report.HistoryReport#MAX_ROWS}.
+     * Read-only: no printer, no host, so it needs no transaction-in-progress gate.
+     */
+    private void viewTransactionHistory() {
+        if (getContext() == null) return;
+        final Context app = getContext().getApplicationContext();
+        new Thread(() -> {
+            String text;
+            try {
+                castech.emvtxn.atm.TransactionLogManager m = castech.emvtxn.atm.TransactionLogManager.getInstance(app);
+                text = castech.emvtxn.atm.report.HistoryReport.render(GlobalPara.atmTerminalId, System.currentTimeMillis(),
+                        m.currentBatchId(), m.getTransactionCount(),
+                        m.getRecentTransactions(castech.emvtxn.atm.report.HistoryReport.MAX_ROWS));
+            } catch (Throwable t) {
+                Log.w(TAG, "history unavailable: " + t.getMessage());
+                text = "Transaction journal unavailable: " + t.getMessage();
+            }
+            final String out = text;
+            if (getActivity() != null) getActivity().runOnUiThread(() -> {
+                if (isAdded()) showMonospaceDialog("Transaction History", out);
+            });
+        }, "ViewHistory").start();
+    }
+
+    /** The scrolling monospace dialog MainActivity uses for the on-screen Detail Report. */
+    private void showMonospaceDialog(String title, String text) {
+        TextView tv = new TextView(getContext());
+        tv.setTypeface(android.graphics.Typeface.MONOSPACE);
+        tv.setTextSize(12);
+        tv.setPadding(24, 16, 24, 16);
+        tv.setText(text);
+        android.widget.ScrollView sv = new android.widget.ScrollView(getContext());
+        sv.addView(tv);
+        new AlertDialog.Builder(getContext()).setTitle(title).setView(sv).setPositiveButton("Close", null).show();
     }
 
     private void updateTerminalInfo() {

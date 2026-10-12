@@ -809,9 +809,9 @@ Screenshots:
    - Test button shows simulated result
    - Recommendation: Implement actual hardware test
 
-5. **No Transaction History**: Not implemented
-   - No log of past transactions
-   - Recommendation: Add transaction history screen
+5. **Transaction History**: Implemented in 6.2.16 (HIST-01)
+   - Admin → View Transaction History lists the newest 200 journal rows across all batches, newest first
+   - The Detail Report (⋮ menu) remains the printable per-batch view; Clear is Super Admin only
 
 6. **No Merchant Configuration**: Hardcoded values
    - Merchant name, location not configurable

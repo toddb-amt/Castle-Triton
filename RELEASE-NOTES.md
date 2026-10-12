@@ -48,6 +48,61 @@ Template:
 
 ---
 
+## 6.2.16 — 2026-10-12 · Transaction history in Admin (HIST-01) · base 6.2.15 · versionCode 78
+
+The Admin screen's **Transaction History** card now works. Since the baseline its **View Transaction
+History** button had no handler and its count line was fixed layout text ("Total Transactions: 0"), so
+an operator looking for past transactions in Admin saw nothing even when the journal was full. The
+journal itself was never the problem: it is the same store the Detail Report prints and the MyView push
+drains. Both Admin tiers can use the card; Clear stays Super Admin only.
+
+### What operators will notice
+
+- The card's count line reads **Total Transactions: N   (open batch 00X)**, counted across every
+  batch still on the terminal, refreshed when Admin opens and after Clear.
+- **View Transaction History** opens a scrolling list, newest first, every batch still on the
+  terminal (closed batches stay until a Super Admin clears them), grouped under `BATCH 004 (OPEN)`,
+  `BATCH 003`, … and `BATCH ---` for rows journaled before 6.2.11 had batch numbers. It shows the
+  newest 200 rows and says so ("Showing newest 200") when the journal holds more.
+- Each row is two or three lines: date and time, type (`WD` withdrawal, `BI` balance inquiry, `RV`
+  accepted reversal), last four card digits, entry (`C` chip, `T` tap, `S` swipe); then amount and
+  fee with the outcome (`APPROVED`, `DECLINED 51`, `CANCELLED`, `TIMEOUT`, `ERROR`, or `REVERSED`
+  for a withdrawal the processor reversed; a terminal-made code such as `MSR_NA` or `APP_SEL` goes on
+  its own `code` line); then sequence and auth code on approved rows, and clerk and invoice on register
+  sales. A row that never got card data reads `no card` in place of the digits.
+- Read-only and offline: no printer, no host contact. The Detail Report (⋮ menu) is unchanged and
+  remains the printable, per-batch view with totals.
+
+### Fixes
+
+**Admin** · The View Transaction History button did nothing and the count never moved; both were
+never wired after the baseline (`HIST-01`).
+
+### Security / PCI
+
+- The journal stores only the last four card digits and the history prints no more than that. No
+  PINs, keys or track data are read or shown. Nothing changes in any transaction path.
+
+### Verification
+
+- `HistoryReportTest` (19): width, header and cap, grouping and order, each row shape, masking,
+  register-sale line, decline-code and no-card lines, footer. Full unit suite (`testMkskDebugUnitTest`,
+  JDK 17): 492 tests, 489 pass;
+  the 3 failures (`EmvTagEnhancerTest` ×2, `HyosungProtocolTest.testProcessorConfigDns`) fail identically
+  on untouched `main` and are not touched by this change. **Bench 2026-10-12 on the S1F4 PRO (debug
+  build over 6.2.15 via adb):** count line showed the journal's 29 rows and the open batch; View listed
+  all 29 across the open batch and the closed batch 001, newest first, 32 columns unwrapped in the dialog;
+  the live data drove two refinements (terminal-made decline codes such as `MSR_NA` were clipped to four
+  characters, cardless rows read `****----`). **Not exercised:** the count line after Clear (Super,
+  destructive on the bench journal).
+- Build note: use JDK 17 (`JAVA_HOME=/opt/homebrew/opt/openjdk@17`). Android Studio's bundled JDK 21
+  compiles, but AGP 7.4.2's D8 then crashes on anonymous classes (`NullPointerException` in
+  `dexBuilderMkskDebug`); the Temurin 8 under /Library/Java is x86_64 and does not run on this Mac.
+
+### Upgrade notes
+
+- CasHUB plain-install push. No parameters, no migration.
+
 ## 6.2.15 — 2026-10-10 · Wi‑Fi through Android's own panel (ADM-09) · Admin PINs from CasHUB (SEC-03)
 
 Two changes. First, for the sites that struggled with the typed Wi‑Fi form. The Admin screen's Wi‑Fi card is
