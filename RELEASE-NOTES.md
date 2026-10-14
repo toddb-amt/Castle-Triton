@@ -48,6 +48,89 @@ Template:
 
 ---
 
+## 6.2.17 — 2026-10-14 · Mastercard taps declined for malformed EMV data (TAP-02) · PIN-pad Cancel showed a placeholder receipt (PIN-02) · base 6.2.16 · versionCode 79
+
+A field terminal declined every tap of one Mastercard. The switch rejected the request as BAD TLV
+FORMAT (006) and the switch team read it as a card personalisation defect. It was the terminal.
+Mastercard taps run Kernel 2, whose data record carries three-byte tags (Castles' `DF8F4F`, then the
+kernel's `DF81xx` working objects). The Field 13 builder only understood one- and two-byte tags, read
+`DF8F` as the tag and the next byte as a 79-byte length, swallowed the rest of the record and cut the
+last bytes of 9F6E, so the processor saw a bare track 2 after 9F6E. Visa (Kernel 3) never emits such
+tags, which is why only Mastercard taps failed, and only cards whose additional data ran to 82 bytes
+or more, which is why other Mastercards passed. Reproduced on the bench with a real Mastercard (EFX
+answered 05 to the corrupted record), then fixed.
+
+While there, the Mastercard contactless configuration turned out to be Castles' sample rather than a
+US ATM setup, and both EMV configurations carried only Mastercard test keys. Also fixed: Cancel on
+the PIN pad after a card read showed the receipt page with its layout placeholders under a green check.
+
+### What operators and customers will notice
+
+- Mastercard taps behave like Visa taps: the request reaches the processor intact. A Mastercard tap
+  for a withdrawal is now an online-PIN transaction in the EMV data (CVM Results `42`), with terminal
+  country and currency 0840.
+- Cancel on the PIN pad (chip, swipe or tap) returns to the main menu. Before, it showed a receipt
+  screen reading $0.00, card 1234 and a 2025 date under a green check for up to 30 seconds. Nothing
+  was sent or charged in that case; only the screen was wrong.
+- No reader-side limit on a Mastercard tap amount. It was $300 for cards and $500 for phone wallets,
+  refused by the reader before any host contact.
+
+### Fixes
+
+**Transaction** · Mastercard taps declined by the processor with a format error because Field 13 was
+corrupted after the first three-byte tag (`TAP-02`). The parser reads tags of one to three bytes;
+kernel-internal `DF81xx` and Castles `DF8Fxx` tags are dropped from Field 13; the remaining tags keep
+the kernel's order.
+
+**Transaction** · Mastercard contactless block was Castles' sample: terminal country Belgium (0056),
+no transaction currency, $300 / $500 tap limits, $200 CVM-required limit, $100 floor, mag-stripe mode
+allowed, zero TACs, MCC 0101. Now 0840 / 0840, online PIN as the CVM, no limits, floor 0, EMV mode
+only, Mastercard TACs, MCC 6011, terminal type 14 (`TAP-02`).
+
+**Admin / UI** · Cancel on the PIN pad landed on the receipt page with placeholder data (`PIN-02`).
+One routing decision for both cancel sources (`TransactionEndRoute`); a cancelled balance inquiry is
+journaled as a balance inquiry instead of a withdrawal.
+
+### Security / PCI
+
+- Mastercard production CA public keys 04, 05 and 06 were missing from both the contactless and the
+  chip configuration (test keys only), so CDA failed on every real Mastercard (TVR byte 1, CDA failed)
+  and the issuer could decline on that alone. The three keys are copied from Castles' US configuration
+  and verified against their stored SHA-1 (`TAP-02`). Nothing in the PIN or key paths changes.
+
+### Known issues and deferred
+
+- The app's response-code table labels 76 "Invalid account" while the protocol spec and the key-sync
+  logic treat it as a PIN key sync error. The logic is right, the label is wrong (`HOST-15`).
+- A credit card at the ATM is always sent with account type checking (CA). A credit-card cash advance
+  is therefore declined by the issuer as an invalid account or a restricted card (`ACCT-01`).
+- An approved Mastercard transaction has not yet been observed (needs a debit Mastercard with a known
+  PIN). See Verification.
+
+### Verification
+
+- `EmvTagEnhancerThreeByteTagTest` (6, including the exact shape of the bench record) and
+  `TransactionEndRouteTest` (6). Full unit suite (`testMkskDebugUnitTest`, JDK 17): 505 tests, 502
+  pass; the 3 failures (`EmvTagEnhancerTest` ×2, `HyosungProtocolTest.testProcessorConfigDns`) are the
+  pre-existing ones and fail identically on `main`.
+- **Bench 2026-10-14 on the S1F4 PRO** with the owner's Mastercard (credit card, PIN unknown), debug
+  build over 6.2.16 via adb. Before the fix: the kernel record carried 9F1A 0056, no 5F2A and a TVR
+  with CDA failed; Field 13 was 602 characters of invalid TLV (bare track 2 after 9F6E); EFX answered
+  05. After: 9F1A 0840, 5F2A 0840, TVR clean, 9F33 604008, withdrawal CVM online PIN (9F34 420300);
+  Field 13 31 tags / 234 bytes, valid TLV; EFX answered 76 (stale bench PIN key; the app re-keyed
+  itself with a Type 88 as designed) and then 62 restricted card from the issuer (credit card, wrong
+  PIN). No format rejection. PIN-pad Cancel returned to the menu on two taps.
+- **Not exercised:** an approved Mastercard transaction; a Visa tap on this build (the Visa groups are
+  untouched and the one- and two-byte parsing path is covered by the existing enhancer tests, but run
+  one Visa tap before rollout).
+
+### Upgrade notes
+
+CasHUB plain-install push. No new parameters, no migration. Terminals keep journal, keys, Wi-Fi
+and PINs. The new kernel configuration and CA keys load on the first transaction after the update.
+
+---
+
 ## 6.2.16 — 2026-10-12 · Transaction history in Admin (HIST-01) · Receipt holds only the ATM transaction (RCPT-01) · base 6.2.15 · versionCode 78
 
 The Admin screen's **Transaction History** card now works. Since the baseline its **View Transaction
