@@ -3,7 +3,7 @@ package castech.emvtxn.atm.host;
 import android.util.Log;
 import java.text.SimpleDateFormat;
 import java.util.Date;
-import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
 
@@ -17,6 +17,9 @@ import java.util.Map;
  * 9F02, 9F26, 95, 9F27, 9C, 9A, 5F24, 9F36, 82, 9F37, 9F10, 9F33, 9F34,
  * 4F, 5F2A, 5F34, 84, 9B, 9F03, 9F06, 9F09, 9F1A, 9F21, 9F35, 9F39,
  * 9F40, 9F41, 9F07, 9F1E, 50
+ *
+ * Tags outside that list follow in the order the kernel returned them. TAP-02 (6.2.17): tags of
+ * one to three bytes are parsed correctly, and kernel-internal DF81xx / DF8Fxx tags are dropped.
  */
 public class EmvTagEnhancer {
 
@@ -291,7 +294,7 @@ public class EmvTagEnhancer {
      * Parses EMV TLV data into a map of tag -> value (hex strings).
      */
     private Map<String, String> parseEmvTags(String emvData) {
-        Map<String, String> tagMap = new HashMap<>();
+        Map<String, String> tagMap = new LinkedHashMap<>(); // keeps the kernel's order for the extra tags
 
         if (emvData == null || emvData.isEmpty()) {
             return tagMap;
@@ -308,12 +311,21 @@ public class EmvTagEnhancer {
                 String tagByte1 = upperData.substring(pos, pos + 2);
                 int tagLen = 2; // 1 byte = 2 hex chars
 
-                // Check if this is a two-byte tag (first byte ends in 1F)
+                // TAP-02: a tag whose first byte ends in 1F continues into the next byte, and keeps
+                // continuing while bit 8 of that byte is set (EMV Book 3, Annex B1). Kernel 2
+                // (Mastercard) records carry three-byte tags such as DF8129 and DF8F4F; reading
+                // "DF8F" as the tag and "4F" as a length used to swallow the rest of the record.
                 int firstByte = Integer.parseInt(tagByte1, 16);
                 if ((firstByte & 0x1F) == 0x1F) {
-                    // Two-byte tag
-                    tagLen = 4;
-                    if (pos + 4 > upperData.length()) break;
+                    int next = pos + 2;
+                    boolean complete = false;
+                    while (next + 2 <= upperData.length()) {
+                        int b = Integer.parseInt(upperData.substring(next, next + 2), 16);
+                        next += 2;
+                        if ((b & 0x80) == 0) { complete = true; break; }
+                    }
+                    if (!complete) break; // truncated tag at the end of the data
+                    tagLen = next - pos;
                 }
 
                 String currentTag = upperData.substring(pos, pos + tagLen);
@@ -354,7 +366,14 @@ public class EmvTagEnhancer {
 
                 // Extract value and store in map
                 String value = upperData.substring(valuePos, valueEndPos);
-                tagMap.put(currentTag, value);
+                if (isKernelInternalTag(currentTag)) {
+                    // Kernel 2 working objects (DF81xx) and Castles-proprietary data (DF8Fxx) are
+                    // not authorisation data. The processor does not need them, and a host rejected
+                    // a record that carried them (TAP-02, 2026-10-14).
+                    Log.d(TAG, "Dropped kernel-internal tag " + currentTag + " (" + valueLen + " bytes)");
+                } else {
+                    tagMap.put(currentTag, value);
+                }
 
                 pos = valueEndPos;
             }
@@ -363,6 +382,14 @@ public class EmvTagEnhancer {
         }
 
         return tagMap;
+    }
+
+    /**
+     * Kernel 2 internal data objects (DF8101 to DF81xx) and Castles-proprietary tags (DF8Fxx)
+     * are kept out of Field 13. Package-private for the unit tests.
+     */
+    static boolean isKernelInternalTag(String tag) {
+        return tag.startsWith("DF81") || tag.startsWith("DF8F");
     }
 
     /**
