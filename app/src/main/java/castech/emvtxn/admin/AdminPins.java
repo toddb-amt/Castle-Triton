@@ -15,6 +15,10 @@ import javax.crypto.spec.PBEKeySpec;
  * (50 000 rounds, a per-terminal random salt) and compares hash to hash, in constant time. The
  * same PIN hashes differently on every terminal, and a storage dump gives an attacker a slow
  * offline search rather than the PIN.
+ *
+ * <p>6.2.18 (SEC-05) adds one built-in PIN again, for the Super Admin tier only: TFI's PIN hashed at
+ * build time from the git-ignored {@code admin-pins.properties}, so a fresh terminal lets TFI in
+ * before anything is pushed. See {@link #tier(String, String, String, String, String, String)}.
  */
 public final class AdminPins {
 
@@ -48,7 +52,28 @@ public final class AdminPins {
 
     /** Super is checked first so the two PINs can never be confused; nothing configured → NONE. */
     public static int tier(String enteredPin, String adminHashHex, String superHashHex, String saltHex) {
-        if (matches(enteredPin, superHashHex, saltHex)) return TIER_SUPER;
+        return tier(enteredPin, adminHashHex, superHashHex, saltHex, null, null);
+    }
+
+    /**
+     * Tier with the built-in Super Admin PIN (SEC-05, 6.2.18). The build carries a hash of TFI's
+     * Super Admin PIN under its own salt ({@code BuildConfig.BUILT_IN_SUPER_PIN_HASH} /
+     * {@code BUILT_IN_PIN_SALT}); it applies until CasHUB pushes {@code super_admin_pin}, and a pushed
+     * PIN replaces it, so a leaked built-in PIN is revoked fleet-wide by one push. The merchant
+     * ({@code admin_pin}) tier has no built-in default by decision: it opens reversals, history and
+     * the Wi-Fi panel, and must stay per merchant.
+     *
+     * @param superHashHex       the CasHUB-pushed super hash (per-terminal salt), or null/empty when none
+     * @param builtInSuperHashHex the build's super hash, or null/empty when the build has none
+     * @param builtInSaltHex     the salt the build hashed under (not the terminal salt)
+     */
+    public static int tier(String enteredPin, String adminHashHex, String superHashHex, String saltHex,
+                           String builtInSuperHashHex, String builtInSaltHex) {
+        boolean superPushed = superHashHex != null && !superHashHex.isEmpty();
+        boolean isSuper = superPushed
+                ? matches(enteredPin, superHashHex, saltHex)
+                : matches(enteredPin, builtInSuperHashHex, builtInSaltHex);
+        if (isSuper) return TIER_SUPER;
         if (matches(enteredPin, adminHashHex, saltHex)) return TIER_NORMAL;
         return TIER_NONE;
     }

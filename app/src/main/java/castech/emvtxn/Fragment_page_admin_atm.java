@@ -446,13 +446,15 @@ public class Fragment_page_admin_atm extends Fragment {
         }
 
         if (!adminPinConfigured()) {
+            // Only reachable on a build made without admin-pins.properties (no built-in Super PIN)
+            // on a terminal that has had nothing pushed. Release builds always carry the built-in PIN.
             new AlertDialog.Builder(getContext())
-                    .setTitle("Admin PIN not configured")
-                    .setMessage("No Admin PIN has been pushed to this terminal.\nPush admin_pin (and super_admin_pin) from CasHUB, then try again.")
+                    .setTitle("Admin PIN not available")
+                    .setMessage("No Admin PIN is available on this terminal.\nThis build has no built-in Super Admin PIN and none has been pushed from CasHUB.")
                     .setPositiveButton("OK", (d, w) -> exitAdmin())
                     .setCancelable(false)
                     .show();
-            Log.w(TAG, "Admin refused: no PIN configured (SEC-03)");
+            Log.w(TAG, "Admin refused: no PIN available (SEC-03/SEC-05)");
             return;
         }
 
@@ -510,8 +512,9 @@ public class Fragment_page_admin_atm extends Fragment {
 
     /**
      * Returns the access tier for an entered password, or {@link #ACCESS_NONE}.
-     * Passwords are fixed in the build (only TFI changes them by shipping a new
-     * version) — there is no on-terminal PIN change.
+     * PINs come from CasHUB ({@code admin_pin}, {@code super_admin_pin}) or, for the
+     * Super tier until one is pushed, from the build (SEC-05) — there is no
+     * on-terminal PIN change.
      */
     private int verifyPinTier(String enteredPin) {
         if (getContext() == null) return ACCESS_NONE;
@@ -521,7 +524,7 @@ public class Fragment_page_admin_atm extends Fragment {
         return ACCESS_NONE;
     }
 
-    /** SEC-03: true when CasHUB has pushed at least one PIN to this terminal. */
+    /** SEC-03/SEC-05: true when some PIN is in force — pushed by CasHUB, or the build's Super PIN. */
     private boolean adminPinConfigured() {
         if (getContext() == null) return false;
         castech.emvtxn.admin.AdminPinStore st = new castech.emvtxn.admin.AdminPinStore(getContext());
@@ -537,7 +540,7 @@ public class Fragment_page_admin_atm extends Fragment {
      * Enables/greys admin sections by access tier — restricted sections stay
      * VISIBLE but are disabled and dimmed, not hidden.
      * <ul>
-     *   <li>Super Admin (CasHUB {@code super_admin_pin}) — everything active.</li>
+     *   <li>Super Admin (built-in PIN, or CasHUB {@code super_admin_pin}) — everything active.</li>
      *   <li>Normal Admin (CasHUB {@code admin_pin}) — only Reversal Management,
      *       View Transaction History, WiFi Configuration, and Diagnostics are
      *       active; all other sections are greyed out. The destructive "Clear"
@@ -749,6 +752,16 @@ public class Fragment_page_admin_atm extends Fragment {
      * name), the port but never the host address, the terminal ID in full (field techs
      * quote it to the processor).
      */
+    /** SEC-05: which Super Admin PIN is in force, for the Admin card. */
+    private static String superPinLabel(castech.emvtxn.admin.AdminPinStore pinStore) {
+        if (pinStore == null) return "unknown";
+        switch (pinStore.superSource()) {
+            case CASHUB:   return "from CasHUB";
+            case BUILT_IN: return "built-in default";
+            default:       return "NONE";
+        }
+    }
+
     private void renderManagedConfig() {
         if (txvFeeConfig != null) {
             String fee = GlobalPara.atmUseFlatFee
@@ -757,8 +770,8 @@ public class Fragment_page_admin_atm extends Fragment {
             castech.emvtxn.admin.AdminPinStore pinStore = getContext() != null ? new castech.emvtxn.admin.AdminPinStore(getContext()) : null;
             txvFeeConfig.setText(fee + "\nTips: " + (GlobalPara.atmTipsEnabled ? "on" : "off")
                     + "  ·  Swipe: " + (GlobalPara.atmSwipeEnabled ? "on" : "off")
-                    + "\nAdmin PIN: " + (pinStore != null && pinStore.isAdminConfigured() ? "configured" : "NOT configured")
-                    + "  ·  Super PIN: " + (pinStore != null && pinStore.isSuperConfigured() ? "configured" : "not configured"));
+                    + "\nMerchant Admin PIN: " + (pinStore != null && pinStore.isAdminConfigured() ? "from CasHUB" : "NOT pushed")
+                    + "  ·  Super PIN: " + superPinLabel(pinStore));
         }
         if (txvLimits != null) {
             txvLimits.setText("Minimum: $" + Money.dollars(Money.toCents(GlobalPara.atmMinAmount))

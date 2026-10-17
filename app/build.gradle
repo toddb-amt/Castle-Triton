@@ -12,6 +12,55 @@ if (keystorePropsFile.exists()) {
     keystoreProps.load(new FileInputStream(keystorePropsFile))
 }
 
+// Built-in Super Admin PIN (SEC-05, 6.2.18). admin-pins.properties (project root, git-ignored,
+// template in admin-pins.properties.example) holds default_super_admin_pin=<6 to 8 digits>. The
+// build hashes it here — PBKDF2-SHA256, 50 000 rounds, 32 bytes, lowercase hex, the SAME routine as
+// castech.emvtxn.admin.AdminPins (pinned by AdminPinsTest.hash_matchesIndependentPbkdf2Vector) —
+// under a salt made fresh for each build (or built_in_pin_salt=<32 hex> from the file), and ships
+// only hash + salt in BuildConfig. The clear PIN never enters the APK, the repo or the logs.
+// Release builds refuse to run without a valid file; debug builds warn and carry no built-in PIN.
+def adminPinsFile = rootProject.file("admin-pins.properties")
+def builtInSuperPinHash = ""
+def builtInPinSalt = ""
+def adminPinsProblem = null
+if (adminPinsFile.exists()) {
+    def adminPinsProps = new Properties()
+    adminPinsFile.withInputStream { adminPinsProps.load(it) }
+    def pin = (adminPinsProps['default_super_admin_pin'] ?: '').trim()
+    def saltHex = (adminPinsProps['built_in_pin_salt'] ?: '').trim().toLowerCase()
+    if (!(pin ==~ /[0-9]{6,8}/)) {
+        adminPinsProblem = "admin-pins.properties: default_super_admin_pin must be 6 to 8 digits"
+    } else if (!saltHex.isEmpty() && !(saltHex ==~ /[0-9a-f]{32}/)) {
+        adminPinsProblem = "admin-pins.properties: built_in_pin_salt must be 32 hex characters when present"
+    } else {
+        byte[] salt
+        if (saltHex.isEmpty()) {
+            salt = new byte[16]
+            new java.security.SecureRandom().nextBytes(salt)
+        } else {
+            salt = saltHex.decodeHex()
+        }
+        def spec = new javax.crypto.spec.PBEKeySpec(pin.toCharArray(), salt, 50000, 256)
+        byte[] out = javax.crypto.SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256").generateSecret(spec).getEncoded()
+        builtInSuperPinHash = out.encodeHex().toString()
+        builtInPinSalt = salt.encodeHex().toString()
+    }
+} else {
+    adminPinsProblem = "admin-pins.properties not found in " + rootProject.projectDir + " — this build has NO built-in Super Admin PIN (copy admin-pins.properties.example and fill it in)"
+}
+if (adminPinsProblem != null) {
+    logger.warn("WARNING: " + adminPinsProblem)
+}
+// A release APK without the built-in PIN would lock TFI out of every fresh terminal: refuse.
+gradle.taskGraph.whenReady { graph ->
+    boolean releaseRequested = graph.allTasks.any { t ->
+        t.project == project && t.name.contains("Release") && (t.name.startsWith("assemble") || t.name.startsWith("package") || t.name.startsWith("bundle"))
+    }
+    if (releaseRequested && adminPinsProblem != null) {
+        throw new GradleException("Release build refused: " + adminPinsProblem)
+    }
+}
+
 android {
     namespace "castech.emvtxn"
     compileSdkVersion 31
@@ -27,6 +76,9 @@ android {
         versionName "6.2.17"
         testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
         multiDexEnabled true
+        // SEC-05: hash + salt of the built-in Super Admin PIN (see the admin-pins.properties block above).
+        buildConfigField "String", "BUILT_IN_SUPER_PIN_HASH", "\"${builtInSuperPinHash}\""
+        buildConfigField "String", "BUILT_IN_PIN_SALT", "\"${builtInPinSalt}\""
     }
     signingConfigs {
         release {
