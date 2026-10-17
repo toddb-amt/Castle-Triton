@@ -48,6 +48,76 @@ Template:
 
 ---
 
+## 6.2.18 — 2026-10-17 · Built-in Super Admin PIN until CasHUB pushes one (SEC-05) · base 6.2.17 · versionCode 80
+
+Since 6.2.15 a terminal refused Admin until CasHUB had pushed `admin_pin` or `super_admin_pin`.
+With terminals now provisioned in volume, that dependency on a parameter push became a blocker:
+a fresh or re-imaged terminal could not be opened by a TFI technician until its parameters had
+landed. This release builds TFI's Super Admin PIN into the APK again, as a salted slow hash made at
+build time from a git-ignored file, so a terminal straight out of the box opens full Admin for TFI.
+A pushed `super_admin_pin` replaces the built-in one. The merchant tier (`admin_pin`) keeps no
+built-in PIN by decision: it opens reversals, history and the Wi-Fi panel, and stays per merchant.
+
+### What operators and customers will notice
+
+- A terminal that has had nothing pushed accepts TFI's Super Admin PIN on the Admin prompt. The
+  "Admin PIN not configured" refusal is gone.
+- Merchant staff still need their `admin_pin` pushed from CasHUB; nothing changes for them.
+- The Admin card reads `Merchant Admin PIN: from CasHUB` or `NOT pushed`, and `Super PIN: built-in
+  default` or `from CasHUB`, so a glance shows what a terminal is running on.
+- On a terminal where CasHUB has already pushed `super_admin_pin`, the built-in PIN does not work:
+  the pushed PIN is in force and is re-applied at every boot.
+
+### Fixes
+
+**Admin** · Admin locked until a parameter push (`SEC-05`). `AdminPins.tier` takes the build's super
+hash and salt; the pushed super hash wins when present, otherwise the built-in one; the merchant hash
+is unchanged. `AdminPinStore.superSource()` reports which is in force.
+
+### Security / PCI
+
+- The PIN is hashed at build time (PBKDF2-SHA256, 50 000 rounds, a fresh random salt per build) from
+  `admin-pins.properties` in the project root, git-ignored next to `keystore.properties`. The APK
+  carries hash and salt only; the clear PIN never enters the repo, the APK or the logs. A release
+  build refuses to run without the file; a debug build warns and carries no built-in PIN.
+- Trade-off, recorded in the backlog as `SEC-05`: one shared secret is back across the fleet for the
+  Super tier. CasHUB's top-level `super_admin_pin` was already one fleet-wide value, so nothing new is
+  distributed, but a 6 to 8 digit PIN hash can be searched offline from an APK by someone determined.
+  Treat the built-in PIN as the day-one PIN, rotate it on a release, and keep `super_admin_pin` pushed
+  where it matters; a pushed PIN revokes the built-in one on that terminal.
+- The 3-attempt / 5-minute lockout, the constant-time compare and the per-terminal salt for pushed
+  PINs are unchanged.
+
+### Known issues and deferred
+
+- Removing `super_admin_pin` from CasHUB does not bring the built-in PIN back on a terminal that
+  already received it: absent keys leave the stored hash alone (the 6.2.15 rule). Clearing the app
+  data or pushing a new value does.
+- Still open from 6.2.17: `HOST-15` (76 label), `ACCT-01` (credit card sent as checking), and an
+  approved Mastercard tap has not yet been observed.
+
+### Verification
+
+- `AdminPinsTest` (10, six new: built-in applies when nothing pushed, still applies when only the
+  merchant PIN is pushed, pushed super replaces it, built-in checked under the build salt not the
+  terminal salt, no built-in and nothing pushed is refused, and a PBKDF2 known-answer vector computed
+  independently). Full unit suite (`testMkskDebugUnitTest`, JDK 17): 511 tests, 508 pass; the 3
+  failures are the pre-existing ones (`EmvTagEnhancerTest` ×2, `HyosungProtocolTest.testProcessorConfigDns`).
+- Build script checked both ways: `assembleMkskRelease` without `admin-pins.properties` stops with
+  "Release build refused"; a synthetic PIN with a fixed salt produced the same hash in `BuildConfig`
+  as the Java routine (then the synthetic file was deleted).
+- **Bench:** see the entry's PR. The bench terminal has `super_admin_pin` pushed, so it can only show
+  the regression side (pushed PINs still work, card reads `from CasHUB`). The built-in path needs a
+  terminal with nothing pushed: a fresh unit with this APK and no parameters.
+
+### Upgrade notes
+
+CasHUB plain-install push. No new parameters. `super_admin_pin` becomes optional (it overrides the
+built-in PIN when pushed); `admin_pin` is still required for merchant access. Build machines need
+`admin-pins.properties` (template `admin-pins.properties.example`) before a release build.
+
+---
+
 ## 6.2.17 — 2026-10-14 · Mastercard taps declined for malformed EMV data (TAP-02) · PIN-pad Cancel showed a placeholder receipt (PIN-02) · base 6.2.16 · versionCode 79
 
 A field terminal declined every tap of one Mastercard. The switch rejected the request as BAD TLV
