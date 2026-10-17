@@ -72,8 +72,8 @@ android {
         // Single source of truth for the app version. MainActivity.APP_VERSION
         // reads BuildConfig.VERSION_NAME, and the APK filename carries it (see
         // applicationVariants below) so fleet pushes (CashHub) are identifiable.
-        versionCode 79
-        versionName "6.2.17"
+        versionCode 80
+        versionName "6.2.18"
         testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
         multiDexEnabled true
         // SEC-05: hash + salt of the built-in Super Admin PIN (see the admin-pins.properties block above).
