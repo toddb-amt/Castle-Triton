@@ -92,6 +92,7 @@ public class Fragment_page_admin_atm extends Fragment {
     private Button btnSaveSettings;
     private Button btnClearHistory;
     private Button btnViewHistory;            // HIST-01 (6.2.16)
+    private Button btnReprintReceipt;         // RCPT-02 (6.2.19)
     private TextView txvTransactionStats;     // HIST-01 (6.2.16)
     private Button btnExit;
 
@@ -241,6 +242,7 @@ public class Fragment_page_admin_atm extends Fragment {
         btnSaveSettings = rootView.findViewById(R.id.btnSaveSettings);
         btnClearHistory = rootView.findViewById(R.id.btnClearHistory);
         btnViewHistory = rootView.findViewById(R.id.btnViewHistory);
+        btnReprintReceipt = rootView.findViewById(R.id.btnReprintReceipt);
         txvTransactionStats = rootView.findViewById(R.id.txvTransactionStats);
         btnExit = rootView.findViewById(R.id.btnExit);
 
@@ -394,6 +396,8 @@ public class Fragment_page_admin_atm extends Fragment {
         if (btnClearHistory != null) btnClearHistory.setOnClickListener(v -> clearClosedBatches());
         // View Transaction History (HIST-01, 6.2.16): both tiers, read-only
         if (btnViewHistory != null) btnViewHistory.setOnClickListener(v -> viewTransactionHistory());
+        // Reprint Receipt (RCPT-02, 6.2.19): both tiers, duplicate from the journal
+        if (btnReprintReceipt != null) btnReprintReceipt.setOnClickListener(v -> reprintReceipt());
 
         // Exit button
         btnExit.setOnClickListener(v -> exitAdmin());
@@ -991,6 +995,14 @@ public class Fragment_page_admin_atm extends Fragment {
                 if (isAdded()) showMonospaceDialog("Transaction History", out);
             });
         }, "ViewHistory").start();
+    }
+
+    /**
+     * Reprint Receipt (RCPT-02, 6.2.19): the same picker as the ellipsis menu, kept here too so the
+     * history card is complete. A frontline employee does not need Admin for a duplicate.
+     */
+    private void reprintReceipt() {
+        if (mainActivity != null) mainActivity.showReprintReceiptPicker();
     }
 
     /** The scrolling monospace dialog MainActivity uses for the on-screen Detail Report. */

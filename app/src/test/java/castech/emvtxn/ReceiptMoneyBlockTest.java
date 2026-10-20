@@ -70,4 +70,11 @@ public class ReceiptMoneyBlockTest {
             assertEquals(line, true, line.length() <= 32);
         }
     }
+
+    /** RCPT-02 (6.2.19): the duplicate receipt rebuilds the block from journal cents, same text. */
+    @Test
+    public void centsOverload_printsTheSameBlockAsTheBreakdown() {
+        assertEquals(ReceiptMoneyBlock.printed(plain()), ReceiptMoneyBlock.printed(20_00, 3_50, 23_50));
+        assertEquals(ATM_BLOCK, ReceiptMoneyBlock.printed(20_00, 3_50, 23_50));
+    }
 }
