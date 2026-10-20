@@ -100,7 +100,8 @@ public final class HistoryReport {
         }
     }
 
-    private static String resultLabel(TransactionLog l) {
+    /** Shared with ReceiptReprint's picker (RCPT-02). */
+    static String resultLabel(TransactionLog l) {
         if (l.isReversed() && TransactionLog.TYPE_WITHDRAWAL.equals(l.getTransactionType())) return "REVERSED";
         String r = nz(l.getResult());
         if (r.isEmpty()) return "?";
@@ -108,7 +109,8 @@ public final class HistoryReport {
         return r;
     }
 
-    private static String typeCode(String type) {
+    /** Shared with ReceiptReprint's picker (RCPT-02). */
+    static String typeCode(String type) {
         if (TransactionLog.TYPE_WITHDRAWAL.equals(type)) return "WD";
         if (TransactionLog.TYPE_BALANCE_INQUIRY.equals(type)) return "BI";
         if (TransactionLog.TYPE_REVERSAL.equals(type)) return "RV";

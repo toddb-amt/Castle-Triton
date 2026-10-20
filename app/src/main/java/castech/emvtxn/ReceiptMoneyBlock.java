@@ -27,18 +27,28 @@ public final class ReceiptMoneyBlock {
     private ReceiptMoneyBlock() {}
 
     public static List<Line> lines(AmountBreakdown a) {
+        return lines(a.withdrawal, a.fee, a.total);
+    }
+
+    /** RCPT-02: the same block from a journal row's cents (withdrawal, fee, total). */
+    public static List<Line> lines(long withdrawalCents, long feeCents, long totalCents) {
         List<Line> out = new ArrayList<>(4);
-        out.add(new Line("Withdrawal Amount:", a.withdrawal, false));
-        out.add(new Line("Service Fee:", a.fee, false));
+        out.add(new Line("Withdrawal Amount:", withdrawalCents, false));
+        out.add(new Line("Service Fee:", feeCents, false));
         out.add(new Line("", 0, true));
-        out.add(new Line("Total Charged:", a.total, false));
+        out.add(new Line("Total Charged:", totalCents, false));
         return out;
     }
 
     public static String printed(AmountBreakdown a) {
+        return printed(a.withdrawal, a.fee, a.total);
+    }
+
+    /** RCPT-02: the printed block from a journal row's cents; identical text to the breakdown form. */
+    public static String printed(long withdrawalCents, long feeCents, long totalCents) {
         NumberFormat money = NumberFormat.getCurrencyInstance(Locale.US);
         StringBuilder b = new StringBuilder();
-        for (Line l : lines(a)) {
+        for (Line l : lines(withdrawalCents, feeCents, totalCents)) {
             if (l.rule) b.append(RULE).append('\n');
             else b.append(String.format(Locale.US, "%-19s", l.label)).append(money.format(l.cents / 100.0)).append('\n');
         }

@@ -1,0 +1,19 @@
+# Built-in Super Admin PIN for the Cashless ATM build (SEC-05, 6.2.18).
+#
+# Copy this file to admin-pins.properties (same folder, next to keystore.properties) and fill in
+# the PIN. admin-pins.properties is git-ignored: never commit it, never paste its value into a
+# chat, ticket or log. Back it up with the release keystore.
+#
+# The build hashes the PIN (PBKDF2-SHA256, 50 000 rounds) and ships only the hash and salt in the
+# APK; the clear PIN never leaves this machine. Release builds (assembleMkskRelease) refuse to run
+# without this file; debug builds warn and carry no built-in PIN.
+#
+# On the terminal this PIN opens the Super Admin tier until CasHUB pushes super_admin_pin, which
+# then replaces it. The merchant tier (admin_pin) has no built-in PIN and is always pushed.
+
+# Required: 6 to 8 digits.
+default_super_admin_pin=
+
+# Optional: fixed salt, 32 hex characters, for reproducible hashes across builds. Leave empty to
+# let every build draw a fresh random salt (recommended).
+built_in_pin_salt=

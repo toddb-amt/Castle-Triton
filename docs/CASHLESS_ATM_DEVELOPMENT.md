@@ -805,7 +805,7 @@ Based on `GlobalPara.transactionResult`:
 - [ ] Add merchant logo to receipt (if printer supports graphics)
 - [ ] Store transaction log for admin review
 - [ ] Add email receipt option
-- [ ] Implement receipt reprinting from transaction log
+- [x] Implement receipt reprinting from transaction log (RCPT-02, 6.2.19: ellipsis ▸ Reprint Receipt and Admin ▸ Transaction History, newest 20 rows that ended with a slip, marked DUPLICATE)
 - [ ] Add printer status check before printing
 - [ ] Customize receipt by merchant/location
 

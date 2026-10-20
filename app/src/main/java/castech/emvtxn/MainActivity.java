@@ -1752,6 +1752,105 @@ public class MainActivity extends AppCompatActivity {
         }, "DetailReport").start();
     }
 
+    /**
+     * Ellipsis ▸ Reprint Receipt, also behind the Admin history card's button (RCPT-02, 6.2.19).
+     * No PIN, like Host Totals and the Detail Report, so a frontline employee can hand a customer a
+     * duplicate; never while a transaction runs (the printer shares the single-threaded SDK). Lists
+     * the newest journal rows that ended with a slip (two lines each, divider between rows), asks
+     * once, then prints the receipt rebuilt from the row, marked DUPLICATE, on the receipt path:
+     * paper check first, one self-contained printf. Nothing is journaled or pushed.
+     */
+    public void showReprintReceiptPicker() {
+        if (GlobalPara.atmTransactionInProgress) {
+            android.widget.Toast.makeText(this, "Transaction in progress — try again in a moment",
+                    android.widget.Toast.LENGTH_SHORT).show();
+            return;
+        }
+        new Thread(() -> {
+            final java.util.List<castech.emvtxn.atm.TransactionLog> rows;
+            try {
+                castech.emvtxn.atm.TransactionLogManager m =
+                        castech.emvtxn.atm.TransactionLogManager.getInstance(getApplicationContext());
+                // read past the cap so skipped cancelled / reversal rows do not shorten the list
+                rows = castech.emvtxn.atm.report.ReceiptReprint.printable(
+                        m.getRecentTransactions(castech.emvtxn.atm.report.ReceiptReprint.MAX_ROWS * 3));
+            } catch (Throwable t) {
+                runOnUiThread(() -> new AlertDialog.Builder(MainActivity.this).setTitle("Reprint Receipt")
+                        .setMessage("Transaction journal unavailable: " + t.getMessage())
+                        .setPositiveButton("OK", null).show());
+                return;
+            }
+            runOnUiThread(() -> {
+                if (isFinishing()) return;
+                if (rows.isEmpty()) {
+                    android.widget.Toast.makeText(MainActivity.this, "No receipts to reprint",
+                            android.widget.Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                android.widget.ArrayAdapter<castech.emvtxn.atm.TransactionLog> adapter =
+                        new android.widget.ArrayAdapter<castech.emvtxn.atm.TransactionLog>(
+                                MainActivity.this, android.R.layout.simple_list_item_2, android.R.id.text1, rows) {
+                    @Override
+                    public android.view.View getView(int position, android.view.View convertView, android.view.ViewGroup parent) {
+                        android.view.View v = super.getView(position, convertView, parent);
+                        castech.emvtxn.atm.TransactionLog l = getItem(position);
+                        ((TextView) v.findViewById(android.R.id.text1)).setText(castech.emvtxn.atm.report.ReceiptReprint.pickerLine1(l));
+                        ((TextView) v.findViewById(android.R.id.text2)).setText(castech.emvtxn.atm.report.ReceiptReprint.pickerLine2(l));
+                        return v;
+                    }
+                };
+                AlertDialog dialog = new AlertDialog.Builder(MainActivity.this)
+                        .setTitle("Reprint Receipt")
+                        .setAdapter(adapter, (d, which) -> confirmDuplicateReceipt(rows.get(which)))
+                        .setNegativeButton("Cancel", null)
+                        .create();
+                dialog.show();
+                ListView lv = dialog.getListView();
+                if (lv != null) {
+                    lv.setDivider(new android.graphics.drawable.ColorDrawable(0xFFCCCCCC));
+                    lv.setDividerHeight(2);
+                }
+            });
+        }, "ReprintPick").start();
+    }
+
+    /** One confirm before paper comes out: a mis-tap in a scrolled list should not print. */
+    private void confirmDuplicateReceipt(final castech.emvtxn.atm.TransactionLog row) {
+        new AlertDialog.Builder(this)
+                .setTitle("Print duplicate receipt?")
+                .setMessage(castech.emvtxn.atm.report.ReceiptReprint.pickerLine1(row) + "\n"
+                        + castech.emvtxn.atm.report.ReceiptReprint.pickerLine2(row))
+                .setPositiveButton("Print", (d, w) -> printDuplicateReceipt(row))
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void printDuplicateReceipt(final castech.emvtxn.atm.TransactionLog row) {
+        final String text = castech.emvtxn.atm.report.ReceiptReprint.render(row, System.currentTimeMillis());
+        new Thread(() -> {
+            String outcome;
+            try {
+                CTOS_Printer printer = getPrinter();
+                if (printer == null) {
+                    outcome = "Printer not available";
+                } else if (printer.isOutOfPaper()) {
+                    GlobalPara.atmPrinterOutOfPaper = true;
+                    outcome = "Out of paper — nothing printed";
+                } else {
+                    GlobalPara.atmPrinterOutOfPaper = false;
+                    printer.printf(text);   // self-contained: initPage + drawText + printPage
+                    outcome = "Duplicate receipt printed";
+                    Log.i(TAG, "RCPT-02: duplicate printed for " + row.getTransactionId());
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "duplicate receipt print failed: " + e.getMessage());
+                outcome = "Print failed: " + e.getMessage();
+            }
+            final String msg = outcome;
+            runOnUiThread(() -> android.widget.Toast.makeText(MainActivity.this, msg, android.widget.Toast.LENGTH_LONG).show());
+        }, "ReprintPrint").start();
+    }
+
     private void printOrShowReport(final String text) {
         // Fresh paper check: the flag alone can be stale since the last receipt (review #5).
         if (Printer == null || refreshPaperStateSafely()) {
@@ -2148,6 +2247,10 @@ public class MainActivity extends AppCompatActivity {
         } else if (id == R.id.action_detail_report) {
             // 6.2.11: print the current batch's Detail Report (same gate as Host Totals)
             printDetailReport();
+            return true;
+        } else if (id == R.id.action_reprint_receipt) {
+            // RCPT-02 (6.2.19): duplicate of a journaled receipt, no PIN, same gate as the Detail Report
+            showReprintReceiptPicker();
             return true;
         }
 

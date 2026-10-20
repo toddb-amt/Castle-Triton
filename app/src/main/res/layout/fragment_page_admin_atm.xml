@@ -349,6 +349,15 @@
                 android:textSize="14sp"
                 android:layout_marginBottom="8dp"/>
 
+            <!-- Reprint Receipt Button (RCPT-02, 6.2.19): same picker as the ellipsis menu, both tiers -->
+            <Button
+                android:id="@+id/btnReprintReceipt"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Reprint Receipt"
+                android:textSize="14sp"
+                android:layout_marginBottom="8dp"/>
+
             <!-- Clear History Button -->
             <Button
                 android:id="@+id/btnClearHistory"
