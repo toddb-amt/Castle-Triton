@@ -143,6 +143,12 @@ public class MainActivity extends AppCompatActivity {
 
     // Transaction abort flag
     private volatile boolean txnAborted = false;
+    // PIN-02: Cancel on the PIN pad (chip, swipe or tap). Routes the thread ending to the menu,
+    // like txnAborted does for the on-screen Cancel, instead of the receipt page. The BI flag is
+    // captured at the cancel site because resetATMTransactionState() clears it before the journal
+    // row is written.
+    private volatile boolean pinCancelled = false;
+    private volatile boolean pinCancelledBalanceInquiry = false;
     private volatile boolean needsSdkReinit = true;  // True on first transaction or after abort
     // Track if we're in the card detection loop (safe to call cancelTransaction)
     private volatile boolean inCardDetectionLoop = false;
@@ -2757,6 +2763,8 @@ public class MainActivity extends AppCompatActivity {
      */
     public void resetAbortFlag() {
         txnAborted = false;
+        pinCancelled = false;
+        pinCancelledBalanceInquiry = false;
     }
 
     /**
@@ -4043,6 +4051,8 @@ public class MainActivity extends AppCompatActivity {
                             boolean pinOK = requestATMPin();
                             if (!pinOK) {
                                 Log.e(TAG, "ATM PIN: PIN entry failed or cancelled");
+                                pinCancelled = true;                                            // PIN-02
+                                pinCancelledBalanceInquiry = GlobalPara.atmBalanceInquiryMode;
                                 ui_ShowMsg("Transaction Cancelled\n\nPIN Required");
                                 MyUtility.sleep(2000);
 
@@ -4308,6 +4318,8 @@ public class MainActivity extends AppCompatActivity {
                                 boolean pinOK = requestATMPin();
                                 if (!pinOK) {
                                     Log.e(TAG, "ATM PIN (MSR): PIN entry failed or cancelled");
+                                    pinCancelled = true;                                        // PIN-02
+                                    pinCancelledBalanceInquiry = GlobalPara.atmBalanceInquiryMode;
                                     ui_ShowMsg("Transaction Cancelled\n\nPIN Required");
                                     MyUtility.sleep(2000);
 
@@ -4539,6 +4551,8 @@ public class MainActivity extends AppCompatActivity {
                             boolean pinOK = requestATMPin();
                             if (!pinOK) {
                                 Log.e(TAG, "ATM PIN (CL): PIN entry failed or cancelled");
+                                pinCancelled = true;                                            // PIN-02
+                                pinCancelledBalanceInquiry = GlobalPara.atmBalanceInquiryMode;
                                 ui_ShowMsg("Transaction Cancelled\n\nPIN Required");
                                 MyUtility.sleep(2000);
 
@@ -5125,7 +5139,14 @@ public class MainActivity extends AppCompatActivity {
 
                 GlobalPara.clLED.startIdleLEDBehavior();
 
-                if (txnAborted && !GlobalPara.atmHostCallSuccess) {
+                // PIN-02: one routing decision for both cancel sources (TransactionEndRouteTest)
+                final boolean amountEntered = GlobalPara.atmSelectedAmount != null
+                        && !"0.00".equals(GlobalPara.atmSelectedAmount);
+                final castech.emvtxn.atm.TransactionEndRoute.Route endRoute =
+                        castech.emvtxn.atm.TransactionEndRoute.decide(txnAborted || pinCancelled,
+                                GlobalPara.atmHostCallSuccess, GlobalPara.atmMode, amountEntered,
+                                GlobalPara.atmBalanceInquiryMode);
+                if (endRoute == castech.emvtxn.atm.TransactionEndRoute.Route.MAIN_MENU) {
                     // Cancelled after card detection and the host did not approve —
                     // either nothing was sent (sendAtmHostRequestWithPinRetry returned
                     // "Transaction cancelled") or the cancel raced a decline. Nothing to
@@ -5136,7 +5157,8 @@ public class MainActivity extends AppCompatActivity {
                     Log.d(TAG, "Transaction cancelled — returning to main menu");
                     // 6.2.11 journal: cancelled before/without a host answer (never throws)
                     castech.emvtxn.atm.TransactionJournal.record(getApplicationContext(),
-                            castech.emvtxn.atm.JournalOutcome.cancelled(GlobalPara.atmBalanceInquiryMode));
+                            castech.emvtxn.atm.JournalOutcome.cancelled(
+                                    pinCancelled ? pinCancelledBalanceInquiry : GlobalPara.atmBalanceInquiryMode));
                     castech.emvtxn.pos.PosTransactionObserver.notifyDeclined(
                             "user_cancelled", "cancelled at terminal", false);
                     runOnUiThread(new Runnable() {
@@ -5145,9 +5167,7 @@ public class MainActivity extends AppCompatActivity {
                             navigateToPage(GlobalDef.d_PAGE_MAIN_MENU);
                         }
                     });
-                } else if (GlobalPara.atmMode ||
-                    (GlobalPara.atmSelectedAmount != null && !"0.00".equals(GlobalPara.atmSelectedAmount)) ||
-                    GlobalPara.atmBalanceInquiryMode) {
+                } else if (endRoute == castech.emvtxn.atm.TransactionEndRoute.Route.RECEIPT) {
                     // ATM Mode (withdrawal with amount > 0, or balance inquiry):
                     // mark transaction as complete and navigate to receipt
                     GlobalPara.atmTransactionComplete = true;
