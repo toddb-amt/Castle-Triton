@@ -48,7 +48,145 @@ Template:
 
 ---
 
-## 6.2.18 — 2026-10-17 · Built-in Super Admin PIN until CasHUB pushes one (SEC-05) · base 6.2.17 · versionCode 80
+## 6.2.19 — 2026-10-20 · Reprint Receipt on the ellipsis menu and the Admin history card (RCPT-02) · Android app name and icon are now Castle (BRAND-01) · the CasHUB update chime is silenced (SND-01) · built-in Super Admin PIN (SEC-05, built as 6.2.18, first shipped here) · base 6.2.18 · versionCode 81
+
+Until now a customer's receipt could only be printed while the receipt screen was still up. Once
+Done or New Transaction was tapped, or the screen timed out, the slip could not be produced again,
+and the only Reprint button in the app was on Host Totals (operator question 2026-10-20). This
+release adds Reprint Receipt to the ellipsis menu, next to Host Totals and the Detail Report, and to
+the Admin Transaction History card: pick one of the newest 20 transactions that ended with a slip,
+confirm, and the terminal prints that receipt again from its journal row, marked DUPLICATE. No PIN
+is needed, so a frontline employee can hand a customer a duplicate without opening Admin.
+
+Also in this release: the chime a terminal plays whenever CasHUB restarts its agent after an update
+is silenced (customer complaint 2026-10-20), with a CasHUB parameter to turn it back on.
+
+6.2.18 was built but never released on its own. Its change, TFI's built-in Super Admin PIN (SEC-05),
+ships for the first time in this release; the 6.2.18 entry below describes it and its rollout notes
+apply here.
+
+### What operators and customers will notice
+
+- Ellipsis (⋮) ▸ Reprint Receipt, on the idle screen, with no PIN, exactly like Host Totals and the
+  Detail Report. The same button also sits on Admin ▸ Transaction History between View Transaction
+  History and Clear Transaction History, for both tiers.
+- The picker lists the newest 20 transactions that ended with a slip, two lines per row with a divider
+  between rows: date and time, WD or BI, card last four and amount on the first line (a balance
+  inquiry shows no amount), the outcome on the second (`10/20 14:12   WD   ****1234   $100.00` over
+  `APPROVED`). Tapping a row asks "Print
+  duplicate receipt?" with those two lines before any paper comes out.
+- Cancelled transactions are not offered (owner decision 2026-10-20): they never showed a receipt.
+  Approved and declined ones are; a timeout or error is offered too and prints as DECLINED, as its
+  original slip did.
+- The duplicate reads like the original slip: same header, Withdrawal Amount / Service Fee / Total
+  Charged (or the two balances on a balance inquiry), card last four, the original date and time,
+  TransID, auth code and reference, the reversal block when that withdrawal was reversed, same
+  footer. Two lines under the header mark it: `*** DUPLICATE ***` and `Reprinted:` with the time of
+  the reprint.
+- Differences from the original, by design: the card brand is not on the duplicate because the
+  journal keeps only the last four digits; a declined slip shows the decline reason the journal kept,
+  or the response code when there was none.
+- Android now shows the app as **Castle** with the castle-tower icon, in the app list, Settings ▸ Apps
+  and recents. Nothing on the terminal's own screens changes: the title bar, the idle screen and the
+  receipts still read MyView (owner decision 2026-10-20: the Android label and icon only).
+- The terminal no longer chimes when CasHUB updates it. The sound was Android's default notification
+  tone, played because Castles' CasHUB agent posts its service notifications on normal-priority
+  channels every time it restarts them. The app now sets the terminal's notification volume to zero
+  when it starts and whenever parameters are applied; the volume is the terminal's own setting and
+  survives reboots. Transaction tones (approved, declined, cancel) and the printer are unaffected:
+  they do not use the notification volume. A new CasHUB parameter `notification_sounds=true` turns
+  the sounds back on fleet-wide (the app lifts a silenced terminal to 5 of 7); absent or `false`
+  keeps them silenced. Admin ▸ Network shows `Notification sounds: silenced (0/7)`.
+- Reprint waits while a transaction is running ("Transaction in progress"), checks paper first
+  ("Out of paper, nothing printed") and reports "Duplicate receipt printed" or the printer error.
+  Nothing is written to the journal, the MyView push or the Detail Report; a reprint changes no count.
+
+### Fixes
+
+**Admin / Main menu** · No way to print a receipt again once the receipt screen is gone (`RCPT-02`).
+`atm/report/ReceiptReprint` rebuilds the slip from the journal row and formats the picker rows;
+`MainActivity.showReprintReceiptPicker` drives the list, the confirm and the print for both entry
+points; `ReceiptMoneyBlock` gained a cents overload so the money block is the same code the live
+receipt uses.
+
+**Other** · App label "ATM" and the sample-code icon (`BRAND-01`). `app_name` is Castle; the launcher
+icon is a full set built from the supplied artwork: legacy square and round mipmaps at every density
+plus an adaptive icon (full-bleed foreground, solid background) for Android 8 and later. The old
+`drawable/casher` is removed; nothing else referenced it.
+
+**Other** · Terminal chimes on every CasHUB update (`SND-01`). `NotificationSoundsParam` (pure Java:
+the parameter, its default and the "only when it differs" volume rule) and `NotificationSoundsApplier`
+(AudioManager, never throws, outcome kept for the Admin card). `CasHubParams.applyToConfigDetailed`
+applies it before anything else, parameters or not, and keeps the key out of the host payload and the
+KMS-II backup. No app can change another app's notification channels and the device owner on these
+terminals is Castles' own service, so the volume is the only lever an app has.
+
+### Security / PCI
+
+- Reprint Receipt is reachable without a PIN, like the Detail Report has been since 6.2.11: anyone at
+  the terminal can open the list (date, type, card last four, amount, outcome of the newest 20
+  transactions) and print a slip marked DUPLICATE. Accepted by the owner 2026-10-20 as the same
+  exposure the Detail Report carries; the duplicate shows nothing the original receipt did not, and
+  the journal holds no PAN beyond the last four digits.
+
+### Known issues and deferred
+
+- Reprint offers the newest 20 qualifying journal rows; older ones are visible in View Transaction
+  History but not offered. Reversal bookkeeping rows (the RWT rows pushed to MyView) are skipped; a
+  reversed withdrawal is offered as the withdrawal itself and prints the reversal block.
+- View Transaction History still runs its transactions together with nothing between them; spacing
+  them out was noticed on the bench 2026-10-20 and left for the owner's call.
+- Opened in the backlog from the 2026-10-19 bench and fleet incident, not in this release:
+  `HOST-16` (a CasHUB host or `terminal_id` change is not picked up by the running host service until
+  a restart or Request New Working Key) and `HOST-17` (Type 88 key downloads retried every few
+  seconds for as long as they keep failing).
+- Still open from 6.2.17: `HOST-15` (76 label), `ACCT-01` (credit card sent as checking).
+- `SND-01` silences the terminal's notification volume, which on this hardware is also the ring and
+  system-sound volume. Anything else Android plays on it is silent too; the app's own tones are not
+  on it. Whether the Castles PIN pad's key clicks use it was not heard either way on the bench (no
+  card transaction was run after the change): listen on the first bench transaction. The proper fix
+  is Castles' (service notifications on a low-priority channel); the parameter is the way back if a
+  site needs the sounds.
+
+### Verification
+
+- `ReceiptReprintTest` (17: the approved withdrawal slip pinned line for line against the original
+  receipt, 32-column fit, decline reason / code / neither, balance inquiry, reversal block, no-card
+  and missing-auth cases, both picker lines, and the picker's filter: cancelled and reversal rows
+  skipped, timeouts kept, 20-row cap, order preserved); `ReceiptMoneyBlockTest` +1 (the cents
+  overload prints the same block); `NotificationSoundsParamTest` (10: absent means silenced, true/1
+  and false/0, blank and non-boolean fall back to silenced with a logged problem, zero only when
+  audible, lift to 5 of 7 only when silent, describe). Full unit suite (`testMkskDebugUnitTest`,
+  JDK 17): 539 tests, 536 pass; the 3 failures are the pre-existing ones (`EmvTagEnhancerTest` ×2,
+  `HyosungProtocolTest.testProcessorConfigDns`).
+- **Bench (2026-10-20, debug build on the bench terminal):** ellipsis ▸ Reprint Receipt opened the
+  picker from the idle screen with no PIN; rows came up two lines each with dividers and no cancelled
+  rows; tapping an approved $10 withdrawal showed the confirm with its two lines; Print produced the
+  duplicate (printer service reported success, journal id logged). Not exercised: the Admin-card
+  button (same code path), the out-of-paper refusal, a balance-inquiry and a declined duplicate.
+- **Bench, SND-01 (2026-10-20):** the chime was traced first: the terminal's record of the last
+  notification that played a sound was the CasHUB agent's "Mqtt Service" notification, on a channel
+  using the system default tone. After installing this build the app logged `notification volume
+  3 → 0 of 7`; the index is persisted by Android (`volume_ring_speaker=0`), the ringer stayed in
+  normal mode (so no vibration fallback), the media volume the app's tones use was untouched, and an
+  app restart took the unchanged path. Not heard: the chime itself (no CasHUB update was pushed to
+  the bench) and the PIN pad.
+
+### Upgrade notes
+
+CasHUB plain-install push. No database change; the duplicate is built from rows the journal already
+keeps (6.2.11 onward), so transactions made before this update can be reprinted too. One new optional
+CasHUB parameter; nothing needs to be set for the chime to stop. The 6.2.18 upgrade notes apply as
+well, since this is the first release carrying SEC-05: `super_admin_pin` becomes optional (it overrides
+the built-in PIN when pushed) and build machines need `admin-pins.properties` for a release build.
+
+| Key | Default | Effect |
+|---|---|---|
+| `notification_sounds` | `false` (silenced) | `true`/`1` keeps the terminal's notification sounds on; `false`/`0` or absent silences them (the CasHUB update chime). Applied at every app start and parameter apply; `true` lifts a silenced terminal to 5 of 7. Blank or anything else is logged and treated as absent. `SND-01` |
+
+---
+
+## 6.2.18 — 2026-10-17 · Built-in Super Admin PIN until CasHUB pushes one (SEC-05) · base 6.2.17 · versionCode 80 · not released on its own: first shipped in 6.2.19
 
 Since 6.2.15 a terminal refused Admin until CasHUB had pushed `admin_pin` or `super_admin_pin`.
 With terminals now provisioned in volume, that dependency on a parameter push became a blocker:
