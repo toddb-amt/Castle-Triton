@@ -161,6 +161,11 @@ public final class CasHubParams {
         java.util.LinkedHashMap<String, String> merged = new java.util.LinkedHashMap<>();
         int rows = mergeRows(ctx, URI_TERMINAL, merged);
         rows += mergeRows(ctx, URI_MERCHANT, merged);
+        // notification_sounds (SND-01, 6.2.19) → the terminal's notification volume. Before the empty
+        // check on purpose: the default is silenced, parameters or not.
+        NotificationSoundsParam snd = NotificationSoundsParam.parse(merged);
+        if (snd.problem != null) Log.w(TAG, "CasHUB notification_sounds param not understood — " + snd.problem);
+        NotificationSoundsApplier.apply(ctx, snd);
         if (merged.isEmpty()) return new Applied(false, null, false);
 
         if (rows > 1) {
@@ -230,6 +235,7 @@ public final class CasHubParams {
             if (castech.emvtxn.net.ApnParams.KEYS.contains(e.getKey())) continue;
             if (castech.emvtxn.reporting.ReportingParams.KEYS.contains(e.getKey())) continue;
             if (TimeZoneParam.KEY.equals(e.getKey())) continue;
+            if (NotificationSoundsParam.KEY.equals(e.getKey())) continue;
             if (castech.emvtxn.admin.AdminPinParams.KEYS.contains(e.getKey())) continue;
             payload.append(e.getKey()).append('=').append(e.getValue()).append('\n');
         }

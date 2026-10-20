@@ -867,6 +867,11 @@ public class Fragment_page_admin_atm extends Fragment {
                 String tzLast = castech.emvtxn.TimeZoneApplier.lastResult();
                 if (tzLast.startsWith("failed")) sb.append(" — CasHUB time_zone ").append(tzLast);
                 sb.append("\n");
+                // SND-01: whether the CasHUB update chime is silenced on this terminal, without a cable
+                sb.append("Notification sounds: ").append(castech.emvtxn.NotificationSoundsApplier.currentSummary(ctx));
+                String sndLast = castech.emvtxn.NotificationSoundsApplier.lastResult();
+                if (sndLast.startsWith("failed")) sb.append(" — ").append(sndLast);
+                sb.append("\n");
 
                 // Cellular
                 android.telephony.TelephonyManager tm = (android.telephony.TelephonyManager) ctx.getSystemService(Context.TELEPHONY_SERVICE);
