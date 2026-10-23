@@ -48,6 +48,179 @@ Template:
 
 ---
 
+## 6.2.20 — 2026-10-22 · Tender Amount and Change Due on the approval screen for unintegrated stores (TNDR-01) · amount typed from the cents, presets as shortcuts (AMT-04) · suggested tips set from CasHUB (TIP-02) · a decline always prints its reason (RCPT-03, HOST-15) · IMEI on the Admin Network card (ADM-10) · base 6.2.19 · versionCode 82
+
+Partner feedback after the Jushi go-live call (2026-10-21). A store that is not integrated with its
+POS and has tips on keys a "tender" into the register after each sale: the original sale plus the
+change the customer takes away, the tip excluded. The register expected the sale, sees the tender,
+and asks for exactly that change; the tip stays with the staff instead of going back to the customer
+as change. Until now the approval screen showed only the ATM figures, so the clerk had to work the
+tender out by hand. Their staff also type exact, unrounded amounts for every sale, and typing the
+decimal point on the custom-amount dialog, or picking a preset by mistake, caused errors.
+
+Three changes, all on screens that already existed. Nothing printed changes: the customer's slip is
+still the ATM receipt (owner decision 2026-10-22). One amount screen serves every merchant; a merchant
+without tips simply never sees the tip screen.
+
+### What operators and customers will notice
+
+- **The amount screen opens on entry.** A large $0.00 with a keypad under it; digits fill from the
+  cents, the way the Ingenico terminals the partner's merchants know do it, so 2, 1, 3, 5, 2 reads
+  $0.02, $0.21, $2.13, $21.35, $213.52 and no decimal point is ever typed. Backspace drops the last
+  digit, Clear starts over. The presets ($10 to $200) are a row of small chips under the keypad that
+  drop their amount into the same field; a mis-tapped chip followed by typing starts a fresh amount.
+  Continue works the same from either path. Check Balance, Cancel and Continue are where they were.
+  The custom-amount dialog is gone.
+- **Nothing rounds on that screen.** The field holds what was typed, the sale. With tips off a line
+  under the amount shows live what it becomes: `Withdrawal $60.00  ·  Fee $3.50  ·  Total $63.50`,
+  so the step rounding is visible before Continue without a toast. With tips on that line stays
+  blank: the tip screen shows the sale, and the card screen shows the withdrawal, fee and total after
+  the tip, as before. A preset untouched is still charged exactly as its chip says.
+- **The approval screen shows the merchant block** for an approved walk-up whose amount came with a
+  tip or produced change: Sale, Tip and Sale + Tip above the ATM rows, then Withdrawal Amount, Service
+  Fee and Total Charged as before, then **Tender Amount** and **Change Due**. The partner's example:
+  sale $53.50, tip $5.00, withdrawal $60.00, fee $3.50, total $63.50, change due $1.50, tender $55.00.
+  With no tip the Tip and Sale + Tip rows are left out. The screen stays 60 seconds instead of 30
+  while the block is shown; Done still ends it at once. A plain preset withdrawal, a declined
+  transaction, a balance inquiry and a POS-integrated sale show the same rows as before. The screen's
+  header is more compact (smaller check mark and title, shorter buttons) so the whole card fits
+  above the buttons with the new rows; should it ever not fit, the card scrolls instead of sliding
+  under them (the first bench approval on 2026-10-22 had the buttons covering the card's last rows).
+- **Reprint Receipt's picker** shows the same two figures on its second line for those rows
+  (`APPROVED · Tender $55.00 · Change $1.50`), so a clerk who turned to the register and lost the
+  number can look it up from the ellipsis without a PIN. The duplicate slip itself is unchanged.
+- **A declined slip always says why.** When the processor sends a decline with no message, the
+  slip and the screen now show the code's description instead of a blank `Reason:` line (found on
+  the bench with a 76 on 2026-10-22). A 76 reads `PIN key sync`, which is what it is: the first PIN
+  after the session key has aged out, re-synced by the app at once; it used to read "Invalid
+  account". Unknown codes read `Declined (code NN)`.
+- **Admin ▸ Network shows the terminal's IMEI** (`IMEI: 490154203237518` style, 15 digits as on the
+  device label), with or without a SIM, so SIM orders and carrier tickets no longer need a cable or the
+  box. A unit without a modem reads `IMEI: not available`.
+- **The three suggested tips come from CasHUB.** New key `tip_presets`: three percentages
+  (`10,15,20`, the default, or `5,10,20`, `15,18,20`) or three dollar amounts (`$1,$5,$10`, cents
+  allowed as `$2.50`). The tip screen labels the buttons accordingly, No Tip and Custom Amount stay,
+  and the withdrawal-limit greying works per option as before. Admin ▸ fee card reads
+  `Tips: on (10%, 15%, 20%)` so support can see what is live without a cable.
+
+### Fixes
+
+**Amount screen** · Exact amounts needed a dialog and a typed decimal point; presets led the screen
+(`AMT-04`). `CentsEntry` (pure Java: the digit-shift entry, backspace, clear, preset fill, six-digit
+cap) and `EntryPreview` (the live line, blank with tips on, never throws) drive the rewritten
+`Fragment_page_amount_selection` and its layout; two button styles in `styles.xml`. Physical digit,
+backspace and enter keys are accepted when the terminal delivers them as key events.
+
+**Approval screen** · No tender figure for unintegrated stores (`TNDR-01`). `TenderSummary` (pure
+Java: sale + tip, change due, tender, and the rule for when the block shows, from a breakdown or a
+journal row) feeds `Fragment_page_receipt` and its layout (rows hidden unless they apply) and
+`ReceiptReprint.pickerLine2`. `GlobalPara.atmRegisterSale`, set by `pos/PosTransactionExecutor` and
+cleared with the transaction state, tells a register sale from a walk-up; the clerk id alone is
+optional on the wire.
+
+**Tips** · Suggested percentages were fixed at 10, 15, 20 (`TIP-02`). `TipPresets` (pure Java:
+parse, labels, tip per option, Admin and parameter forms); `TipQuote` builds its options from the
+presets and each option carries its `label`; `KmsConfigStore` applies `tip_presets` like the other
+keys (invalid value logged with the reason, previous value kept) and carries it in the KMS-II
+backup; `GlobalPara.atmTipPresets`; the tip screen, the amount screen and the POS gateway pass the
+configured presets.
+
+**Receipt** · A decline with a blank host message printed `Reason:` and nothing after it, on the slip
+and in the decline box, and the journal kept the blank (`RCPT-03`). `DeclineReason` (pure Java: the
+host's message only when it says something, else the code's description) is applied once in
+`MainActivity.onTransactionDeclined`, so the screen, the slip, the journal row, the reprint and the push
+all carry the same text; the receipt fragment's private code table now delegates to it. The 76 label
+in both tables is `PIN key sync` (`HOST-15`).
+
+**Admin** · No way to read the IMEI on the terminal (`ADM-10`, owner request 2026-10-22). Android 10+
+denies the IMEI to apps, but Castles' telephony service (`CTOS.CtTelephony`, in the SDK, unused until now)
+returns it. `TerminalImei` reads it once, off the UI thread, never throws, caches it; `Imei` (pure Java)
+appends the Luhn check digit because this modem reports the 14-digit form, and the card shows the
+15-digit form the label carries. A warm-up read runs at app start on a worker thread.
+
+### Security / PCI
+
+- The merchant block puts the sale, tip, tender and change on the approval screen for up to 60
+  seconds. It carries no card data beyond the last four digits the screen already showed, and nothing
+  new is printed or journaled.
+- The IMEI is a device identifier, not cardholder data; it is shown only behind the Admin PIN and is
+  logged masked (type allocation code and stars). Owner's call 2026-10-22: not a security concern.
+
+### Known issues and deferred
+
+- The journal has no register-sale column; the Reprint picker decides by the clerk id, so a register
+  sale pushed without a clerk id would show a tender line in the picker. The approval screen uses the
+  new in-memory flag and is exact. A journal column can follow if it matters.
+- Not exercised on the bench: the merchant block and the 60-second timeout (both need a card
+  transaction), dollar presets on the tip screen (no CasHUB push to the bench), the physical keypad
+  (the bench was driven by touch).
+- Opened for 6.2.21: `BATCH-01`, an optional automatic batch close at a configured local time
+  (partner request; design in the backlog). Still open: `HOST-16`, `HOST-17`, `ACCT-01`, `RPT-03`,
+  `MSR-02`, `MSR-03`, `POS-16`; View Transaction History spacing.
+- Seen twice on the bench (2026-10-21 and 2026-10-22): the first transaction after the MKSK session
+  key's four-hour validity has lapsed is declined 76 and the app re-syncs the key afterwards, so the
+  retry approves. A proactive refresh before the first PIN would spare that customer; candidate
+  `HOST-18`, not in this release.
+
+### Verification
+
+- `CentsEntryTest` (12: the partner's 2-1-3-5-2 example, grouping, leading zeros, backspace, clear,
+  six-digit cap, bad digits, preset fill, typing after a preset starts over, backspace after a preset
+  edits it, clamping); `TipPresetsTest` (7: default, percentages with and without the sign, dollar
+  amounts with cents, tip per option, round trip, thirteen refused forms, null); `TenderSummaryTest`
+  (6: the email example, the Ingenico screen, no tip, when the block applies, from a journal row,
+  when not); `TipQuotePresetsTest` (5: dollar presets, custom percentages, a dollar preset over the
+  limit disabled, the old overload means the defaults, offer uses the presets);
+  `KmsConfigStoreTipPresetsTest` (4); `EntryPreviewTest` (5: tips off, preset not rounded, percentage
+  fee, tips on or nothing typed, bad fee); `ReceiptReprintTenderTest` (2); `ImeiTest` (6: the check digit on two 14-digit
+  forms, 15 digits untouched, separators ignored, non-IMEI text untouched, masking); `DeclineReasonTest` (5:
+  blank, empty and null host messages fall back to the code, a real message is used trimmed, unknown
+  codes, nothing at all, the table in sentence case). Full unit suite (`testMkskDebugUnitTest`,
+  JDK 17): 591 tests, 588 pass; the 3 failures are the pre-existing ones (`EmvTagEnhancerTest` ×2,
+  `HyosungProtocolTest.testProcessorConfigDns`).
+- **Bench (2026-10-22, debug build on the bench terminal, tips on, min $10, max $500):** the amount
+  screen fits the 720x1600 display with room to spare; typing 2, 1, 3, 5, 2 showed $213.52 and
+  enabled Continue; backspace gave $21.35; the $20 chip gave $20.00 and typing 5 after it gave $0.05;
+  Clear gave $0.00 and disabled Continue; the preview line stayed blank with tips on; typing 53.50
+  and Continue reached the tip screen reading `Sale  $53.50` with 10% $5.35, 15% $8.03, 20% $10.70;
+  Cancel returned to the menu. The keypad's bottom row was found misaligned by text baseline and
+  fixed before this build. The owner's first live transaction (contactless, sale $5.50 typed, 10% tip)
+  was declined 76 by the processor and showed the plain decline screen, as designed; its journal row
+  carried sale $5.50, tip $0.55, withdrawal $10.00, cash back $3.95, fee $1.00, total $11.00, the
+  figures the merchant block will show on an approval. That slip exposed `RCPT-03`. The owner's second
+  transaction approved: the approval screen showed the block and held 60 s, but the 80sp check mark and
+  70dp buttons pushed the card's last rows under the buttons; the header and paddings were tightened
+  and the card made to scroll in its frame if it ever overflows.
+- **Bench, staged previews (2026-10-22):** debug builds now accept an adb broadcast
+  (`DebugReceiptPreview`, `castech.emvtxn.DEBUG_PREVIEW_RECEIPT`, extras `sale`, `tip` (0 unless given,
+  ignored when tips are off on the terminal), `approved`, `code`, `msg`, `register`, `preset`) that opens the approval screen with a staged result, auto-print
+  suppressed, nothing journaled or pushed, so the layout can be checked without a paid transaction.
+  The release APK does not register it. Checked this way on the bench: the approval with the tender
+  block plus auth and reference rows ends about 85dp above the Print button; the declined 76 with a
+  whitespace host message shows `PIN KEY SYNC` and `Response Code: 76` in the decline box and no tender
+  rows; the journal row count did not move across either preview. The hook's first version staged
+  the result through `applyAmounts`, which put the card page (the pager's neighbour) in ATM mode and
+  its auto-start armed the reader: one stray poll on the bench ended in a journaled, pushed
+  `Contactless read error` decline (row 49, 08:53). The preview now sets the breakdown without the
+  ATM-mode mirrors and the card page's auto-start is also guarded by `atmPreview`; re-verified: previews
+  from idle and from the menu start no transaction thread, a real withdrawal still does.
+- **Bench, IMEI (2026-10-22):** the startup read through Castles' telephony service returned the
+  bench unit's IMEI at once (logged masked); the same value the shell's telephony query gives, 14 digits
+  from the modem, shown as 15 on the card. The Admin card itself is behind the PIN, so the owner sees
+  the line; the read path is what was verified.
+
+### Upgrade notes
+
+CasHUB plain-install push. No database change; nothing needs to be set. The amount screen changes for
+every merchant: staff type the exact amount in cents (no decimal point) or tap a chip; there is no
+Custom Amount button any more. One new optional CasHUB parameter.
+
+| Key | Default | Effect |
+|---|---|---|
+| `tip_presets` | `10,15,20` | The three suggested tips on the tip screen, left to right. Bare whole numbers are percentages of the sale (`5,10,20`); a leading `$` makes them fixed amounts (`$1,$5,$10`, `$2.50` allowed). Exactly three of one kind; anything else is logged and the previous value kept. Only matters with `tips_enabled=true`. |
+
+---
+
 ## 6.2.19 — 2026-10-20 · Reprint Receipt on the ellipsis menu and the Admin history card (RCPT-02) · Android app name and icon are now Castle (BRAND-01) · the CasHUB update chime is silenced (SND-01) · built-in Super Admin PIN (SEC-05, built as 6.2.18, first shipped here) · base 6.2.18 · versionCode 81
 
 Until now a customer's receipt could only be printed while the receipt screen was still up. Once
