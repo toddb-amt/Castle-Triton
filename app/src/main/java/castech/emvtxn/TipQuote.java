@@ -9,25 +9,29 @@ import java.util.List;
  *
  * <p>Built from the NO-TIP breakdown the caller already has — a preset's exact amount, a custom
  * entry already rounded, or a register sale — so "No Tip" keeps exactly what the customer saw.
+ * The three options come from {@link TipPresets} (TIP-02, 6.2.20): percentages of the sale or
+ * fixed dollar amounts; the overloads without presets mean {@link TipPresets#DEFAULT}.
  * Every tipped option is {@code AmountBreakdown.of(sale, tip, step, roundToStep = true, fee…)}:
  * the tip changed the amount, so it rounds to the step (6.2.13 review C1 only protects a preset
  * on its own). The maximum applies to the withdrawal (T6).
  */
 public final class TipQuote {
 
-    public static final int[] PERCENTS = {10, 15, 20};
     public static final String TOO_SMALL = "TOO_SMALL";
     public static final String OVER_LIMIT = "OVER_LIMIT";
 
     public static final class Option {
+        /** The button text: "15%" or "$5". */
+        public final String label;
+        /** The percentage; 0 for a dollar preset. */
         public final int percent;
         public final long tipCents;
         public final AmountBreakdown amounts;
         public final boolean enabled;
         /** Shown beneath a disabled button; "" when enabled. */
         public final String reasonIfDisabled;
-        Option(int percent, long tipCents, AmountBreakdown amounts, boolean enabled, String reason) {
-            this.percent = percent; this.tipCents = tipCents; this.amounts = amounts;
+        Option(String label, int percent, long tipCents, AmountBreakdown amounts, boolean enabled, String reason) {
+            this.label = label; this.percent = percent; this.tipCents = tipCents; this.amounts = amounts;
             this.enabled = enabled; this.reasonIfDisabled = reason;
         }
     }
@@ -80,20 +84,28 @@ public final class TipQuote {
         return (saleCents * percent + 50) / 100;
     }
 
+    /** The default presets (10%, 15%, 20%). */
     public static TipQuote of(AmountBreakdown noTip, long stepCents, long maxWithdrawalCents,
                               boolean useFlatFee, double flatFeeDollars, double percentFee) {
+        return of(noTip, TipPresets.DEFAULT, stepCents, maxWithdrawalCents, useFlatFee, flatFeeDollars, percentFee);
+    }
+
+    public static TipQuote of(AmountBreakdown noTip, TipPresets presets, long stepCents, long maxWithdrawalCents,
+                              boolean useFlatFee, double flatFeeDollars, double percentFee) {
+        if (presets == null) presets = TipPresets.DEFAULT;
         long sale = noTip.sale;
         long limit = sale <= 0 ? 0 : Math.max(0, largestReachableWithdrawal(maxWithdrawalCents, stepCents) - sale);
-        List<Option> opts = new ArrayList<>(PERCENTS.length);
-        for (int pct : PERCENTS) {
-            long tip = sale <= 0 ? 0 : percentOf(sale, pct);
+        List<Option> opts = new ArrayList<>(presets.size());
+        for (int i = 0; i < presets.size(); i++) {
+            long tip = sale <= 0 ? 0 : presets.tipFor(sale, i);
             AmountBreakdown a = null;
             boolean enabled = false;
             if (sale > 0 && tip > 0) {
                 a = AmountBreakdown.of(sale, tip, stepCents, true, useFlatFee, flatFeeDollars, percentFee);
                 enabled = a.withdrawal <= maxWithdrawalCents;
             }
-            opts.add(new Option(pct, tip, a, enabled, enabled ? "" : "Over $" + shortDollars(maxWithdrawalCents) + " limit"));
+            opts.add(new Option(presets.label(i), presets.percent(i), tip, a, enabled,
+                    enabled ? "" : "Over $" + shortDollars(maxWithdrawalCents) + " limit"));
         }
         return new TipQuote(noTip, opts, limit, maxWithdrawalCents, stepCents, useFlatFee, flatFeeDollars, percentFee);
     }
@@ -101,8 +113,15 @@ public final class TipQuote {
     /** The one decision the two flows make: show the tip screen or go straight to the card (T1, T2, T6). */
     public static boolean offer(boolean tipsEnabled, boolean balanceInquiry, AmountBreakdown noTip, long stepCents,
                                 long maxWithdrawalCents, boolean useFlatFee, double flatFeeDollars, double percentFee) {
+        return offer(tipsEnabled, balanceInquiry, noTip, TipPresets.DEFAULT, stepCents, maxWithdrawalCents,
+                useFlatFee, flatFeeDollars, percentFee);
+    }
+
+    public static boolean offer(boolean tipsEnabled, boolean balanceInquiry, AmountBreakdown noTip, TipPresets presets,
+                                long stepCents, long maxWithdrawalCents, boolean useFlatFee, double flatFeeDollars,
+                                double percentFee) {
         if (!tipsEnabled || balanceInquiry || noTip == null || noTip.sale <= 0) return false;
-        return !of(noTip, stepCents, maxWithdrawalCents, useFlatFee, flatFeeDollars, percentFee).skipScreen;
+        return !of(noTip, presets, stepCents, maxWithdrawalCents, useFlatFee, flatFeeDollars, percentFee).skipScreen;
     }
 
     /** Validates a custom tip (T7): ≥ 1 cent, withdrawal within the maximum; flags tip > sale. */

@@ -772,7 +772,7 @@ public class Fragment_page_admin_atm extends Fragment {
                     ? "Flat fee: $" + Money.dollars(Money.toCents(GlobalPara.atmFlatFeeAmount))
                     : "Percentage fee: " + String.format(java.util.Locale.US, "%.2f", GlobalPara.atmPercentageFee) + " %";
             castech.emvtxn.admin.AdminPinStore pinStore = getContext() != null ? new castech.emvtxn.admin.AdminPinStore(getContext()) : null;
-            txvFeeConfig.setText(fee + "\nTips: " + (GlobalPara.atmTipsEnabled ? "on" : "off")
+            txvFeeConfig.setText(fee + "\nTips: " + (GlobalPara.atmTipsEnabled ? "on (" + GlobalPara.atmTipPresets.describe() + ")" : "off")
                     + "  ·  Swipe: " + (GlobalPara.atmSwipeEnabled ? "on" : "off")
                     + "\nMerchant Admin PIN: " + (pinStore != null && pinStore.isAdminConfigured() ? "from CasHUB" : "NOT pushed")
                     + "  ·  Super PIN: " + superPinLabel(pinStore));

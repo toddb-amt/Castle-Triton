@@ -104,8 +104,9 @@ public class Fragment_page_tip extends Fragment {
             goToCard();
             return;
         }
-        quote = TipQuote.of(noTip, Money.toCents(GlobalPara.atmMinAmount), Money.toCents(GlobalPara.atmMaxAmount),
-                GlobalPara.atmUseFlatFee, GlobalPara.atmFlatFeeAmount, GlobalPara.atmPercentageFee);
+        quote = TipQuote.of(noTip, GlobalPara.atmTipPresets, Money.toCents(GlobalPara.atmMinAmount),
+                Money.toCents(GlobalPara.atmMaxAmount), GlobalPara.atmUseFlatFee, GlobalPara.atmFlatFeeAmount,
+                GlobalPara.atmPercentageFee);
         guard.onShown();
         render();
         restartTimer();
@@ -127,13 +128,17 @@ public class Fragment_page_tip extends Fragment {
         txvSale.setText("Sale  " + currency.format(quote.noTip.sale / 100.0));
         for (int i = 0; i < 3; i++) {
             TipQuote.Option o = quote.options.get(i);
-            // Percent large, dollars smaller on the second line: "$49.00" at 24 sp did not fit the button
-            String pct = o.percent + "%";
-            String dollars = currency.format(o.tipCents / 100.0);
-            android.text.SpannableString label = new android.text.SpannableString(pct + "\n" + dollars);
-            label.setSpan(new android.text.style.RelativeSizeSpan(0.75f), pct.length() + 1, label.length(),
-                    android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-            pctButtons[i].setText(label);
+            // TIP-02: the label comes from the presets. A percentage shows its dollars smaller on a
+            // second line ("$49.00" at 24 sp did not fit the button); a dollar preset IS the amount.
+            if (o.percent > 0) {
+                String dollars = currency.format(o.tipCents / 100.0);
+                android.text.SpannableString label = new android.text.SpannableString(o.label + "\n" + dollars);
+                label.setSpan(new android.text.style.RelativeSizeSpan(0.75f), o.label.length() + 1, label.length(),
+                        android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                pctButtons[i].setText(label);
+            } else {
+                pctButtons[i].setText(o.label);
+            }
             pctButtons[i].setEnabled(o.enabled);
             pctButtons[i].setAlpha(o.enabled ? 1f : 0.4f);
             pctReasons[i].setText(o.reasonIfDisabled);

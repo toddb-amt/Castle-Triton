@@ -54,6 +54,7 @@ public final class KmsConfigStore {
                     "protocol_type="  + nz(GlobalPara.atmProtocolType)   + "\n" +
                     "use_flat_fee="   + GlobalPara.atmUseFlatFee         + "\n" +
                     "tips_enabled="   + GlobalPara.atmTipsEnabled        + "\n" +
+                    "tip_presets="    + GlobalPara.atmTipPresets.toParam() + "\n" +
                     "swipe_enabled="  + GlobalPara.atmSwipeEnabled       + "\n" +
                     "flat_fee="       + GlobalPara.atmFlatFeeAmount      + "\n" +
                     "percentage_fee=" + GlobalPara.atmPercentageFee      + "\n" +
@@ -147,6 +148,7 @@ public final class KmsConfigStore {
                     case "protocol_type":  GlobalPara.atmProtocolType = v; break;
                     case "use_flat_fee":   GlobalPara.atmUseFlatFee = Boolean.parseBoolean(v.trim()); break;
                     case "tips_enabled":   GlobalPara.atmTipsEnabled = parseBool(k, v, GlobalPara.atmTipsEnabled); break;
+                    case "tip_presets":    GlobalPara.atmTipPresets = tipPresets(k, v, GlobalPara.atmTipPresets); break;
                     case "swipe_enabled":  GlobalPara.atmSwipeEnabled = parseBool(k, v, GlobalPara.atmSwipeEnabled); break;
                     // Money values must be >= 0: AmountBreakdown refuses a negative fee loudly, so a
                     // negative value here would end every transaction (6.2.13 review I4). Keep the
@@ -170,6 +172,16 @@ public final class KmsConfigStore {
         if (t.equals("false") || t.equals("0")) return false;
         Log.w(TAG, "Config " + key + "=" + raw.trim() + " rejected (not a boolean) — keeping " + current);
         return current;
+    }
+
+    /** TIP-02: three percentages or three dollar amounts; anything else is logged with the reason and the current value kept. */
+    private static TipPresets tipPresets(String key, String raw, TipPresets current) {
+        try {
+            return TipPresets.parse(raw);
+        } catch (IllegalArgumentException bad) {
+            Log.w(TAG, "Config " + key + "=" + raw.trim() + " rejected (" + bad.getMessage() + ") — keeping " + current.toParam());
+            return current;
+        }
     }
 
     /** Parses a money/limit value; a negative (or unparsable) value is logged and the current value kept. */

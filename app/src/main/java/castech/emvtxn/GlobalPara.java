@@ -129,6 +129,8 @@ public class GlobalPara
 	public static boolean atmUseFlatFee = true;
 	/** TIP-01 (6.2.14): CasHUB `tips_enabled`. Off → the tip screen is not in either flow, tip is always 0. */
 	public static volatile boolean atmTipsEnabled = false;
+	/** TIP-02 (6.2.20): the three suggested tips, from CasHUB {@code tip_presets}; 10%, 15%, 20% unless pushed. */
+	public static volatile TipPresets atmTipPresets = TipPresets.DEFAULT;
 	/** MSR-01 (6.2.14): CasHUB `swipe_enabled`, default ON. Off → every swipe is refused at the terminal. */
 	public static volatile boolean atmSwipeEnabled = true;
 	public static double atmFlatFeeAmount = 3.00;
