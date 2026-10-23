@@ -225,7 +225,8 @@ public final class AtmHostServiceGateway implements PosTerminalGateway {
         // transaction page, which auto-starts card detection. The POS slot is armed either way;
         // Cancel on the tip screen answers user_cancelled through it, the watchdog covers it.
         final boolean tip = castech.emvtxn.TipQuote.offer(GlobalPara.atmTipsEnabled, balanceInquiry, amounts,
-                castech.emvtxn.Money.toCents(GlobalPara.atmMinAmount), castech.emvtxn.Money.toCents(GlobalPara.atmMaxAmount),
+                GlobalPara.atmTipPresets, castech.emvtxn.Money.toCents(GlobalPara.atmMinAmount),
+                castech.emvtxn.Money.toCents(GlobalPara.atmMaxAmount),
                 GlobalPara.atmUseFlatFee, GlobalPara.atmFlatFeeAmount, GlobalPara.atmPercentageFee);
         ui.runOnUi(tip ? ui::navigateToTipPage : ui::navigateToTransactionPage);
     }

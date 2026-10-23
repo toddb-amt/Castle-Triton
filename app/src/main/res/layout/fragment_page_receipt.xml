@@ -9,7 +9,7 @@
     android:paddingBottom="@dimen/activity_vertical_margin"
     android:paddingLeft="@dimen/activity_horizontal_margin"
     android:paddingRight="@dimen/activity_horizontal_margin"
-    android:paddingTop="@dimen/activity_vertical_margin"
+    android:paddingTop="8dp"
     android:background="#FFFFFF">
 
     <!-- Success/Failure Icon Area -->
@@ -18,10 +18,10 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:text="✓"
-        android:textSize="80sp"
+        android:textSize="40sp"
         android:textStyle="bold"
         android:textColor="#4CAF50"
-        android:layout_marginTop="24dp"
+        android:layout_marginTop="0dp"
         app:layout_constraintTop_toTopOf="parent"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent"/>
@@ -32,10 +32,10 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:text=""
-        android:textSize="28sp"
+        android:textSize="22sp"
         android:textStyle="bold"
         android:textColor="#4CAF50"
-        android:layout_marginTop="16dp"
+        android:layout_marginTop="0dp"
         app:layout_constraintTop_toBottomOf="@+id/txvResultIcon"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent"/>
@@ -45,12 +45,12 @@
         android:id="@+id/layoutDeclineReason"
         android:layout_width="0dp"
         android:layout_height="wrap_content"
-        android:layout_marginTop="16dp"
+        android:layout_marginTop="8dp"
         android:layout_marginStart="24dp"
         android:layout_marginEnd="24dp"
         android:orientation="vertical"
         android:background="#FFEBEE"
-        android:padding="16dp"
+        android:padding="10dp"
         android:visibility="gone"
         app:layout_constraintTop_toBottomOf="@+id/txvResultMessage"
         app:layout_constraintStart_toStartOf="parent"
@@ -89,22 +89,123 @@
 
     </LinearLayout>
 
-    <!-- Transaction Summary Card -->
-    <androidx.constraintlayout.widget.ConstraintLayout
-        android:id="@+id/layoutSummary"
+    <!-- Transaction Summary Card. 6.2.20: sits between the title and the buttons; wraps when it
+         fits and scrolls when it does not (declined box, tender rows, auth and ref), so no row can
+         ever hide under the buttons. -->
+    <ScrollView
+        android:id="@+id/scrollSummary"
         android:layout_width="0dp"
         android:layout_height="wrap_content"
-        android:layout_marginTop="16dp"
+        android:layout_marginTop="8dp"
+        android:layout_marginBottom="8dp"
         android:layout_marginStart="16dp"
         android:layout_marginEnd="16dp"
         android:background="@drawable/shape"
-        android:padding="20dp"
+        android:fillViewport="false"
+        android:scrollbars="vertical"
+        app:layout_constrainedHeight="true"
+        app:layout_constraintVertical_bias="0"
         app:layout_constraintTop_toBottomOf="@+id/layoutDeclineReason"
+        app:layout_constraintBottom_toTopOf="@+id/btnPrintReceipt"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent">
 
-        <!-- Withdrawal Amount. RCPT-01 (6.2.16): the receipt shows only the ATM transaction;
-             the 6.2.14 Sale / Tip / Cash Back rows are gone. -->
+    <androidx.constraintlayout.widget.ConstraintLayout
+        android:id="@+id/layoutSummary"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingStart="14dp"
+        android:paddingEnd="14dp"
+        android:paddingTop="10dp"
+        android:paddingBottom="10dp">
+
+        <!-- TNDR-01 (6.2.20): merchant rows for an unintegrated store. Hidden unless the approved
+             walk-up had a tip or produced change; never printed. -->
+        <TextView
+            android:id="@+id/txvSaleLabel"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Sale:"
+            android:textSize="16sp"
+            android:textColor="#666666"
+            android:layout_marginTop="0dp"
+            android:visibility="gone"
+            app:layout_constraintTop_toTopOf="parent"
+            app:layout_constraintStart_toStartOf="parent"/>
+
+        <TextView
+            android:id="@+id/txvSaleAmount"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="$0.00"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:textColor="#000000"
+            android:visibility="gone"
+            app:layout_constraintTop_toTopOf="@+id/txvSaleLabel"
+            app:layout_constraintEnd_toEndOf="parent"/>
+
+        <TextView
+            android:id="@+id/txvTipLabel"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Tip:"
+            android:textSize="16sp"
+            android:textColor="#666666"
+            android:layout_marginTop="4dp"
+            android:visibility="gone"
+            app:layout_constraintTop_toBottomOf="@+id/txvSaleLabel"
+            app:layout_constraintStart_toStartOf="parent"/>
+
+        <TextView
+            android:id="@+id/txvTipAmount"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="$0.00"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:textColor="#000000"
+            android:visibility="gone"
+            app:layout_constraintTop_toTopOf="@+id/txvTipLabel"
+            app:layout_constraintEnd_toEndOf="parent"/>
+
+        <TextView
+            android:id="@+id/txvDueLabel"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Sale + Tip:"
+            android:textSize="16sp"
+            android:textColor="#666666"
+            android:layout_marginTop="4dp"
+            android:visibility="gone"
+            app:layout_constraintTop_toBottomOf="@+id/txvTipLabel"
+            app:layout_constraintStart_toStartOf="parent"/>
+
+        <TextView
+            android:id="@+id/txvDueAmount"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="$0.00"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:textColor="#000000"
+            android:visibility="gone"
+            app:layout_constraintTop_toTopOf="@+id/txvDueLabel"
+            app:layout_constraintEnd_toEndOf="parent"/>
+
+        <View
+            android:id="@+id/dividerTender"
+            android:layout_width="0dp"
+            android:layout_height="1dp"
+            android:background="#CCCCCC"
+            android:layout_marginTop="8dp"
+            android:visibility="gone"
+            app:layout_constraintTop_toBottomOf="@+id/txvDueLabel"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintEnd_toEndOf="parent"/>
+
+        <!-- Withdrawal Amount. RCPT-01 (6.2.16): the printed receipt shows only the ATM transaction;
+             the merchant rows above are screen-only (TNDR-01). -->
         <TextView
             android:id="@+id/txvWithdrawalLabel"
             android:layout_width="wrap_content"
@@ -112,7 +213,9 @@
             android:text="Withdrawal Amount:"
             android:textSize="16sp"
             android:textColor="#666666"
-            app:layout_constraintTop_toTopOf="parent"
+            android:layout_marginTop="8dp"
+            app:layout_goneMarginTop="0dp"
+            app:layout_constraintTop_toBottomOf="@+id/dividerTender"
             app:layout_constraintStart_toStartOf="parent"/>
 
         <TextView
@@ -134,7 +237,7 @@
             android:text="Service Fee:"
             android:textSize="16sp"
             android:textColor="#666666"
-            android:layout_marginTop="8dp"
+            android:layout_marginTop="4dp"
             app:layout_constraintTop_toBottomOf="@+id/txvWithdrawalLabel"
             app:layout_constraintStart_toStartOf="parent"/>
 
@@ -155,8 +258,8 @@
             android:layout_width="0dp"
             android:layout_height="1dp"
             android:background="#CCCCCC"
-            android:layout_marginTop="12dp"
-            android:layout_marginBottom="12dp"
+            android:layout_marginTop="8dp"
+            android:layout_marginBottom="8dp"
             app:layout_constraintTop_toBottomOf="@+id/txvFeeLabel"
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintEnd_toEndOf="parent"/>
@@ -170,7 +273,7 @@
             android:textSize="18sp"
             android:textStyle="bold"
             android:textColor="#000000"
-            android:layout_marginTop="12dp"
+            android:layout_marginTop="8dp"
             app:layout_constraintTop_toBottomOf="@+id/divider1"
             app:layout_constraintStart_toStartOf="parent"/>
 
@@ -185,6 +288,56 @@
             app:layout_constraintTop_toTopOf="@+id/txvTotalLabel"
             app:layout_constraintEnd_toEndOf="parent"/>
 
+        <TextView
+            android:id="@+id/txvTenderLabel"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Tender Amount:"
+            android:textSize="18sp"
+            android:textStyle="bold"
+            android:textColor="#000000"
+            android:layout_marginTop="8dp"
+            android:visibility="gone"
+            app:layout_constraintTop_toBottomOf="@+id/txvTotalLabel"
+            app:layout_constraintStart_toStartOf="parent"/>
+
+        <TextView
+            android:id="@+id/txvTenderAmount"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="$0.00"
+            android:textSize="20sp"
+            android:textStyle="bold"
+            android:textColor="@color/colorPrimary"
+            android:visibility="gone"
+            app:layout_constraintTop_toTopOf="@+id/txvTenderLabel"
+            app:layout_constraintEnd_toEndOf="parent"/>
+
+        <TextView
+            android:id="@+id/txvChangeLabel"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Change Due:"
+            android:textSize="18sp"
+            android:textStyle="bold"
+            android:textColor="#000000"
+            android:layout_marginTop="4dp"
+            android:visibility="gone"
+            app:layout_constraintTop_toBottomOf="@+id/txvTenderLabel"
+            app:layout_constraintStart_toStartOf="parent"/>
+
+        <TextView
+            android:id="@+id/txvChangeAmount"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="$0.00"
+            android:textSize="20sp"
+            android:textStyle="bold"
+            android:textColor="@color/colorPrimary"
+            android:visibility="gone"
+            app:layout_constraintTop_toTopOf="@+id/txvChangeLabel"
+            app:layout_constraintEnd_toEndOf="parent"/>
+
         <!-- Card Info -->
         <TextView
             android:id="@+id/txvCardLabel"
@@ -193,8 +346,9 @@
             android:text="Card:"
             android:textSize="14sp"
             android:textColor="#666666"
-            android:layout_marginTop="16dp"
-            app:layout_constraintTop_toBottomOf="@+id/txvTotalLabel"
+            android:layout_marginTop="10dp"
+            app:layout_goneMarginTop="10dp"
+            app:layout_constraintTop_toBottomOf="@+id/txvChangeLabel"
             app:layout_constraintStart_toStartOf="parent"/>
 
         <TextView
@@ -215,7 +369,7 @@
             android:text="Date/Time:"
             android:textSize="14sp"
             android:textColor="#666666"
-            android:layout_marginTop="8dp"
+            android:layout_marginTop="4dp"
             app:layout_constraintTop_toBottomOf="@+id/txvCardLabel"
             app:layout_constraintStart_toStartOf="parent"/>
 
@@ -237,7 +391,7 @@
             android:text="Transaction ID:"
             android:textSize="14sp"
             android:textColor="#666666"
-            android:layout_marginTop="8dp"
+            android:layout_marginTop="4dp"
             app:layout_constraintTop_toBottomOf="@+id/txvDateTimeLabel"
             app:layout_constraintStart_toStartOf="parent"/>
 
@@ -262,7 +416,7 @@
             android:text="Auth Code:"
             android:textSize="14sp"
             android:textColor="#666666"
-            android:layout_marginTop="8dp"
+            android:layout_marginTop="4dp"
             android:visibility="gone"
             app:layout_constraintTop_toBottomOf="@+id/txvTransactionIdLabel"
             app:layout_constraintStart_toStartOf="parent"/>
@@ -287,7 +441,7 @@
             android:text="Ref #:"
             android:textSize="14sp"
             android:textColor="#666666"
-            android:layout_marginTop="8dp"
+            android:layout_marginTop="4dp"
             android:visibility="gone"
             app:layout_constraintTop_toBottomOf="@+id/txvAuthCodeLabel"
             app:layout_constraintStart_toStartOf="parent"/>
@@ -312,7 +466,7 @@
             android:textSize="14sp"
             android:textColor="#F44336"
             android:gravity="center"
-            android:layout_marginTop="8dp"
+            android:layout_marginTop="4dp"
             android:visibility="gone"
             app:layout_constraintTop_toBottomOf="@+id/txvRefNumberLabel"
             app:layout_constraintStart_toStartOf="parent"
@@ -320,16 +474,18 @@
 
     </androidx.constraintlayout.widget.ConstraintLayout>
 
+    </ScrollView>
+
     <!-- Action Buttons - pinned to bottom -->
     <Button
         android:id="@+id/btnNewTransaction"
         android:layout_width="0dp"
-        android:layout_height="70dp"
+        android:layout_height="56dp"
         android:text="New Transaction"
-        android:textSize="20sp"
+        android:textSize="15sp"
         android:textStyle="bold"
         android:layout_marginEnd="8dp"
-        android:layout_marginBottom="16dp"
+        android:layout_marginBottom="8dp"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toStartOf="@+id/btnDone"
@@ -338,13 +494,13 @@
     <Button
         android:id="@+id/btnDone"
         android:layout_width="0dp"
-        android:layout_height="70dp"
+        android:layout_height="56dp"
         android:text="Done"
-        android:textSize="20sp"
+        android:textSize="15sp"
         android:textStyle="bold"
         android:backgroundTint="@color/colorPrimary"
         android:layout_marginStart="8dp"
-        android:layout_marginBottom="16dp"
+        android:layout_marginBottom="8dp"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintStart_toEndOf="@+id/btnNewTransaction"
         app:layout_constraintEnd_toEndOf="parent"
@@ -354,13 +510,13 @@
     <Button
         android:id="@+id/btnPrintReceipt"
         android:layout_width="0dp"
-        android:layout_height="60dp"
+        android:layout_height="48dp"
         android:text="Print Receipt"
-        android:textSize="18sp"
+        android:textSize="16sp"
         android:textStyle="bold"
         android:layout_marginStart="32dp"
         android:layout_marginEnd="32dp"
-        android:layout_marginBottom="16dp"
+        android:layout_marginBottom="10dp"
         app:layout_constraintBottom_toTopOf="@+id/btnNewTransaction"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent"/>

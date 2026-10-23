@@ -51,6 +51,9 @@ public class Fragment_page_receipt extends Fragment {
     private Handler autoTimeoutHandler = new Handler();
     private Runnable autoTimeoutRunnable;
     private static final int AUTO_TIMEOUT_MS = 30000; // 30 seconds
+    /** TNDR-01 (6.2.20): with the merchant block on screen the clerk needs time to key the tender into the POS. */
+    private static final int TENDER_TIMEOUT_MS = 60000;
+    private boolean tenderShown = false;
 
     @Nullable
     @Override
@@ -264,6 +267,12 @@ public class Fragment_page_receipt extends Fragment {
             txvTotalAmount.setText(currencyFormat.format(a.total / 100.0));
         }
 
+        // TNDR-01 (6.2.20): the merchant block for an unintegrated store — on the screen only, never on
+        // paper (owner decision 2026-10-22). Sale, Tip, Sale + Tip above the ATM rows; Tender Amount and
+        // Change Due below them. While it is shown the screen stays 60 s instead of 30 (startAutoTimeout).
+        tenderShown = !isBalanceInquiry && TenderSummary.applies(GlobalPara.atmAmounts, isSuccess, GlobalPara.atmRegisterSale);
+        showTenderBlock(tenderShown ? TenderSummary.of(GlobalPara.atmAmounts) : null);
+
         // Display card info
         String cardInfo = getCardInfo();
         txvCardInfo.setText(cardInfo);
@@ -292,7 +301,7 @@ public class Fragment_page_receipt extends Fragment {
         // hold off while a reversal drain is actively running. The receipt
         // should reflect the final outcome (including reversal info) rather
         // than printing mid-flight and then surprising the customer.
-        if (!autoPrintTriggered && !GlobalPara.atmReversalInProgress) {
+        if (!autoPrintTriggered && !GlobalPara.atmReversalInProgress && !GlobalPara.atmPreview) {
             autoPrintTriggered = true;
             // Use post() to ensure UI is fully laid out before kicking off the print
             if (view != null) {
@@ -349,19 +358,10 @@ public class Fragment_page_receipt extends Fragment {
             layoutDeclineReason.setVisibility(View.VISIBLE);
         }
 
-        // Determine the reason text to display
-        String reasonText;
-        if (responseMsg != null && !responseMsg.isEmpty()) {
-            reasonText = responseMsg.toUpperCase();
-            Log.d(TAG, "Showing decline message: " + responseMsg);
-        } else if (responseCode != null && !responseCode.isEmpty()) {
-            // Look up a friendly message for common response codes
-            reasonText = getResponseCodeDescription(responseCode);
-            Log.d(TAG, "Showing decline from code: " + responseCode + " -> " + reasonText);
-        } else {
-            reasonText = "TRANSACTION COULD NOT BE COMPLETED";
-            Log.d(TAG, "Showing fallback decline message");
-        }
+        // The reason: the host's message when it says something, else the code's description (RCPT-03)
+        String reason = DeclineReason.text(responseMsg, responseCode);
+        String reasonText = reason != null ? reason.toUpperCase() : "TRANSACTION COULD NOT BE COMPLETED";
+        Log.d(TAG, "Showing decline reason: " + reasonText + " (msg=[" + responseMsg + "], code=" + responseCode + ")");
 
         // Set the reason text in the prominent box
         if (txvDeclineReasonText != null) {
@@ -385,50 +385,10 @@ public class Fragment_page_receipt extends Fragment {
         }
     }
 
-    /**
-     * Returns a friendly description for common ISO 8583 response codes.
-     */
+    /** The shared response-code table (RCPT-03, DeclineReason), upper-cased for the decline box. */
     private String getResponseCodeDescription(String code) {
-        if (code == null) return "DECLINED";
-
-        switch (code) {
-            case "00": return "APPROVED";
-            case "01": return "REFER TO CARD ISSUER";
-            case "03": return "INVALID MERCHANT";
-            case "04": return "PICK UP CARD";
-            case "05": return "DO NOT HONOR";
-            case "06": return "ERROR";
-            case "07": return "PICK UP CARD - SPECIAL";
-            case "12": return "INVALID TRANSACTION";
-            case "13": return "INVALID AMOUNT";
-            case "14": return "INVALID CARD NUMBER";
-            case "30": return "FORMAT ERROR";
-            case "41": return "LOST CARD - PICK UP";
-            case "43": return "STOLEN CARD - PICK UP";
-            case "51": return "INSUFFICIENT FUNDS";
-            case "54": return "EXPIRED CARD";
-            case "55": return "INCORRECT PIN";
-            case "57": return "TRANSACTION NOT PERMITTED";
-            case "58": return "TRANSACTION NOT ALLOWED";
-            case "61": return "EXCEEDS WITHDRAWAL LIMIT";
-            case "62": return "RESTRICTED CARD";
-            case "63": return "SECURITY VIOLATION";
-            case "65": return "EXCEEDS WITHDRAWAL FREQUENCY";
-            case "75": return "PIN TRIES EXCEEDED";
-            case "76": return "INVALID ACCOUNT";
-            case "78": return "NO ACCOUNT";
-            case "80": return "INVALID DATE";
-            case "82": return "CVV VALIDATION ERROR";
-            case "83": return "CANNOT VERIFY PIN";
-            case "85": return "NO REASON TO DECLINE";
-            case "86": return "CANNOT VERIFY PIN";
-            case "89": return "INVALID TERMINAL ID";
-            case "91": return "ISSUER UNAVAILABLE";
-            case "92": return "ROUTING ERROR";
-            case "94": return "DUPLICATE TRANSACTION";
-            case "96": return "SYSTEM MALFUNCTION";
-            default: return "DECLINED (CODE: " + code + ")";
-        }
+        String d = DeclineReason.describe(code);
+        return d != null ? d.toUpperCase() : "DECLINED";
     }
 
     /**
@@ -608,12 +568,13 @@ public class Fragment_page_receipt extends Fragment {
                 receipt.append("   STATUS: APPROVED\n");
             } else {
                 receipt.append("   STATUS: DECLINED\n");
-                // Print decline reason if available
-                String responseMsg = GlobalPara.atmResponseMessage;
-                if (responseMsg != null && !responseMsg.isEmpty()) {
-                    receipt.append("   Reason: ").append(responseMsg).append("\n");
-                } else if (GlobalPara.atmResponseCode != null && !GlobalPara.atmResponseCode.isEmpty()) {
-                    receipt.append("   Code: ").append(GlobalPara.atmResponseCode).append("\n");
+                // The decline reason: the host's message when it says something, else the code's
+                // description (RCPT-03); the bare code only when there is no description at all
+                String reason = DeclineReason.text(GlobalPara.atmResponseMessage, GlobalPara.atmResponseCode);
+                if (reason != null) {
+                    receipt.append("   Reason: ").append(reason).append("\n");
+                } else if (GlobalPara.atmResponseCode != null && !GlobalPara.atmResponseCode.trim().isEmpty()) {
+                    receipt.append("   Code: ").append(GlobalPara.atmResponseCode.trim()).append("\n");
                 }
             }
             receipt.append("\n");
@@ -723,6 +684,35 @@ public class Fragment_page_receipt extends Fragment {
         }
     }
 
+    /** TNDR-01: shows the merchant rows with their figures, or hides them all (null). */
+    private void showTenderBlock(TenderSummary t) {
+        int[] rows = {R.id.txvSaleLabel, R.id.txvSaleAmount, R.id.txvTipLabel, R.id.txvTipAmount, R.id.txvDueLabel,
+                R.id.txvDueAmount, R.id.dividerTender, R.id.txvTenderLabel, R.id.txvTenderAmount, R.id.txvChangeLabel,
+                R.id.txvChangeAmount};
+        for (int id : rows) {
+            View v = view.findViewById(id);
+            if (v != null) v.setVisibility(t == null ? View.GONE : View.VISIBLE);
+        }
+        if (t == null) return;
+        setCents(R.id.txvSaleAmount, t.sale);
+        setCents(R.id.txvTipAmount, t.tip);
+        setCents(R.id.txvDueAmount, t.saleAndTip);
+        setCents(R.id.txvTenderAmount, t.tender);
+        setCents(R.id.txvChangeAmount, t.changeDue);
+        if (!t.hasTip()) {
+            // No tip: the Tip and Sale + Tip rows would only repeat the Sale row
+            for (int id : new int[] {R.id.txvTipLabel, R.id.txvTipAmount, R.id.txvDueLabel, R.id.txvDueAmount}) {
+                View v = view.findViewById(id);
+                if (v != null) v.setVisibility(View.GONE);
+            }
+        }
+    }
+
+    private void setCents(int id, long cents) {
+        View v = view.findViewById(id);
+        if (v instanceof TextView) ((TextView) v).setText(currencyFormat.format(cents / 100.0));
+    }
+
     private void startAutoTimeout() {
         autoTimeoutRunnable = new Runnable() {
             @Override
@@ -740,7 +730,7 @@ public class Fragment_page_receipt extends Fragment {
                 }
             }
         };
-        autoTimeoutHandler.postDelayed(autoTimeoutRunnable, AUTO_TIMEOUT_MS);
+        autoTimeoutHandler.postDelayed(autoTimeoutRunnable, tenderShown ? TENDER_TIMEOUT_MS : AUTO_TIMEOUT_MS);
     }
 
     private void stopAutoTimeout() {
@@ -755,6 +745,7 @@ public class Fragment_page_receipt extends Fragment {
         autoPrintTriggered = false;
         // Reset all ATM transaction parameters (breakdown included, M7)
         GlobalPara.clearAmounts();
+        GlobalPara.atmPreview = false;
         GlobalPara.atmTransactionComplete = false;
         // Clear EMV transaction result so onResume doesn't think old data is still valid
         // and auto-print the previous receipt on the next transaction.

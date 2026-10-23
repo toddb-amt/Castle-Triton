@@ -123,7 +123,8 @@ public final class CasHubParams {
      * re-applied on every startup, so a CasHUB-managed terminal never needs local
      * entry. Recognized JSON keys mirror KmsConfigStore: host_address, host_port,
      * terminal_id, processor_type, protocol_type, use_flat_fee, flat_fee,
-     * percentage_fee, min_amount, max_amount — plus the POS-mode keys pos_enabled,
+     * percentage_fee, min_amount, max_amount, tips_enabled, tip_presets (TIP-02, 6.2.20),
+     * swipe_enabled — plus the POS-mode keys pos_enabled,
      * pos_proxy_url, pos_terminal_access_key (see {@link #applyToConfigDetailed}) and,
      * since 6.2.10, the cellular APN keys apn, apn_name, apn_user, apn_password,
      * apn_auth_type, apn_protocol (see {@link castech.emvtxn.net.ApnParams}).
