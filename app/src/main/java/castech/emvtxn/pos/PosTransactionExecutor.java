@@ -72,6 +72,7 @@ public final class PosTransactionExecutor implements PosCommandDispatcher.Transa
         // 6.2.11 journal / Detail Report: carry the register's clerk and invoice through
         castech.emvtxn.GlobalPara.atmClerkId = resource.optString(PosWire.TXN_CLERK_ID, "");
         castech.emvtxn.GlobalPara.atmInvoiceNo = resource.optString(PosWire.TXN_INVOICE_NO, "");
+        castech.emvtxn.GlobalPara.atmRegisterSale = true;   // TNDR-01: the approval screen's merchant block is for walk-ups only
         gateway.startSale(amount, surcharge, accountType, new TxnBridge(flowId, amount, surcharge));
     }
 

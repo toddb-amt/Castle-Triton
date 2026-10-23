@@ -10,6 +10,7 @@ import java.util.List;
 import java.util.Locale;
 
 import castech.emvtxn.ReceiptMoneyBlock;
+import castech.emvtxn.TenderSummary;
 import castech.emvtxn.atm.TransactionLog;
 
 /**
@@ -69,9 +70,17 @@ public final class ReceiptReprint {
         return TransactionLog.TYPE_BALANCE_INQUIRY.equals(type) ? line : line + SEP + currency(l.getAmountCents());
     }
 
-    /** Picker line two: the outcome, {@code APPROVED}, {@code DECLINED 51} or {@code REVERSED}. */
+    /**
+     * Picker line two: the outcome, {@code APPROVED}, {@code DECLINED 51} or {@code REVERSED}; for an
+     * approved walk-up that had a tip or change, also the tender and the change (TNDR-01, 6.2.20),
+     * so a clerk can look the tender up after the approval screen has cleared.
+     */
     public static String pickerLine2(TransactionLog l) {
-        return HistoryReport.resultLabel(l);
+        String outcome = HistoryReport.resultLabel(l);
+        TenderSummary t = TenderSummary.fromRow(l);
+        if (t == null) return outcome;
+        // single spaces: "APPROVED · Tender $19.00 · Change $9.00" is the widest line the dialog fits on one row
+        return outcome + " · Tender " + currency(t.tender) + " · Change " + currency(t.changeDue);
     }
 
     /** The duplicate receipt text, ready for one {@code printf}. */

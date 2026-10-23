@@ -250,6 +250,10 @@ public class GlobalPara
 	/** 6.2.11 journal: register-supplied clerk / invoice for a POS sale; "" for walk-up. */
 	public static volatile String atmClerkId = "";
 	public static volatile String atmInvoiceNo = "";
+	/** TNDR-01 (6.2.20): true while a register (POS) sale is running; the clerk id alone is optional on the wire. */
+	public static volatile boolean atmRegisterSale = false;
+	/** Debug builds only: the approval screen is a staged preview (DebugReceiptPreview) — never auto-print. */
+	public static volatile boolean atmPreview = false;
 
 	// Balance inquiry mode
 	public static volatile boolean atmBalanceInquiryMode = false;
@@ -308,6 +312,8 @@ public class GlobalPara
 		atmSequenceNumber = 0;
 		atmClerkId = "";
 		atmInvoiceNo = "";
+		atmRegisterSale = false;
+		atmPreview = false;
 		atmIssuerAuthData = null;
 		atmIssuerScript71 = null;
 		atmIssuerScript72 = null;
@@ -331,6 +337,7 @@ public class GlobalPara
 
 	/** TIP-01: every amount string and the chip amount from the ONE breakdown. The only writer of these mirrors. */
 	public static void applyAmounts(AmountBreakdown a) {
+		atmPreview = false;   // a real transaction is starting (DebugReceiptPreview sets the flag after this call)
 		atmAmounts = a;
 		atmSelectedAmount = Money.dollars(a.withdrawal);
 		atmFee = Money.dollars(a.fee);

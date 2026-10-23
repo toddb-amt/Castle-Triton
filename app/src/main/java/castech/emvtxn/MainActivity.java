@@ -283,6 +283,7 @@ public class MainActivity extends AppCompatActivity {
             GlobalPara.scrnIntentFilter.addAction(Intent.ACTION_CLOSE_SYSTEM_DIALOGS);
 
             getApplicationContext().registerReceiver(GlobalPara.scrnBrdcstRecver, GlobalPara.scrnIntentFilter);
+            DebugReceiptPreview.register(this);   // debug builds only: staged approval screen for layout checks
 
             GlobalPara.isScrnBrdcstRecverReg = true;
         }
@@ -391,6 +392,7 @@ public class MainActivity extends AppCompatActivity {
 
     @Override
     protected void onDestroy() {
+        DebugReceiptPreview.unregister(this);
         if (posOrchestrator != null) {
             Log.d(TAG, "onDestroy: stopping POS orchestrator");
             try { posOrchestrator.stop(); } catch (Exception e) {
@@ -1085,7 +1087,9 @@ public class MainActivity extends AppCompatActivity {
                             Log.e(TAG, ">>> CALLBACK onTransactionDeclined: latch=" + (atmTransactionLatch != null ? "SET" : "NULL"));
                             GlobalPara.atmHostCallSuccess = false;
                             GlobalPara.atmResponseCode = responseCode;
-                            GlobalPara.atmResponseMessage = responseMessage;
+                            // RCPT-03: a blank host message means "use the code's description" (76 came with " ")
+                            String reason = DeclineReason.text(responseMessage, responseCode);
+                            GlobalPara.atmResponseMessage = reason != null ? reason : "";
                             if (atmTransactionLatch != null) {
                                 Log.e(TAG, ">>> CALLBACK onTransactionDeclined: counting down latch...");
                                 atmTransactionLatch.countDown();
@@ -2203,7 +2207,7 @@ public class MainActivity extends AppCompatActivity {
             case "63": return "Security violation";
             case "65": return "Exceeds withdrawal frequency limit";
             case "75": return "PIN tries exceeded";
-            case "76": return "Invalid account";
+            case "76": return "PIN key sync";   // HOST-15
             case "77": return "No account";
             case "78": return "No card record";
             case "80": return "Bad date (date not valid)";

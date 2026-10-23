@@ -606,6 +606,12 @@ public class Fragment_page_transaction extends Fragment
 			refreshView();
 		}
 
+		if (GlobalPara.atmPreview) {
+			// Debug preview of the approval screen (DebugReceiptPreview): this page is only the pager's
+			// neighbour and must not arm the reader (bench 2026-10-22: a stray poll from a preview)
+			android.util.Log.d("Fragment_Txn", "onResume: debug preview staged — no auto-start");
+			return;
+		}
 		if (GlobalPara.isInitThreadFinish == true) {
 			if (isATMMode) {
 				// ATM Mode: Update display and auto-start transaction
@@ -667,8 +673,8 @@ public class Fragment_page_transaction extends Fragment
 			updateStatus("Ready for card...");
 		}
 
-		// Auto-start transaction in ATM mode if SDK is initialized
-		if (currentlyInATMMode && GlobalPara.isInitThreadFinish && btnTransaction != null && view != null) {
+		// Auto-start transaction in ATM mode if SDK is initialized (never for a staged debug preview)
+		if (currentlyInATMMode && !GlobalPara.atmPreview && GlobalPara.isInitThreadFinish && btnTransaction != null && view != null) {
 			view.postDelayed(new Runnable() {
 				@Override
 				public void run() {
