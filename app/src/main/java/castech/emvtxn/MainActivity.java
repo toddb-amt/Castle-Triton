@@ -284,6 +284,8 @@ public class MainActivity extends AppCompatActivity {
 
             getApplicationContext().registerReceiver(GlobalPara.scrnBrdcstRecver, GlobalPara.scrnIntentFilter);
             DebugReceiptPreview.register(this);   // debug builds only: staged approval screen for layout checks
+            // ADM-10: warm the IMEI once, off the UI thread, so the Admin Network card has it at once
+            new Thread(() -> TerminalImei.read(getApplicationContext()), "imei-read").start();
 
             GlobalPara.isScrnBrdcstRecverReg = true;
         }

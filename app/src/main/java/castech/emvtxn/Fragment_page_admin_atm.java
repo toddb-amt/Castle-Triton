@@ -878,6 +878,10 @@ public class Fragment_page_admin_atm extends Fragment {
                 if (tm == null) {
                     sb.append("Cellular: not available\n");
                 } else {
+                    // ADM-10 (6.2.20): the IMEI through Castles' telephony service, with or without a SIM;
+                    // shown as the 15-digit form on the device label (the modem reports 14). Worker thread.
+                    String imei = castech.emvtxn.TerminalImei.read(ctx);
+                    sb.append("IMEI: ").append(imei != null ? castech.emvtxn.Imei.display(imei) : "not available").append("\n");
                     boolean sim = tm.getSimState() == android.telephony.TelephonyManager.SIM_STATE_READY;
                     if (!sim) {
                         sb.append("SIM: none / not ready\n");
